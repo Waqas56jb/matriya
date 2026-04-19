@@ -205,6 +205,23 @@ router.post('/', async (req, res) => {
 
       if (!row) {
         logger.warn(`[whatsapp webhook] BLOCKED number=${from_number} — not in whitelist`);
+
+        // Log access request so admin can approve from the panel
+        try {
+          await sb.from('access_requests').upsert({
+            phone_number:  from_number,
+            first_message: message.slice(0, 500),
+            last_seen:     new Date().toISOString(),
+          }, {
+            onConflict:    'phone_number',
+            ignoreDuplicates: false,
+          });
+          // Increment request_count on repeated attempts
+          await sb.rpc('increment_access_request_count', { p_phone: from_number }).catch(() => {});
+        } catch (e) {
+          logger.warn(`[whatsapp webhook] access_requests log failed: ${e.message}`);
+        }
+
         res.set('Content-Type', 'text/xml');
         return res.send(twimlResponse('Access denied. Contact system administrator.'));
       }

@@ -46,9 +46,10 @@ INSERT INTO admin_config (key, value) VALUES
 ON CONFLICT (key) DO NOTHING;
 
 -- User sessions table (for live session tracking)
+-- user_id is a plain UUID — no FK constraint so this works regardless of users table structure
 CREATE TABLE IF NOT EXISTS user_sessions (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id         UUID REFERENCES users(id) ON DELETE CASCADE,
+  user_id         UUID,
   ip_address      VARCHAR(64),
   device          TEXT,
   browser         TEXT,

@@ -1,18 +1,10 @@
 /**
  * User management routes
- *
- * GET    /api/admin/users                  — list all users with status + role
- * GET    /api/admin/users/:id              — single user detail
- * POST   /api/admin/users/:id/approve      — approve pending access request
- * POST   /api/admin/users/:id/reject       — reject access request
- * POST   /api/admin/users/:id/block        — block user permanently
- * POST   /api/admin/users/:id/unblock      — unblock user
- * POST   /api/admin/users/:id/revoke       — revoke active JWT session
- * POST   /api/admin/users/:id/force-logout — force logout immediately
- * PATCH  /api/admin/users/:id/role         — change user role
- * PATCH  /api/admin/users/:id/password     — reset user password
- * POST   /api/admin/users/generate         — generate new user credentials
- * DELETE /api/admin/users/:id              — permanently delete user
+ * Real users table columns:
+ *   id, username, email, hashed_password, full_name, is_active, is_admin, created_at, last_login
+ *   + admin-added: status, approved_at, approved_by, reject_reason, block_reason, blocked_at,
+ *                  blocked_by, session_token, session_revoked_at, force_logout, force_logout_at,
+ *                  password_reset_at, device_fingerprint
  */
 
 import { Router } from 'express';
@@ -21,21 +13,28 @@ import { supabase } from '../server.js';
 
 const router = Router();
 
+const USER_SELECT = 'id, username, email, full_name, is_active, is_admin, created_at, last_login, status, block_reason, blocked_at, device_fingerprint';
+
+/* helpers */
+function mapRole(u)   { return u.is_admin ? 'admin' : 'operator'; }
+function mapStatus(u) { return u.status || (u.is_active ? 'active' : 'inactive'); }
+
 router.get('/', async (req, res) => {
-  const { status, role, search, page = 1, limit = 50 } = req.query;
+  const { search, active, page = 1, limit = 50 } = req.query;
   let query = supabase
     .from('users')
-    .select('id, username, email, role, status, created_at, last_login, device_fingerprint', { count: 'exact' })
+    .select(USER_SELECT, { count: 'exact' })
     .order('created_at', { ascending: false })
     .range((page - 1) * limit, page * limit - 1);
 
-  if (status) query = query.eq('status', status);
-  if (role)   query = query.eq('role', role);
-  if (search) query = query.or(`username.ilike.%${search}%,email.ilike.%${search}%`);
+  if (active !== undefined) query = query.eq('is_active', active === 'true');
+  if (search)               query = query.or(`username.ilike.%${search}%,email.ilike.%${search}%`);
 
   const { data, error, count } = await query;
   if (error) return res.status(500).json({ error: error.message });
-  res.json({ users: data, total: count, page: +page, limit: +limit });
+
+  const users = (data || []).map(u => ({ ...u, role: mapRole(u), display_status: mapStatus(u) }));
+  res.json({ users, total: count, page: +page, limit: +limit });
 });
 
 router.get('/:id', async (req, res) => {
@@ -45,27 +44,27 @@ router.get('/:id', async (req, res) => {
     .eq('id', req.params.id)
     .single();
   if (error) return res.status(404).json({ error: 'User not found' });
-  res.json({ user: data });
+  res.json({ user: { ...data, role: mapRole(data), display_status: mapStatus(data) } });
 });
 
 router.post('/:id/approve', async (req, res) => {
   const { data, error } = await supabase
     .from('users')
-    .update({ status: 'active', approved_at: new Date().toISOString(), approved_by: req.admin.email })
+    .update({ is_active: true, status: 'active', approved_at: new Date().toISOString(), approved_by: req.admin.email })
     .eq('id', req.params.id)
-    .select('id, email, status')
+    .select('id, email, is_active')
     .single();
   if (error) return res.status(500).json({ error: error.message });
-  res.json({ user: data, message: 'User approved' });
+  res.json({ user: data, message: 'User approved and activated' });
 });
 
 router.post('/:id/reject', async (req, res) => {
   const { reason = 'Rejected by admin' } = req.body || {};
   const { data, error } = await supabase
     .from('users')
-    .update({ status: 'rejected', reject_reason: reason })
+    .update({ is_active: false, status: 'rejected', reject_reason: reason })
     .eq('id', req.params.id)
-    .select('id, email, status')
+    .select('id, email')
     .single();
   if (error) return res.status(500).json({ error: error.message });
   res.json({ user: data, message: 'User rejected' });
@@ -76,6 +75,7 @@ router.post('/:id/block', async (req, res) => {
   const { data, error } = await supabase
     .from('users')
     .update({
+      is_active: false,
       status: 'blocked',
       block_reason: reason,
       blocked_at: new Date().toISOString(),
@@ -83,7 +83,7 @@ router.post('/:id/block', async (req, res) => {
       session_token: null,
     })
     .eq('id', req.params.id)
-    .select('id, email, status')
+    .select('id, email, is_active')
     .single();
   if (error) return res.status(500).json({ error: error.message });
   res.json({ user: data, message: 'User blocked and session revoked' });
@@ -92,9 +92,9 @@ router.post('/:id/block', async (req, res) => {
 router.post('/:id/unblock', async (req, res) => {
   const { data, error } = await supabase
     .from('users')
-    .update({ status: 'active', block_reason: null, blocked_at: null, blocked_by: null })
+    .update({ is_active: true, status: 'active', block_reason: null, blocked_at: null, blocked_by: null })
     .eq('id', req.params.id)
-    .select('id, email, status')
+    .select('id, email, is_active')
     .single();
   if (error) return res.status(500).json({ error: error.message });
   res.json({ user: data, message: 'User unblocked' });
@@ -124,14 +124,12 @@ router.post('/:id/force-logout', async (req, res) => {
 
 router.patch('/:id/role', async (req, res) => {
   const { role } = req.body || {};
-  const allowed = ['admin', 'operator', 'viewer', 'blocked'];
-  if (!allowed.includes(role)) return res.status(400).json({ error: `role must be one of: ${allowed.join(', ')}` });
-
+  const is_admin = role === 'admin';
   const { data, error } = await supabase
     .from('users')
-    .update({ role })
+    .update({ is_admin })
     .eq('id', req.params.id)
-    .select('id, email, role')
+    .select('id, email, is_admin')
     .single();
   if (error) return res.status(500).json({ error: error.message });
   res.json({ user: data, message: `Role updated to ${role}` });
@@ -141,10 +139,10 @@ router.patch('/:id/password', async (req, res) => {
   const { new_password } = req.body || {};
   if (!new_password || new_password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
 
-  const password_hash = await bcrypt.hash(new_password, 12);
+  const hashed_password = await bcrypt.hash(new_password, 12);
   const { data, error } = await supabase
     .from('users')
-    .update({ password_hash, session_token: null, password_reset_at: new Date().toISOString() })
+    .update({ hashed_password, session_token: null, password_reset_at: new Date().toISOString() })
     .eq('id', req.params.id)
     .select('id, email')
     .single();
@@ -153,23 +151,23 @@ router.patch('/:id/password', async (req, res) => {
 });
 
 router.post('/generate', async (req, res) => {
-  const { username, email, role = 'viewer' } = req.body || {};
+  const { username, email, is_admin = false } = req.body || {};
   if (!username || !email) return res.status(400).json({ error: 'username and email required' });
 
   const rawPassword = Math.random().toString(36).slice(-10) + Math.random().toString(36).slice(-4).toUpperCase() + '!';
-  const password_hash = await bcrypt.hash(rawPassword, 12);
+  const hashed_password = await bcrypt.hash(rawPassword, 12);
 
   const { data, error } = await supabase
     .from('users')
-    .insert({ username, email: email.toLowerCase().trim(), password_hash, role, status: 'active' })
-    .select('id, username, email, role, status')
+    .insert({ username, email: email.toLowerCase().trim(), hashed_password, is_admin, is_active: true, status: 'active' })
+    .select('id, username, email, is_admin, is_active')
     .single();
   if (error) return res.status(500).json({ error: error.message });
 
   res.status(201).json({
-    user: data,
+    user: { ...data, role: mapRole(data) },
     generated_password: rawPassword,
-    message: 'Share this password with the user — it is shown only once',
+    message: 'Share this password with the user — shown only once',
   });
 });
 

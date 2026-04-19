@@ -1,15 +1,7 @@
 /**
  * WhatsApp management routes
- *
- * GET    /api/admin/whatsapp/queue              — full task queue
- * GET    /api/admin/whatsapp/queue/:id          — single task detail
- * POST   /api/admin/whatsapp/resend/:id         — resend failed outbound
- * GET    /api/admin/whatsapp/whitelist           — phone number whitelist
- * POST   /api/admin/whatsapp/whitelist           — add number to whitelist
- * PATCH  /api/admin/whatsapp/whitelist/:phone    — update whitelist entry
- * DELETE /api/admin/whatsapp/whitelist/:phone    — remove from whitelist
- * GET    /api/admin/whatsapp/blocked             — blocked numbers
- * POST   /api/admin/whatsapp/replay/:id          — replay pipeline for task
+ * Real whatsapp_tasks columns:
+ *   id, from_number, message, received_at, status, decision, confidence, candidates, rachel_notified
  */
 
 import { Router } from 'express';
@@ -29,8 +21,8 @@ router.get('/queue', async (req, res) => {
   const { status, from_number, page = 1, limit = 50 } = req.query;
   let query = supabase
     .from('whatsapp_tasks')
-    .select('*', { count: 'exact' })
-    .order('created_at', { ascending: false })
+    .select('id, from_number, message, received_at, status, decision, confidence, rachel_notified', { count: 'exact' })
+    .order('received_at', { ascending: false })
     .range((page - 1) * limit, page * limit - 1);
 
   if (status)      query = query.eq('status', status);
@@ -60,8 +52,8 @@ router.post('/resend/:id', async (req, res) => {
 
   if (fetchErr || !task) return res.status(404).json({ error: 'Task not found' });
 
-  const to = task.from_number?.startsWith('whatsapp:') ? task.from_number : `whatsapp:${task.from_number}`;
-  const body = task.response || task.message || 'MATRIYA: message resent by admin';
+  const to   = task.from_number?.startsWith('whatsapp:') ? task.from_number : `whatsapp:${task.from_number}`;
+  const body = task.message || 'MATRIYA: message resent by admin';
 
   try {
     const msg = await twilioClient().messages.create({
@@ -69,8 +61,6 @@ router.post('/resend/:id', async (req, res) => {
       to,
       body,
     });
-
-    await supabase.from('whatsapp_tasks').update({ resent_at: new Date().toISOString(), twilio_sid: msg.sid }).eq('id', task.id);
     res.json({ message: 'Resent successfully', twilio_sid: msg.sid });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -78,23 +68,25 @@ router.post('/resend/:id', async (req, res) => {
 });
 
 /* ── Whitelist ─────────────────────────────────────────────── */
+// Real columns: phone, label, active, added_at
 
 router.get('/whitelist', async (_req, res) => {
   const { data, error } = await supabase
     .from('whatsapp_whitelist')
-    .select('*')
-    .order('created_at', { ascending: false });
+    .select('id, phone, label, active, added_at')
+    .eq('active', true)
+    .order('added_at', { ascending: false });
   if (error) return res.status(500).json({ error: error.message });
   res.json({ whitelist: data });
 });
 
 router.post('/whitelist', async (req, res) => {
-  const { phone_number, label, note } = req.body || {};
+  const { phone_number, label } = req.body || {};
   if (!phone_number) return res.status(400).json({ error: 'phone_number required' });
 
   const { data, error } = await supabase
     .from('whatsapp_whitelist')
-    .insert({ phone_number: phone_number.trim(), label, note, added_by: req.admin.email })
+    .upsert({ phone: phone_number.trim(), label, active: true }, { onConflict: 'phone' })
     .select()
     .single();
   if (error) return res.status(500).json({ error: error.message });
@@ -102,16 +94,15 @@ router.post('/whitelist', async (req, res) => {
 });
 
 router.patch('/whitelist/:phone', async (req, res) => {
-  const { label, note, is_active } = req.body || {};
   const updates = {};
-  if (label     !== undefined) updates.label     = label;
-  if (note      !== undefined) updates.note      = note;
-  if (is_active !== undefined) updates.is_active = is_active;
+  const { label, active } = req.body || {};
+  if (label  !== undefined) updates.label  = label;
+  if (active !== undefined) updates.active = active;
 
   const { data, error } = await supabase
     .from('whatsapp_whitelist')
     .update(updates)
-    .eq('phone_number', decodeURIComponent(req.params.phone))
+    .eq('phone', decodeURIComponent(req.params.phone))
     .select()
     .single();
   if (error) return res.status(500).json({ error: error.message });
@@ -122,7 +113,7 @@ router.delete('/whitelist/:phone', async (req, res) => {
   const { error } = await supabase
     .from('whatsapp_whitelist')
     .delete()
-    .eq('phone_number', decodeURIComponent(req.params.phone));
+    .eq('phone', decodeURIComponent(req.params.phone));
   if (error) return res.status(500).json({ error: error.message });
   res.json({ message: 'Number removed from whitelist' });
 });
@@ -132,11 +123,69 @@ router.delete('/whitelist/:phone', async (req, res) => {
 router.get('/blocked', async (_req, res) => {
   const { data, error } = await supabase
     .from('whatsapp_whitelist')
-    .select('*')
-    .eq('is_active', false)
-    .order('updated_at', { ascending: false });
+    .select('id, phone, label, active, added_at')
+    .eq('active', false)
+    .order('added_at', { ascending: false });
   if (error) return res.status(500).json({ error: error.message });
   res.json({ blocked: data });
+});
+
+/* ── Access Requests ───────────────────────────────────────── */
+
+router.get('/requests', async (req, res) => {
+  const { status = 'pending' } = req.query;
+  const query = supabase
+    .from('access_requests')
+    .select('*', { count: 'exact' })
+    .order('last_seen', { ascending: false });
+
+  const finalQuery = status === 'all' ? query : query.eq('status', status);
+  const { data, error, count } = await finalQuery;
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ requests: data, total: count });
+});
+
+router.post('/requests/:id/approve', async (req, res) => {
+  // 1. Get request row
+  const { data: reqRow, error: fetchErr } = await supabase
+    .from('access_requests')
+    .select('phone_number')
+    .eq('id', req.params.id)
+    .single();
+
+  if (fetchErr || !reqRow) return res.status(404).json({ error: 'Request not found' });
+
+  const phone = reqRow.phone_number;
+
+  // 2. Add to whitelist — real columns: phone, label, active
+  const { error: wlErr } = await supabase
+    .from('whatsapp_whitelist')
+    .upsert({ phone, active: true, label: 'Approved via admin panel' }, { onConflict: 'phone' });
+
+  if (wlErr) return res.status(500).json({ error: `Whitelist insert failed: ${wlErr.message}` });
+
+  // 3. Mark request as approved
+  const { data, error } = await supabase
+    .from('access_requests')
+    .update({ status: 'approved', reviewed_by: req.admin.email, reviewed_at: new Date().toISOString() })
+    .eq('id', req.params.id)
+    .select()
+    .single();
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ request: data, message: `${phone} approved and added to whitelist` });
+});
+
+router.post('/requests/:id/deny', async (req, res) => {
+  const { note } = req.body || {};
+  const { data, error } = await supabase
+    .from('access_requests')
+    .update({ status: 'denied', reviewed_by: req.admin.email, reviewed_at: new Date().toISOString(), note })
+    .eq('id', req.params.id)
+    .select()
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ request: data, message: 'Request denied' });
 });
 
 /* ── Replay pipeline ───────────────────────────────────────── */
