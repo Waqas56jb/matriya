@@ -418,13 +418,55 @@ export async function runPipeline(input) {
 
   confidence = Math.min(Math.max(Math.round(confidence), 0), 100);
 
-  logger.info(`[pipeline] confidence=${confidence}% (completeness=${completenessScore} llmConf=${llmConfidence}) action=${action_required}`);
+  // ── Hard consistency enforcement (backend rules, not prompt behaviour) ────────
+  //
+  // Threshold mapping:   STOP = 0%   |   ITERATE = 1–69%   |   GO = 70–100%
+  //
+  // Rule 1: confidence = 0 → decision MUST be STOP (no basis for any action)
+  // Rule 2: ITERATE → confidence MUST be > 0 (partial basis required)
+  // Rule 3: Response contains "no supporting information" → confidence = 0 → STOP
+  // Rule 4: GO requires confidence ≥ 70%; below that, downgrade to ITERATE
+  // Rule 5: confidence ≥ 70% with STOP is contradictory → upgrade to ITERATE
+
+  // Rule 3 — detect "no supporting information" language in answer
+  const noSupportPattern = /no supporting information|no evidence|no data available|insufficient information|cannot be determined/i;
+  if (noSupportPattern.test(decisionReason)) {
+    confidence = 0;
+  }
+
+  // Rule 1 + 2 — zero confidence forces STOP
+  if (confidence === 0) {
+    action_required = 'STOP';
+    decision_status = 'INSUFFICIENT_DATA';
+    if (missingData.length === 0) {
+      missingData = ['experiment results', 'formulation parameters'];
+    }
+  }
+
+  // Rule 4 — GO requires ≥ 70%; below that, downgrade to ITERATE
+  if (action_required === 'GO' && confidence < 70) {
+    action_required = 'ITERATE';
+    decision_status = 'INCONCLUSIVE';
+    logger.info(`[pipeline] GO downgraded to ITERATE (confidence ${confidence}% < 70%)`);
+  }
+
+  // Rule 5 — STOP with high confidence is contradictory → ITERATE
+  if (action_required === 'STOP' && confidence >= 70) {
+    action_required = 'ITERATE';
+    decision_status = 'INCONCLUSIVE';
+    logger.info(`[pipeline] STOP upgraded to ITERATE (confidence ${confidence}% ≥ 70%)`);
+  }
+
+  // STOP: re-apply 35% cap (may have been raised by LLM before consistency check)
+  if (action_required === 'STOP') confidence = Math.min(confidence, 35);
+
+  logger.info(`[pipeline] FINAL confidence=${confidence}% action=${action_required} (completeness=${completenessScore} llmConf=${llmConfidence})`);
 
   const decision = {
     status: decision_status,
     action_required,
     reason: decisionReason,
-    confidence,              // 0-100 real score
+    confidence,
     missing_data: missingData,
     kernel_tripped: kernel.tripped,
     elapsed_ms: Date.now() - startedAt

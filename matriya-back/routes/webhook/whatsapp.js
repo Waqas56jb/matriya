@@ -85,8 +85,15 @@ function formatDecision(pipelineResult) {
                    : action === 'ITERATE' ? '⚠️ ITERATE'
                    : '❌ STOP';
 
-  const firstSentence = reason.split(/[.!?\n]/)[0]
-    .replace(/^\[KERNEL GATE\]\s*/i, '').trim() || 'No details available.';
+  const rawFirst = reason.split(/[.!?\n]/)[0]
+    .replace(/^\[KERNEL GATE\]\s*/i, '').trim();
+
+  // If response says "no supporting information" but confidence > 0, replace with
+  // a message that reflects what partial evidence exists.
+  const noSupportPattern = /no supporting information|no evidence|no data available|insufficient information/i;
+  const firstSentence = (noSupportPattern.test(rawFirst) && conf > 0)
+    ? `Partial data detected (${conf}% evidence completeness) — provide full experiment data to proceed.`
+    : rawFirst || 'No details available.';
 
   let reply = `MATRIYA Decision${kernelTag}:\n${actionLine}\nConfidence: ${conf}%\n${firstSentence}`;
 
