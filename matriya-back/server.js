@@ -76,6 +76,7 @@ import corrosionRouter from './routes/projects/corrosion.js';
 import whatsappRouter from './routes/webhook/whatsapp.js';
 import githubWebhookRouter from './routes/webhook/github.js';
 import experimentsUploadRouter from './routes/experiments/upload.js';
+import internalWhatsappOutboundRouter from './routes/internal/whatsappOutbound.js';
 import { get as cacheGet, set as cacheSet, getOrCompute } from './services/agentCache.js';
 import { evaluate as evaluateCreativity } from './services/creativityOrchestrator.js';
 import { handleInbound, handleOutbound, createActionPackage } from './twilioGateway.js';
@@ -139,6 +140,7 @@ app.use('/api/projects/corrosion-shield', corrosionRouter);
 app.use('/api/webhook/whatsapp', whatsappRouter);
 app.use('/api/webhook/github', githubWebhookRouter);
 app.use('/api/experiments', experimentsUploadRouter);
+app.use('/api/internal/whatsapp-outbound', internalWhatsappOutboundRouter);
 
 // Milestone 1: inbound WhatsApp → MATRIYA pipeline → reply
 app.post('/api/whatsapp/inbound', handleInbound);

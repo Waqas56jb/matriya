@@ -36,19 +36,52 @@ const APPROVAL_MESSAGE = [
 ].join('\n');
 
 async function sendAccessApprovedWhatsApp(toRaw) {
-  const sid = (process.env.TWILIO_ACCOUNT_SID || '').trim();
-  const token = (process.env.TWILIO_AUTH_TOKEN || '').trim();
-  const from = (process.env.TWILIO_WHATSAPP_FROM || '').trim();
-  if (!sid || !token || !from) {
-    return { sent: false, error: 'Twilio not configured (TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_WHATSAPP_FROM)' };
-  }
   const to = toWhatsAppAddress(toRaw);
   if (!to) return { sent: false, error: 'Invalid phone number' };
+
+  // Prefer matriya-back proxy — Twilio is already configured there (Railway admin-backend often has no Twilio vars).
+  const matriyaUrl = (process.env.MATRIYA_BACK_URL || '').trim().replace(/\/$/, '');
+  const internalKey = (process.env.MATRIYA_INTERNAL_KEY || '').trim();
+  if (matriyaUrl && internalKey) {
+    try {
+      const r = await fetch(`${matriyaUrl}/api/internal/whatsapp-outbound`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Matriya-Internal-Key': internalKey,
+        },
+        body: JSON.stringify({ to: toRaw, body: APPROVAL_MESSAGE }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        return { sent: false, error: j.error || `matriya-back HTTP ${r.status}`, via: 'matriya-back' };
+      }
+      return { sent: true, via: 'matriya-back' };
+    } catch (e) {
+      return { sent: false, error: `matriya-back proxy: ${e.message}`, via: 'matriya-back' };
+    }
+  }
+
+  // Fallback: Twilio directly on admin-backend
+  const sid = (process.env.TWILIO_ACCOUNT_SID || '').trim();
+  const token = (process.env.TWILIO_AUTH_TOKEN || '').trim();
+  let from = (process.env.TWILIO_WHATSAPP_FROM || process.env.TWILIO_WHATSAPP_NUMBER || '').trim();
+  if (!from) {
+    return {
+      sent: false,
+      error: 'No send path: set MATRIYA_BACK_URL + MATRIYA_INTERNAL_KEY (same key on matriya-back), or set Twilio vars on admin-backend',
+    };
+  }
+  if (!from.startsWith('whatsapp:')) from = `whatsapp:${from}`;
+
+  if (!sid || !token) {
+    return { sent: false, error: 'Twilio not configured on admin-backend (or set MATRIYA_INTERNAL_KEY + MATRIYA_BACK_URL)' };
+  }
   try {
     const msg = await twilioClient().messages.create({ from, to, body: APPROVAL_MESSAGE });
-    return { sent: true, twilio_sid: msg.sid };
+    return { sent: true, twilio_sid: msg.sid, via: 'twilio-direct' };
   } catch (e) {
-    return { sent: false, error: e.message || String(e) };
+    return { sent: false, error: e.message || String(e), via: 'twilio-direct' };
   }
 }
 
