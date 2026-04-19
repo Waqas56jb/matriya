@@ -170,47 +170,72 @@ Answer in the same language as the user (Hebrew if Hebrew, English if English).`
 // ─── Data completeness scorer ────────────────────────────────────────────────
 
 /**
- * Deterministic confidence score based on data completeness.
- * Returns 0-100 reflecting how much usable research data is in the input.
+ * Deterministic evidence-quality score (0–100).
  *
- * Tiers:
- *   70-90 — numeric measurements + domain terms + result language
- *   40-60 — partial: domain terms or results but not both
- *   10-30 — minimal: plain text, no domain signals
+ * Scoring factors (David's spec):
+ *   A. Required fields / numeric measurements present
+ *   B. Experiment/run identifiers present
+ *   C. Domain terminology depth
+ *   D. Result/outcome language
+ *   E. Baseline or comparison data
+ *   F. Number of usable evidence sentences
+ *
+ * Ceilings (scale by input length — more words = higher max):
+ *   < 5 words  → max 20
+ *   5–14 words → max 45
+ *   15–29 words→ max 70
+ *   30+ words  → max 100
  */
 function computeDataCompleteness(input) {
-  const text = input || '';
+  const text = (input || '').trim();
+  if (!text) return 0;
+
   let score = 0;
 
-  // ── Numeric data signals (measurements, concentrations, ranges) ──
-  const numericMatches = (text.match(/\b\d+(\.\d+)?\s*(%|mg|g|kg|ml|l|mm|nm|µm|°C|°F|K|MPa|GPa|ppm|mol|bar|Hz|rpm|wt|vol|cP|mPa|Pa·s)\b/gi) || []).length;
-  if (numericMatches >= 3) score += 35;
-  else if (numericMatches >= 1) score += 20;
+  // A. Numeric measurements with scientific units (strongest evidence signal)
+  const numericHits = (text.match(
+    /\b\d+(\.\d+)?\s*(%|mg|g|kg|ml|l|mm|nm|µm|°C|°F|K|MPa|GPa|ppm|mol|bar|Hz|rpm|wt\.?%|vol\.?%|cP|mPa|Pa[·\s]?s|N\/m|J\/g)\b/gi
+  ) || []).length;
+  if      (numericHits >= 5) score += 40;
+  else if (numericHits >= 3) score += 30;
+  else if (numericHits >= 1) score += 18;
 
-  // ── Domain-specific terminology ──
-  const domainHits = (text.match(/\b(formul|corrosion|coating|viscosit|polymer|alloy|substrate|inhibit|passiv|adhesion|thermal|nano|crystal|react|bond|intumesc|epoxy|pigment|binder|solvent|zinc|oxide|particle|surface|concentration|batch|sample|specimen|substrate|primer|topcoat|basecoat)\b/gi) || []).length;
-  if (domainHits >= 4) score += 25;
-  else if (domainHits >= 2) score += 15;
-  else if (domainHits >= 1) score += 8;
+  // B. Experiment / batch / run identifiers
+  const hasExpId = /\b(EXP[-_]?\w+|B[-_]\d{1,4}|S[-_]\d{1,4}|batch\s*#?\d|sample\s*#?\d|run\s*#?\d|trial\s*#?\d|experiment\s*#?\d)\b/i.test(text);
+  if (hasExpId) score += 12;
 
-  // ── Result / outcome language ──
-  const resultHits = (text.match(/\b(result|outcome|measured|tested|observed|found|showed|demonstrated|achieved|obtained|confirmed|verified|experiment|trial|run|batch|sample\s*\d|test\s*\d|cycle|pass|fail|complies|meets)\b/gi) || []).length;
-  if (resultHits >= 3) score += 20;
-  else if (resultHits >= 1) score += 12;
+  // C. Domain-specific terminology depth
+  const domainHits = (text.match(
+    /\b(formul|corrosion|coating|viscosit|polymer|alloy|substrate|inhibit|passiv|adhesion|thermal|nano|crystal|react|bond|intumesc|epoxy|pigment|binder|solvent|zinc|oxide|particle|surface|concentration|primer|topcoat|basecoat|resin|filler|thickener|catalyst|hardener|cross.?link)\b/gi
+  ) || []).length;
+  if      (domainHits >= 5) score += 20;
+  else if (domainHits >= 3) score += 14;
+  else if (domainHits >= 1) score += 7;
 
-  // ── Structured experiment identifiers ──
-  if (/\b(experiment\s*#?\d|batch\s*#?\d|sample\s*#?\d|run\s*#?\d|trial\s*#?\d|EXP-\w+|B-\d|S-\d)/i.test(text)) score += 10;
+  // D. Result / outcome evidence language
+  const resultHits = (text.match(
+    /\b(result|outcome|measured|tested|observed|found|showed|demonstrated|achieved|obtained|confirmed|verified|passed|failed|complies|meets|evaluated|analysed|quantified)\b/gi
+  ) || []).length;
+  if      (resultHits >= 3) score += 15;
+  else if (resultHits >= 1) score += 8;
 
-  // ── Multiple variables / comparison ──
-  if (/\b(vs\.?|versus|compared|control|baseline|reference|delta|difference|increase|decrease|ratio)\b/i.test(text)) score += 5;
+  // E. Baseline / comparison data
+  const hasBaseline = /\b(vs\.?|versus|compared|control|baseline|reference|delta|change|difference|ratio|increase|decrease|improvement|regression)\b/i.test(text);
+  if (hasBaseline) score += 8;
 
-  // ── Penalise very short inputs (< 20 words) ──
-  const wordCount = text.trim().split(/\s+/).length;
-  if (wordCount < 5)  score = Math.min(score, 10);
-  else if (wordCount < 10) score = Math.min(score, 25);
-  else if (wordCount < 20) score = Math.min(score, 45);
+  // F. Multiple evidence sentences (sentences that contain a number)
+  const evidenceSentences = (text.match(/[^.!?\n]*\d+[^.!?\n]*/g) || []).length;
+  if      (evidenceSentences >= 4) score += 5;
+  else if (evidenceSentences >= 2) score += 3;
 
-  return Math.min(Math.max(Math.round(score), 0), 100);
+  // Apply ceiling based on input length
+  const wordCount = text.split(/\s+/).filter(Boolean).length;
+  const ceiling = wordCount < 5  ? 20
+                : wordCount < 15 ? 45
+                : wordCount < 30 ? 70
+                : 100;
+
+  return Math.min(Math.max(Math.round(score), 0), ceiling);
 }
 
 // ─── FSCTM kernel gate ────────────────────────────────────────────────────────
@@ -351,19 +376,27 @@ export async function runPipeline(input) {
     missingData = ['experiment results', 'formulation parameters'];
   }
 
-  // Confidence: LLM-reported value takes priority (it evaluated semantic completeness);
-  // fall back to deterministic completeness score; STOP always caps at completenessScore.
-  let confidence;
-  if (llmConfidence !== null) {
-    // Blend: 60% LLM + 40% deterministic to prevent hallucinated high confidence
-    confidence = Math.round(llmConfidence * 0.6 + completenessScore * 0.4);
-  } else {
-    confidence = completenessScore;
+  // ── Confidence = evidence quality, independent of decision type ──────────────
+  //
+  // Rule: completeness score is the deterministic baseline.
+  //       LLM confidence can only RAISE it (prevents LLM returning 0 and collapsing score).
+  //       STOP hard-cap at 35% (something is clearly missing).
+  //       ITERATE and GO: no artificial floor/ceiling — score reflects actual evidence.
+  //
+  let confidence = completenessScore; // deterministic baseline (0-100)
+
+  if (typeof llmConfidence === 'number' && llmConfidence > confidence) {
+    // LLM saw more context (e.g. from RAG docs) — allow it to raise confidence
+    // but never more than 25 points above the deterministic score
+    confidence = Math.min(llmConfidence, confidence + 25);
   }
-  // Kernel override: if kernel tripped, cap confidence at the completeness score
-  if (kernel.tripped) confidence = Math.min(confidence, completenessScore);
-  // STOP should never report > 40% (there is clearly something missing)
-  if (action_required === 'STOP') confidence = Math.min(confidence, 40);
+
+  // STOP always capped at 35% — if there's enough evidence, decision wouldn't be STOP
+  if (action_required === 'STOP') confidence = Math.min(confidence, 35);
+
+  confidence = Math.min(Math.max(Math.round(confidence), 0), 100);
+
+  logger.info(`[pipeline] confidence=${confidence}% (completeness=${completenessScore} llmConf=${llmConfidence}) action=${action_required}`);
 
   const decision = {
     status: decision_status,
