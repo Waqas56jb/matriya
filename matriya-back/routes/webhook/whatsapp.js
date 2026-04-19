@@ -177,18 +177,26 @@ router.post('/', async (req, res) => {
     return res.status(403).send('Invalid Twilio signature');
   }
 
-  // ── Phone number whitelist ────────────────────────────────────────────────────
-  // Env var: WHATSAPP_ALLOWED_NUMBERS — comma-separated list of approved numbers.
-  // Format: whatsapp:+972544568078,whatsapp:+972546704797
-  // If the env var is set and the sender is NOT on the list, return access denied.
-  // If the env var is empty/unset, all numbers are allowed (open mode).
-  const allowedRaw = (process.env.WHATSAPP_ALLOWED_NUMBERS || process.env.WHATSAPP_ALLOWED_FROM || '').trim();
-  if (allowedRaw) {
-    const allowSet = new Set(allowedRaw.split(',').map(s => s.trim()).filter(Boolean));
-    if (!allowSet.has(from_number)) {
-      logger.warn(`[whatsapp webhook] BLOCKED number=${from_number} — not on whitelist`);
-      res.set('Content-Type', 'text/xml');
-      return res.send(twimlResponse('Access denied. Contact system administrator.'));
+  // ── Phone number whitelist (Supabase-backed) ─────────────────────────────────
+  // Source of truth: whatsapp_whitelist table in Supabase.
+  // David can add/remove numbers directly in Supabase — no code change or
+  // redeploy required.  Falls back to OPEN mode if Supabase is unavailable.
+  const whitelistEnabled = (process.env.WHATSAPP_WHITELIST_ENABLED || '1') !== '0';
+  if (whitelistEnabled) {
+    const sb = tryGetSupabase();
+    if (sb) {
+      const { data: row } = await sb
+        .from('whatsapp_whitelist')
+        .select('active')
+        .eq('phone', from_number)
+        .eq('active', true)
+        .maybeSingle();
+
+      if (!row) {
+        logger.warn(`[whatsapp webhook] BLOCKED number=${from_number} — not in whitelist`);
+        res.set('Content-Type', 'text/xml');
+        return res.send(twimlResponse('Access denied. Contact system administrator.'));
+      }
     }
   }
 
