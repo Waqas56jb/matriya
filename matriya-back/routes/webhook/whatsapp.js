@@ -135,6 +135,33 @@ router.get('/', (_req, res) => {
   res.status(200).type('text/plain').send('WhatsApp webhook OK');
 });
 
+// ─── GET /test-rachel — diagnostic: send a test message to Rachel ─────────────
+// Usage: GET /api/webhook/whatsapp/test-rachel
+// Returns JSON with success/error so we can see the exact Twilio error.
+
+router.get('/test-rachel', async (_req, res) => {
+  const rachelRaw = (process.env.RACHEL_WHATSAPP || '').trim();
+  if (!rachelRaw) {
+    return res.json({ ok: false, error: 'RACHEL_WHATSAPP env var not set' });
+  }
+
+  const testMsg = [
+    'MATRIYA → ⚠️ ITERATE (Confidence: 55%)',
+    '',
+    '3 N-Stage Candidates:',
+    '1. Provide experiment results to advance the decision',
+    '2. Provide formulation parameters for evaluation',
+    '3. Add baseline or control comparison data'
+  ].join('\n');
+
+  try {
+    await sendWhatsAppMessage(rachelRaw, testMsg);
+    res.json({ ok: true, sent_to: rachelRaw, message: testMsg });
+  } catch (e) {
+    res.json({ ok: false, sent_to: rachelRaw, error: e.message, code: e.code, status: e.status });
+  }
+});
+
 // ─── POST — main handler ──────────────────────────────────────────────────────
 
 router.post('/', async (req, res) => {
