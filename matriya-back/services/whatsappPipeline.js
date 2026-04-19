@@ -186,6 +186,26 @@ export async function processPendingTasks() {
         }
       }
 
+      // 3b. Notify Rachel on ITERATE with candidates (async, best-effort)
+      if (pipelineResult?.decision?.action_required === 'ITERATE') {
+        const candidates = pipelineResult?.candidates || [];
+        const rachelRaw = (process.env.RACHEL_WHATSAPP || '').trim();
+        if (rachelRaw && candidates.length > 0) {
+          const rachelAddr = rachelRaw.startsWith('whatsapp:') ? rachelRaw : `whatsapp:${rachelRaw}`;
+          const conf = pipelineResult?.decision?.confidence ?? 0;
+          const rachelMsg = [
+            `MATRIYA → ⚠️ ITERATE (Confidence: ${conf}%)`,
+            ``,
+            `3 N-Stage Candidates:`,
+            ...candidates.slice(0, 3).map((c, i) => `${i + 1}. ${c}`)
+          ].join('\n');
+          sendReplyTo(rachelAddr, rachelMsg).catch(e =>
+            logger.error(`[whatsappPipeline] Rachel notify failed: ${e.message}`)
+          );
+          logger.info(`[whatsappPipeline] ITERATE candidates queued for Rachel at ${rachelAddr}`);
+        }
+      }
+
       // 4. Mark task as DONE
       const { error: updateError } = await sb
         .from(TABLE)

@@ -681,6 +681,24 @@ const Experiment = sequelize ? sequelize.define('Experiment', {
     allowNull: false,
     defaultValue: false
   },
+  /** Last MATRIYA decision that evaluated this experiment: GO | ITERATE | STOP */
+  decision_shift: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    defaultValue: null
+  },
+  /** TRUE when the FSCTM Kernel v1.6 fired a breakdown gate on this experiment */
+  breakdown_flag: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false
+  },
+  /** TRUE when a human operator confirms the result matches the MATRIYA decision */
+  validated: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false
+  },
   created_at: {
     type: DataTypes.DATE,
     defaultValue: DataTypes.NOW

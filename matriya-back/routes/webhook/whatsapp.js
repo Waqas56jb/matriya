@@ -18,6 +18,7 @@ import { Router } from 'express';
 import { createClient } from '@supabase/supabase-js';
 import logger from '../../logger.js';
 import { runPipeline } from '../../agents/orchestration.js';
+import { sendWhatsAppMessage, logTicket } from '../../twilioGateway.js';
 
 const router = Router();
 const TABLE = 'whatsapp_tasks';
@@ -176,6 +177,11 @@ router.post('/', async (req, res) => {
     const pipelineResult = await Promise.race([runPipeline(message), timeout]);
     replyText = formatDecision(pipelineResult);
     logger.info(`[whatsapp webhook] pipeline completed: ${replyText.replace(/\n/g, ' | ')}`);
+
+    // ── Outbound Rachel notification on ITERATE with candidates ────────────────
+    notifyRachel(pipelineResult).catch(e =>
+      logger.error(`[whatsapp webhook] notifyRachel error: ${e.message}`)
+    );
   } catch (e) {
     if (e.message === 'PIPELINE_TIMEOUT') {
       logger.warn('[whatsapp webhook] pipeline timed out — sending fallback, polling will retry');
@@ -203,5 +209,53 @@ router.post('/', async (req, res) => {
   res.set('Content-Type', 'text/xml');
   res.send(twimlResponse(replyText));
 });
+
+// ─── Rachel outbound notification ─────────────────────────────────────────────
+
+/**
+ * When MATRIYA returns ITERATE and candidates are present, send an outbound
+ * WhatsApp message to Rachel (RACHEL_WHATSAPP env var) listing all 3 candidates.
+ *
+ * Silent no-op if RACHEL_WHATSAPP is not configured or decision is not ITERATE.
+ *
+ * @param {object} pipelineResult — full runPipeline() result
+ */
+async function notifyRachel(pipelineResult) {
+  const rachelRaw = (process.env.RACHEL_WHATSAPP || '').trim();
+  if (!rachelRaw) return; // not configured — skip
+
+  const action = pipelineResult?.decision?.action_required;
+  if (action !== 'ITERATE') return; // only fire on ITERATE
+
+  const candidates = pipelineResult?.candidates || [];
+  if (candidates.length === 0) return; // no candidates to send
+
+  const rachelAddr = rachelRaw.startsWith('whatsapp:') ? rachelRaw : `whatsapp:${rachelRaw}`;
+  const msg = formatRachelMessage(pipelineResult, candidates);
+
+  logger.info(`[whatsapp webhook] sending ITERATE candidates to Rachel at ${rachelAddr}`);
+  await sendWhatsAppMessage(rachelAddr, msg);
+  await logTicket(rachelAddr, msg, 'outbound_rachel');
+}
+
+/**
+ * Build the outbound message to Rachel.
+ * Format:
+ *   MATRIYA → ITERATE (Confidence: 30%)
+ *   3 N-Stage Candidates:
+ *   1. <candidate 1>
+ *   2. <candidate 2>
+ *   3. <candidate 3>
+ */
+function formatRachelMessage(pipelineResult, candidates) {
+  const conf = pipelineResult?.decision?.confidence ?? 0;
+  const lines = [
+    `MATRIYA → ⚠️ ITERATE (Confidence: ${conf}%)`,
+    ``,
+    `3 N-Stage Candidates:`,
+    ...candidates.slice(0, 3).map((c, i) => `${i + 1}. ${c}`)
+  ];
+  return lines.join('\n');
+}
 
 export default router;

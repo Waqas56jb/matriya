@@ -490,8 +490,83 @@ export async function runPipeline(input) {
   const expMatch = answer.match(/experiment[:\s]+(.+)/i);
   const experiment = expMatch ? { suggestion: expMatch[1].trim(), status: 'PROPOSED' } : null;
 
-  logger.info(`[pipeline] done ${decision.elapsed_ms}ms action=${action_required} kernel=${kernel.tripped} rag=${ragUsed}`);
-  return { consilium, gate, score, decision, experiment };
+  // ── N-stage candidates (generated when decision = ITERATE) ───────────────────
+  // Candidates are the 3 most actionable next-step suggestions extracted from
+  // the LLM answer.  If the LLM didn't produce structured candidates, we
+  // synthesise them from the missing_data list and domain context so the
+  // outbound Rachel message always contains 3 concrete next steps.
+  const candidates = action_required === 'ITERATE'
+    ? generateCandidates(input, answer, missingData)
+    : [];
+
+  logger.info(`[pipeline] done ${decision.elapsed_ms}ms action=${action_required} kernel=${kernel.tripped} rag=${ragUsed} candidates=${candidates.length}`);
+  return { consilium, gate, score, decision, experiment, candidates };
+}
+
+// ─── N-stage candidate generator ──────────────────────────────────────────────
+
+/**
+ * Extract or synthesise 3 ITERATE candidates from the pipeline answer.
+ *
+ * Priority order:
+ *   1. Numbered / bulleted items in the LLM answer (1. / 2. / • / – lines)
+ *   2. Sentences that mention "candidate", "suggest", "recommend", "next step"
+ *   3. Fallback: synthesise from missing_data + domain-aware defaults
+ *
+ * Always returns exactly 3 candidate strings.
+ *
+ * @param {string} input       — original user message
+ * @param {string} answer      — LLM / RAG answer
+ * @param {string[]} missing   — missing_data array from decision
+ * @returns {string[]}
+ */
+function generateCandidates(input, answer, missing = []) {
+  const extracted = [];
+
+  // 1. Numbered / bulleted list items
+  const listMatches = (answer || '').match(/(?:^|\n)\s*(?:\d+[.)]\s*|[•\-–*]\s*)([^\n]{10,})/g) || [];
+  for (const m of listMatches) {
+    const clean = m.replace(/^\s*[\d•\-–*.)\s]+/, '').trim();
+    if (clean.length > 8) extracted.push(clean);
+    if (extracted.length >= 3) break;
+  }
+
+  // 2. Sentences with key iteration language
+  if (extracted.length < 3) {
+    const sentences = (answer || '').split(/[.!?\n]/).map(s => s.trim()).filter(Boolean);
+    for (const s of sentences) {
+      if (/candidate|suggest|recommend|next step|iteration|additional|improve|refine|measure|test|run|provide/i.test(s)
+          && s.length > 15 && !extracted.includes(s)) {
+        extracted.push(s);
+        if (extracted.length >= 3) break;
+      }
+    }
+  }
+
+  // 3. Synthesise from missing_data + generic domain fallbacks
+  if (extracted.length < 3) {
+    const fallbacks = (missing.length > 0 ? missing : ['experiment results', 'formulation parameters', 'baseline comparison'])
+      .map(m => `Provide ${m} to advance the decision`);
+    for (const f of fallbacks) {
+      if (!extracted.includes(f)) {
+        extracted.push(f);
+        if (extracted.length >= 3) break;
+      }
+    }
+  }
+
+  // Pad to 3 with domain-aware defaults if still short
+  const defaults = [
+    'Run additional measurements with full unit specification',
+    'Provide baseline or control comparison data',
+    'Add experiment identifier and repeat count'
+  ];
+  let di = 0;
+  while (extracted.length < 3 && di < defaults.length) {
+    extracted.push(defaults[di++]);
+  }
+
+  return extracted.slice(0, 3);
 }
 
 function classifyFromText(text) {
