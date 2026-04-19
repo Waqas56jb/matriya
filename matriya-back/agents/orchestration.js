@@ -140,27 +140,77 @@ Answer in the same language as the user (Hebrew if Hebrew, English if English).`
   // Extract JSON block from response
   const jsonMatch = text.match(/```json\s*([\s\S]*?)```/i) || text.match(/\{[\s\S]*?"decision"[\s\S]*?\}/);
   let signals = {};
-    let llmDecision = null;
-    let missingData = [];
-    if (jsonMatch) {
-      try {
-        const parsed = JSON.parse(jsonMatch[1] || jsonMatch[0]);
-        llmDecision = parsed.decision;
-        missingData = Array.isArray(parsed.missing_data) ? parsed.missing_data.filter(Boolean) : [];
-        signals = {
-          sufficient_data: parsed.insufficient_data === false,
-          variables_distinguishable: parsed.variables_distinguishable !== false,
-          extrapolation_intent: parsed.extrapolation_intent === true,
-          data_in_domain: parsed.data_in_domain !== false
-        };
-      } catch (_) { /* ignore parse errors */ }
-    }
+  let llmDecision = null;
+  let missingData = [];
+  let llmConfidence = null; // 0-100 from LLM, null if not provided
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[1] || jsonMatch[0]);
+      llmDecision = parsed.decision;
+      missingData = Array.isArray(parsed.missing_data) ? parsed.missing_data.filter(Boolean) : [];
+      if (typeof parsed.confidence === 'number' && parsed.confidence >= 0 && parsed.confidence <= 100) {
+        llmConfidence = Math.round(parsed.confidence);
+      }
+      signals = {
+        sufficient_data: parsed.insufficient_data === false,
+        variables_distinguishable: parsed.variables_distinguishable !== false,
+        extrapolation_intent: parsed.extrapolation_intent === true,
+        data_in_domain: parsed.data_in_domain !== false
+      };
+    } catch (_) { /* ignore parse errors */ }
+  }
 
   // Extract plain-language part (after JSON block)
   const plainText = text.replace(/```json[\s\S]*?```/gi, '').replace(/\{[\s\S]*?"decision"[\s\S]*?\}/, '').trim();
   const answer = plainText || text;
 
-    return { answer, signals, llmDecision, missingData };
+    return { answer, signals, llmDecision, missingData, llmConfidence };
+}
+
+// ─── Data completeness scorer ────────────────────────────────────────────────
+
+/**
+ * Deterministic confidence score based on data completeness.
+ * Returns 0-100 reflecting how much usable research data is in the input.
+ *
+ * Tiers:
+ *   70-90 — numeric measurements + domain terms + result language
+ *   40-60 — partial: domain terms or results but not both
+ *   10-30 — minimal: plain text, no domain signals
+ */
+function computeDataCompleteness(input) {
+  const text = input || '';
+  let score = 0;
+
+  // ── Numeric data signals (measurements, concentrations, ranges) ──
+  const numericMatches = (text.match(/\b\d+(\.\d+)?\s*(%|mg|g|kg|ml|l|mm|nm|µm|°C|°F|K|MPa|GPa|ppm|mol|bar|Hz|rpm|wt|vol|cP|mPa|Pa·s)\b/gi) || []).length;
+  if (numericMatches >= 3) score += 35;
+  else if (numericMatches >= 1) score += 20;
+
+  // ── Domain-specific terminology ──
+  const domainHits = (text.match(/\b(formul|corrosion|coating|viscosit|polymer|alloy|substrate|inhibit|passiv|adhesion|thermal|nano|crystal|react|bond|intumesc|epoxy|pigment|binder|solvent|zinc|oxide|particle|surface|concentration|batch|sample|specimen|substrate|primer|topcoat|basecoat)\b/gi) || []).length;
+  if (domainHits >= 4) score += 25;
+  else if (domainHits >= 2) score += 15;
+  else if (domainHits >= 1) score += 8;
+
+  // ── Result / outcome language ──
+  const resultHits = (text.match(/\b(result|outcome|measured|tested|observed|found|showed|demonstrated|achieved|obtained|confirmed|verified|experiment|trial|run|batch|sample\s*\d|test\s*\d|cycle|pass|fail|complies|meets)\b/gi) || []).length;
+  if (resultHits >= 3) score += 20;
+  else if (resultHits >= 1) score += 12;
+
+  // ── Structured experiment identifiers ──
+  if (/\b(experiment\s*#?\d|batch\s*#?\d|sample\s*#?\d|run\s*#?\d|trial\s*#?\d|EXP-\w+|B-\d|S-\d)/i.test(text)) score += 10;
+
+  // ── Multiple variables / comparison ──
+  if (/\b(vs\.?|versus|compared|control|baseline|reference|delta|difference|increase|decrease|ratio)\b/i.test(text)) score += 5;
+
+  // ── Penalise very short inputs (< 20 words) ──
+  const wordCount = text.trim().split(/\s+/).length;
+  if (wordCount < 5)  score = Math.min(score, 10);
+  else if (wordCount < 10) score = Math.min(score, 25);
+  else if (wordCount < 20) score = Math.min(score, 45);
+
+  return Math.min(Math.max(Math.round(score), 0), 100);
 }
 
 // ─── FSCTM kernel gate ────────────────────────────────────────────────────────
@@ -226,6 +276,7 @@ export async function runPipeline(input) {
   let signals = {};
   let llmDecision = null;
   let missingData = [];
+  let llmConfidence = null;
   let ragUsed = false;
 
   const ragAnswer = await callRag(input);
@@ -240,12 +291,16 @@ export async function runPipeline(input) {
       signals = llmResult.signals || {};
       llmDecision = llmResult.llmDecision || null;
       missingData = llmResult.missingData || [];
+      llmConfidence = llmResult.llmConfidence ?? null;
     } catch (e) {
       logger.error(`[pipeline] LLM failed: ${e.message}`);
       answer = `MATRIYA: שגיאה בעיבוד. ${e.message}`;
       missingData = ['experiment results', 'formulation parameters'];
     }
   }
+
+  // Compute deterministic data-completeness score (0-100)
+  const completenessScore = computeDataCompleteness(input);
 
   const cleanAnswer = answer.replace(/\bdecision\s*=\s*(GO|STOP|ITERATE)\b/gi, '').trim() || answer;
 
@@ -296,10 +351,25 @@ export async function runPipeline(input) {
     missingData = ['experiment results', 'formulation parameters'];
   }
 
+  // Confidence: LLM-reported value takes priority (it evaluated semantic completeness);
+  // fall back to deterministic completeness score; STOP always caps at completenessScore.
+  let confidence;
+  if (llmConfidence !== null) {
+    // Blend: 60% LLM + 40% deterministic to prevent hallucinated high confidence
+    confidence = Math.round(llmConfidence * 0.6 + completenessScore * 0.4);
+  } else {
+    confidence = completenessScore;
+  }
+  // Kernel override: if kernel tripped, cap confidence at the completeness score
+  if (kernel.tripped) confidence = Math.min(confidence, completenessScore);
+  // STOP should never report > 40% (there is clearly something missing)
+  if (action_required === 'STOP') confidence = Math.min(confidence, 40);
+
   const decision = {
     status: decision_status,
     action_required,
     reason: decisionReason,
+    confidence,              // 0-100 real score
     missing_data: missingData,
     kernel_tripped: kernel.tripped,
     elapsed_ms: Date.now() - startedAt

@@ -78,8 +78,10 @@ function mapAction(action_required) {
  */
 function formatReply(pipelineResult) {
   const action      = pipelineResult?.decision?.action_required ?? 'STOP';
-  const rawScore    = pipelineResult?.score?.emergence_score ?? 0;
-  const confidence  = Math.round(Math.min(Math.max(rawScore, 0), 1) * 100);
+  // Use decision.confidence (data-completeness based, 0-100)
+  const rawConf = pipelineResult?.decision?.confidence
+    ?? Math.round((pipelineResult?.score?.emergence_score ?? 0) * 100);
+  const confidence = Math.min(Math.max(Math.round(rawConf), 0), 100);
   const missingData = pipelineResult?.decision?.missing_data ?? [];
   const kernelTag   = pipelineResult?.decision?.kernel_tripped ? ' [KERNEL]' : '';
 

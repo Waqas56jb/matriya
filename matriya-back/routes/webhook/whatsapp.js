@@ -72,8 +72,11 @@ function isTwilioRequestValid(req) {
 
 function formatDecision(pipelineResult) {
   const action      = pipelineResult?.decision?.action_required ?? 'STOP';
-  const score       = pipelineResult?.score?.emergence_score ?? 0;
-  const conf        = Math.round(Math.min(Math.max(score, 0), 1) * 100);
+  // Use decision.confidence (data-completeness based, 0-100)
+  // Fall back to emergence_score only if confidence not set
+  const rawConf = pipelineResult?.decision?.confidence
+    ?? Math.round((pipelineResult?.score?.emergence_score ?? 0) * 100);
+  const conf = Math.min(Math.max(Math.round(rawConf), 0), 100);
   const reason      = (pipelineResult?.decision?.reason || '').trim();
   const missingData = pipelineResult?.decision?.missing_data ?? [];
   const kernelTag   = pipelineResult?.decision?.kernel_tripped ? ' [KERNEL]' : '';
