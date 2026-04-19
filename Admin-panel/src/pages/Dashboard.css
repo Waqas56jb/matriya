@@ -1,0 +1,65 @@
+.dashboard-charts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+
+.health-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+}
+.health-item {
+  background: var(--bg-card2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.health-dot {
+  width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+}
+.health-dot.up      { background: var(--success); box-shadow: 0 0 8px var(--success); }
+.health-dot.down    { background: var(--danger);  box-shadow: 0 0 8px var(--danger);  }
+.health-dot.degraded{ background: var(--warning); box-shadow: 0 0 8px var(--warning); }
+.health-name        { flex: 1; font-size: 12px; color: var(--text-secondary); font-weight: 500; }
+.health-status      { font-size: 11px; font-weight: 700; text-transform: uppercase; }
+.health-status.up      { color: var(--success); }
+.health-status.down    { color: var(--danger);  }
+.health-status.degraded{ color: var(--warning); }
+.health-latency { font-size: 11px; color: var(--text-muted); }
+
+.quick-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+.quick-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  background: var(--bg-card2);
+  color: var(--text-secondary);
+  transition: var(--transition);
+}
+.quick-action:hover { color: var(--text-primary); transform: translateY(-2px); border-color: var(--border-light); }
+.quick-action-cyan:hover   { border-color: var(--accent-cyan);  color: var(--accent-cyan);  background: rgba(0,212,255,0.06); }
+.quick-action-purple:hover { border-color: #7c3aed;             color: #a855f7;             background: rgba(124,58,237,0.06); }
+.quick-action-success:hover{ border-color: var(--success);      color: var(--success);      background: rgba(16,185,129,0.06); }
+.quick-action-info:hover   { border-color: var(--info);         color: var(--info);         background: rgba(59,130,246,0.06); }
+.quick-action-warning:hover{ border-color: var(--warning);      color: var(--warning);      background: rgba(245,158,11,0.06); }
+.quick-action-green:hover  { border-color: var(--success);      color: var(--success);      background: rgba(16,185,129,0.06); }
+.quick-action-icon { font-size: 18px; }
+
+@media (max-width: 768px) {
+  .dashboard-charts { grid-template-columns: 1fr; }
+}
