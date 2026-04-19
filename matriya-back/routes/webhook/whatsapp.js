@@ -37,11 +37,11 @@ function tryGetSupabase() {
   return _sbWa;
 }
 
-async function saveTask(from_number, message, status = 'PENDING') {
+async function saveTask(from_number, message, status = 'PENDING', extra = {}) {
   try {
     const sb = tryGetSupabase();
     if (!sb) return;
-    const { error } = await sb.from(TABLE).insert([{ from_number, message, status }]);
+    const { error } = await sb.from(TABLE).insert([{ from_number, message, status, ...extra }]);
     if (error) logger.warn(`[whatsapp webhook] DB save: ${error.message}`);
   } catch (e) {
     logger.warn(`[whatsapp webhook] DB save exception: ${e.message}`);
@@ -162,12 +162,13 @@ router.post('/', async (req, res) => {
 
   logger.info(`[whatsapp webhook] from=${from_number} msg="${message.slice(0, 80)}"`);
 
-  // Save to DB for audit (best-effort — does not block pipeline)
+  // Save initial task row (PROCESSING) — updated below with full result
   saveTask(from_number, message, 'PROCESSING');
 
   // Run pipeline with timeout race
   let replyText;
   let finalStatus = 'DONE';
+  let taskExtra = {};   // extra columns written back after pipeline completes
 
   try {
     const timeout = new Promise((_, reject) =>
@@ -178,15 +179,32 @@ router.post('/', async (req, res) => {
     replyText = formatDecision(pipelineResult);
     logger.info(`[whatsapp webhook] pipeline completed: ${replyText.replace(/\n/g, ' | ')}`);
 
+    // Build extra columns for Supabase row (proof for David's screenshot)
+    const action    = pipelineResult?.decision?.action_required ?? 'STOP';
+    const conf      = pipelineResult?.decision?.confidence ?? 0;
+    const cands     = pipelineResult?.candidates ?? [];
+    taskExtra = {
+      decision:         action,
+      confidence:       conf,
+      candidates:       cands.length > 0 ? cands : null,
+      rachel_notified:  false
+    };
+
     // ── Outbound Rachel notification on ITERATE with candidates ────────────────
-    notifyRachel(pipelineResult).catch(e =>
-      logger.error(`[whatsapp webhook] notifyRachel error: ${e.message}`)
-    );
+    if (action === 'ITERATE' && cands.length > 0) {
+      try {
+        await notifyRachel(pipelineResult);
+        taskExtra.rachel_notified = true;
+        logger.info('[whatsapp webhook] Rachel notified ✓');
+      } catch (e) {
+        logger.error(`[whatsapp webhook] notifyRachel error: ${e.message}`);
+      }
+    }
   } catch (e) {
     if (e.message === 'PIPELINE_TIMEOUT') {
       logger.warn('[whatsapp webhook] pipeline timed out — sending fallback, polling will retry');
       replyText = '⏳ MATRIYA: עיבוד מורחב — תשובה תגיע תוך דקה.';
-      finalStatus = 'PENDING'; // let polling loop handle it
+      finalStatus = 'PENDING';
     } else {
       logger.error(`[whatsapp webhook] pipeline error: ${e.stack || e.message}`);
       replyText = `MATRIYA: שגיאה בעיבוד הבקשה.\n${e.message}`;
@@ -194,12 +212,12 @@ router.post('/', async (req, res) => {
     }
   }
 
-  // Update task status
+  // Update task row with final status + pipeline result columns
   try {
     const sb = tryGetSupabase();
     if (sb) {
       await sb.from(TABLE)
-        .update({ status: finalStatus })
+        .update({ status: finalStatus, ...taskExtra })
         .eq('from_number', from_number)
         .eq('message', message)
         .eq('status', 'PROCESSING');
