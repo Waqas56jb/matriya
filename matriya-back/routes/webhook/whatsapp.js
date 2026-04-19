@@ -3,17 +3,19 @@
  *
  * POST /api/webhook/whatsapp
  * Receives incoming WhatsApp messages via Twilio webhook.
- * Runs the full MATRIYA pipeline and replies with a real answer via TwiML.
+ * Runs the full MATRIYA pipeline and replies with the real LLM answer via TwiML.
  *
  * Env vars:
- *   TWILIO_AUTH_TOKEN           — enables Twilio signature check
- *   TWILIO_WEBHOOK_PUBLIC_URL   — must match URL configured in Twilio Console
- *   SUPABASE_URL, SUPABASE_KEY  — for logging to whatsapp_tasks
- *   OPENAI_API_KEY              — required for pipeline LLM call
- *   WHATSAPP_ALLOWED_FROM       — optional comma-separated allowlist
+ *   TWILIO_AUTH_TOKEN             — enables Twilio signature check (optional)
+ *   TWILIO_WEBHOOK_WHATSAPP_URL   — explicit public URL for THIS endpoint (optional override)
+ *                                   if not set, derived from request headers
+ *   SKIP_TWILIO_SIG_CHECK         — set to "1" to bypass signature check (debug only)
+ *   SUPABASE_URL, SUPABASE_KEY    — for logging to whatsapp_tasks
+ *   OPENAI_API_KEY                — required for pipeline LLM call
+ *   WHATSAPP_ALLOWED_FROM         — optional comma-separated sender allowlist
  */
 
-import crypto from 'crypto';
+import twilio from 'twilio';
 import { Router } from 'express';
 import { createClient } from '@supabase/supabase-js';
 import logger from '../../logger.js';
@@ -36,31 +38,46 @@ function getSupabase() {
 
 // ─── Twilio signature validation ──────────────────────────────────────────────
 
-function validateTwilioSignature(authToken, twilioSignature, url, params) {
-  if (!authToken || !twilioSignature || !url || !params) return false;
-  const sortedKeys = Object.keys(params).sort();
-  let data = url;
-  for (const key of sortedKeys) {
-    data += key + (params[key] ?? '');
+/**
+ * Validates X-Twilio-Signature using Twilio's official library.
+ * Tries both the explicit TWILIO_WEBHOOK_WHATSAPP_URL env var and the derived request URL.
+ * Returns true if TWILIO_AUTH_TOKEN is not set (dev mode) or SKIP_TWILIO_SIG_CHECK=1.
+ */
+function isTwilioRequestValid(req) {
+  // Allow bypassing for dev/debug
+  if (process.env.SKIP_TWILIO_SIG_CHECK === '1') return true;
+
+  const authToken = (process.env.TWILIO_AUTH_TOKEN || '').trim();
+  if (!authToken) {
+    logger.warn('[whatsapp webhook] TWILIO_AUTH_TOKEN not set — skipping sig check (dev mode)');
+    return true;
   }
-  const expected = crypto.createHmac('sha1', authToken).update(Buffer.from(data, 'utf-8')).digest('base64');
-  try {
-    const a = Buffer.from(twilioSignature, 'utf-8');
-    const b = Buffer.from(expected, 'utf-8');
-    if (a.length !== b.length) return false;
-    return crypto.timingSafeEqual(a, b);
-  } catch {
+
+  const sig = (req.headers['x-twilio-signature'] || '').trim();
+  if (!sig) {
+    logger.warn('[whatsapp webhook] X-Twilio-Signature header missing');
     return false;
   }
-}
 
-function getWebhookPublicUrl(req) {
-  // Always derive from the actual request URL — do NOT use TWILIO_WEBHOOK_PUBLIC_URL
-  // because that env var may be set to a different endpoint (/api/whatsapp/inbound).
-  const host = req.get('host') || '';
-  const proto = req.get('x-forwarded-proto') || req.protocol || 'https';
-  const path = (req.originalUrl || req.url || '').split('?')[0];
-  return `${proto}://${host}${path}`;
+  const params = req.body || {};
+
+  // Build the request URL the same way twilioGateway.js does
+  // trust proxy: 1 ensures req.protocol is "https" behind Railway/Vercel
+  const derivedUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`;
+
+  // Try the derived URL first (most common case)
+  if (twilio.validateRequest(authToken, sig, derivedUrl, params)) {
+    return true;
+  }
+
+  // Fallback: try an explicit override URL if configured
+  const explicit = (process.env.TWILIO_WEBHOOK_WHATSAPP_URL || '').trim();
+  if (explicit && twilio.validateRequest(authToken, sig, explicit, params)) {
+    return true;
+  }
+
+  logger.warn(`[whatsapp webhook] sig invalid — derivedUrl=${derivedUrl}`);
+  return false;
 }
 
 // ─── Reply formatter ──────────────────────────────────────────────────────────
@@ -68,25 +85,22 @@ function getWebhookPublicUrl(req) {
 function mapAction(action_required) {
   switch ((action_required || '').toUpperCase()) {
     case 'GO':      return '✅ GO';
-    case 'ITERATE': return '⚠️ WAIT';
+    case 'ITERATE': return '⚠️ ITERATE';
     case 'STOP':
-    default:        return '❌ NO-GO';
+    default:        return '❌ STOP';
   }
 }
 
 function formatPipelineReply(pipelineResult) {
+  // Use the raw LLM answer (decision.reason) as the primary reply
+  const rawAnswer = (pipelineResult?.decision?.reason || '').trim();
+  if (rawAnswer) return rawAnswer;
+
+  // Fallback: structured format
   const action     = pipelineResult?.decision?.action_required ?? 'STOP';
   const rawScore   = pipelineResult?.score?.emergence_score ?? 0;
   const confidence = Math.round(Math.min(Math.max(rawScore, 0), 1) * 100);
-  const fullReason = (pipelineResult?.decision?.reason || '').replace(/decision\s*=\s*(GO|STOP|ITERATE)/gi, '').trim();
-  const summary    = fullReason.split(/[.!?\n]/)[0].trim() || 'No summary available.';
-
-  return (
-    `✅ MATRIYA Result:\n` +
-    `${mapAction(action)}\n` +
-    `Confidence: ${confidence}%\n` +
-    `Summary: ${summary}`
-  );
+  return `MATRIYA: ${mapAction(action)} (${confidence}%)`;
 }
 
 function escapeTwiml(text) {
@@ -96,7 +110,7 @@ function escapeTwiml(text) {
     .replace(/>/g, '&gt;');
 }
 
-// ─── GET health check ─────────────────────────────────────────────────────────
+// ─── GET — health check ───────────────────────────────────────────────────────
 
 router.get('/', (_req, res) => {
   res.status(200).type('text/plain').send('WhatsApp webhook OK');
@@ -109,55 +123,48 @@ router.post('/', async (req, res) => {
   const from_number = (req.body?.From || '').trim();
 
   if (!message || !from_number) {
-    return res.status(400).json({ received: false, error: 'Missing Body or From' });
+    // Still return valid TwiML so Twilio doesn't retry endlessly
+    res.set('Content-Type', 'text/xml');
+    return res.send('<Response></Response>');
   }
 
-  // Twilio signature check (skipped if no auth token — dev mode)
-  const authToken = (process.env.TWILIO_AUTH_TOKEN || '').trim();
-  if (authToken) {
-    const signature = req.get('X-Twilio-Signature') || '';
-    const url = getWebhookPublicUrl(req);
-    const ok = validateTwilioSignature(authToken, signature, url, req.body);
-    if (!ok) {
-      logger.warn('[whatsapp webhook] invalid Twilio signature');
-      return res.status(403).json({ received: false, error: 'Invalid Twilio signature' });
-    }
+  // Twilio signature check
+  if (!isTwilioRequestValid(req)) {
+    return res.status(403).send('Invalid Twilio signature');
   }
 
-  // Sender allowlist check (optional)
+  // Sender allowlist (optional)
   const allowed = (process.env.WHATSAPP_ALLOWED_FROM || '').trim();
   if (allowed) {
     const allowSet = new Set(allowed.split(',').map(s => s.trim()).filter(Boolean));
     if (!allowSet.has(from_number)) {
-      return res.status(403).json({ received: false, error: 'Sender not allowed' });
+      res.set('Content-Type', 'text/xml');
+      return res.send('<Response></Response>');
     }
   }
 
-  logger.info(`[whatsapp webhook] inbound from=${from_number} message="${message.slice(0, 80)}"`);
+  logger.info(`[whatsapp webhook] from=${from_number} msg="${message.slice(0, 80)}"`);
 
-  // Save to whatsapp_tasks (best-effort, non-blocking)
-  try {
-    const { error } = await getSupabase()
-      .from(TABLE)
-      .insert([{ from_number, message, status: 'PENDING' }]);
-    if (error) logger.error(`[whatsapp webhook] DB insert: ${error.message}`);
-  } catch (e) {
-    logger.error(`[whatsapp webhook] DB insert exception: ${e.message}`);
-  }
+  // Log to DB (best-effort, non-blocking)
+  getSupabase()
+    .from(TABLE)
+    .insert([{ from_number, message, status: 'PENDING' }])
+    .then(({ error }) => { if (error) logger.error(`[whatsapp webhook] DB: ${error.message}`); })
+    .catch(e => logger.error(`[whatsapp webhook] DB exception: ${e.message}`));
 
-  // Run full MATRIYA pipeline → get real answer
+  // Run full MATRIYA pipeline → get real LLM answer
   let replyText;
   try {
-    logger.info(`[whatsapp webhook] running pipeline for: "${message.slice(0, 60)}"`);
-    const pipelineResult = await runPipeline(message);
-    replyText = formatPipelineReply(pipelineResult);
-    logger.info(`[whatsapp webhook] pipeline done → ${replyText.replace(/\n/g, ' | ')}`);
+    logger.info(`[whatsapp webhook] calling runPipeline...`);
+    const result = await runPipeline(message);
+    replyText = formatPipelineReply(result);
+    logger.info(`[whatsapp webhook] pipeline done: ${replyText.slice(0, 120)}`);
   } catch (e) {
-    logger.error(`[whatsapp webhook] pipeline error: ${e.message}`);
-    replyText = `MATRIYA: שגיאה בעיבוד הבקשה. אנא נסה שנית.\n\n${e.message}`;
+    logger.error(`[whatsapp webhook] pipeline error: ${e.stack || e.message}`);
+    replyText = `MATRIYA: שגיאה בעיבוד הבקשה. נסה שנית.\n${e.message}`;
   }
 
-  // Reply via TwiML — Twilio delivers this as a WhatsApp message to the sender
+  // Deliver reply via TwiML — Twilio sends this as a WhatsApp message to the sender
   const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeTwiml(replyText)}</Message></Response>`;
   res.set('Content-Type', 'text/xml');
   res.send(twiml);
