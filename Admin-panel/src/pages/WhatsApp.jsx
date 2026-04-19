@@ -37,8 +37,12 @@ export default function WhatsApp() {
 
   const approveRequest = async (id, phone) => {
     try {
-      await api.post(`/api/admin/whatsapp/requests/${id}/approve`);
-      showToast(`✓ ${phone} approved — they can now message MATRIYA`);
+      const out = await api.post(`/api/admin/whatsapp/requests/${id}/approve`);
+      if (out.whatsapp_sent) {
+        showToast(`Approved — a confirmation was sent to ${(phone || '').replace('whatsapp:', '')} on WhatsApp.`);
+      } else {
+        showToast(`Approved on server — WhatsApp confirmation failed: ${out.whatsapp_error || 'check Twilio env on admin-backend'}`, 'error');
+      }
       load();
     } catch (e) { showToast(e.message, 'error'); }
   };

@@ -15,6 +15,43 @@ const twilioClient = () => twilio(
   process.env.TWILIO_AUTH_TOKEN
 );
 
+/** Twilio expects `whatsapp:+E164` */
+function toWhatsAppAddress(raw) {
+  const s = (raw || '').trim();
+  if (!s) return '';
+  if (s.startsWith('whatsapp:')) return s;
+  if (s.startsWith('+')) return `whatsapp:${s}`;
+  return `whatsapp:+${s.replace(/^\+/, '')}`;
+}
+
+/** Sent when an admin approves an access request from the panel */
+const APPROVAL_MESSAGE = [
+  'MATRIYA — Access approved',
+  '',
+  'Congratulations. Your request to use MATRIYA has been approved by an administrator.',
+  '',
+  'You may now send your laboratory messages to this number. MATRIYA will respond with structured research decisions (GO / ITERATE / STOP) based on your data.',
+  '',
+  'Welcome aboard — we look forward to supporting your research.',
+].join('\n');
+
+async function sendAccessApprovedWhatsApp(toRaw) {
+  const sid = (process.env.TWILIO_ACCOUNT_SID || '').trim();
+  const token = (process.env.TWILIO_AUTH_TOKEN || '').trim();
+  const from = (process.env.TWILIO_WHATSAPP_FROM || '').trim();
+  if (!sid || !token || !from) {
+    return { sent: false, error: 'Twilio not configured (TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_WHATSAPP_FROM)' };
+  }
+  const to = toWhatsAppAddress(toRaw);
+  if (!to) return { sent: false, error: 'Invalid phone number' };
+  try {
+    const msg = await twilioClient().messages.create({ from, to, body: APPROVAL_MESSAGE });
+    return { sent: true, twilio_sid: msg.sid };
+  } catch (e) {
+    return { sent: false, error: e.message || String(e) };
+  }
+}
+
 /* ── Task queue ───────────────────────────────────────────── */
 
 router.get('/queue', async (req, res) => {
@@ -173,7 +210,16 @@ router.post('/requests/:id/approve', async (req, res) => {
     .single();
 
   if (error) return res.status(500).json({ error: error.message });
-  res.json({ request: data, message: `${phone} approved and added to whitelist` });
+
+  const whatsapp = await sendAccessApprovedWhatsApp(phone);
+
+  res.json({
+    request: data,
+    message: `${phone} approved and added to whitelist`,
+    whatsapp_sent: whatsapp.sent,
+    ...(whatsapp.error && !whatsapp.sent ? { whatsapp_error: whatsapp.error } : {}),
+    ...(whatsapp.twilio_sid ? { twilio_sid: whatsapp.twilio_sid } : {}),
+  });
 });
 
 router.post('/requests/:id/deny', async (req, res) => {
