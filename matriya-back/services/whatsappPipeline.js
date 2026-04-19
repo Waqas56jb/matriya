@@ -78,18 +78,26 @@ function mapAction(action_required) {
  */
 function formatReply(pipelineResult) {
   const action      = pipelineResult?.decision?.action_required ?? 'STOP';
-  // Use decision.confidence (data-completeness based, 0-100)
-  const rawConf = pipelineResult?.decision?.confidence
+  const rawConf     = pipelineResult?.decision?.confidence
     ?? Math.round((pipelineResult?.score?.emergence_score ?? 0) * 100);
-  const confidence = Math.min(Math.max(Math.round(rawConf), 0), 100);
+  const confidence  = Math.min(Math.max(Math.round(rawConf), 0), 100);
   const missingData = pipelineResult?.decision?.missing_data ?? [];
   const kernelTag   = pipelineResult?.decision?.kernel_tripped ? ' [KERNEL]' : '';
 
+  const noSupportPattern = /no supporting information|no evidence|no data available|insufficient information|אין.*מידע.*תומך|אין מידע/i;
+
   const fullReason = (pipelineResult?.decision?.reason || '')
+    .replace(/```json[\s\S]*?```/gi, '')
+    .replace(/```[\s\S]*?```/gi, '')
     .replace(/decision\s*=\s*(GO|STOP|ITERATE)/gi, '')
     .replace(/^\[KERNEL GATE\]\s*/i, '')
     .trim();
-  const firstSentence = fullReason.split(/[.!?\n]/)[0].trim() || 'No summary available.';
+
+  const rawFirst = fullReason.split(/[.!?\n]/)[0].trim();
+
+  const firstSentence = (noSupportPattern.test(rawFirst) && confidence > 0)
+    ? `Partial data detected (${confidence}% evidence completeness) — provide full experiment data to proceed.`
+    : rawFirst || 'No summary available.';
 
   let reply = `MATRIYA Decision${kernelTag}:\n${mapAction(action)}\nConfidence: ${confidence}%\n${firstSentence}`;
 

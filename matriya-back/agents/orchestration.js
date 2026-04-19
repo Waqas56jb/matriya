@@ -164,11 +164,26 @@ Answer in the same language as the user (Hebrew if Hebrew, English if English).`
     } catch (_) { /* ignore parse errors */ }
   }
 
-  // Extract plain-language part (after JSON block)
-  const plainText = text.replace(/```json[\s\S]*?```/gi, '').replace(/\{[\s\S]*?"decision"[\s\S]*?\}/, '').trim();
-  const answer = plainText || text;
+  // Extract plain-language part — strip JSON block(s) from the response
+  const plainText = text
+    .replace(/```json[\s\S]*?```/gi, '')   // remove fenced JSON
+    .replace(/```[\s\S]*?```/gi, '')        // remove any other fenced blocks
+    .replace(/^\s*\{[\s\S]*?\}\s*$/m, '')   // remove bare JSON object if it's the whole response
+    .trim();
 
-    return { answer, signals, llmDecision, missingData, llmConfidence };
+  // If LLM returned only JSON (no plain text), build a clean reason from parsed fields
+  let answer;
+  if (plainText) {
+    answer = plainText;
+  } else if (llmDecision) {
+    // Build a concise reason from the parsed JSON so no raw JSON leaks into WhatsApp
+    const decisionLabels = { GO: 'Evidence is sufficient to proceed.', ITERATE: 'Partial data — additional evidence required.', STOP: 'Insufficient data to evaluate.' };
+    answer = decisionLabels[llmDecision] || 'MATRIYA evaluation complete.';
+  } else {
+    answer = text; // last resort — will be cleaned later
+  }
+
+  return { answer, signals, llmDecision, missingData, llmConfidence };
 }
 
 // ─── Data completeness scorer ────────────────────────────────────────────────

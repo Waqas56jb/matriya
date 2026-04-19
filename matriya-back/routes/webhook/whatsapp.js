@@ -77,7 +77,10 @@ function formatDecision(pipelineResult) {
   const rawConf = pipelineResult?.decision?.confidence
     ?? Math.round((pipelineResult?.score?.emergence_score ?? 0) * 100);
   const conf = Math.min(Math.max(Math.round(rawConf), 0), 100);
-  const reason      = (pipelineResult?.decision?.reason || '').trim();
+  const reason = (pipelineResult?.decision?.reason || '')
+    .replace(/```json[\s\S]*?```/gi, '')
+    .replace(/```[\s\S]*?```/gi, '')
+    .trim();
   const missingData = pipelineResult?.decision?.missing_data ?? [];
   const kernelTag   = pipelineResult?.decision?.kernel_tripped ? ' [KERNEL]' : '';
 
@@ -85,12 +88,15 @@ function formatDecision(pipelineResult) {
                    : action === 'ITERATE' ? '⚠️ ITERATE'
                    : '❌ STOP';
 
-  const rawFirst = reason.split(/[.!?\n]/)[0]
-    .replace(/^\[KERNEL GATE\]\s*/i, '').trim();
+  const rawFirst = reason
+    .replace(/```json[\s\S]*?```/gi, '')   // strip any leaked JSON blocks
+    .replace(/```[\s\S]*?```/gi, '')
+    .split(/[.!?\n]/)[0]
+    .replace(/^\[KERNEL GATE\]\s*/i, '')
+    .trim();
 
-  // If response says "no supporting information" but confidence > 0, replace with
-  // a message that reflects what partial evidence exists.
-  const noSupportPattern = /no supporting information|no evidence|no data available|insufficient information/i;
+  // Pattern matches both English and Hebrew "no supporting info" responses
+  const noSupportPattern = /no supporting information|no evidence|no data available|insufficient information|אין.*מידע.*תומך|אין מידע|אין תמיכה/i;
   const firstSentence = (noSupportPattern.test(rawFirst) && conf > 0)
     ? `Partial data detected (${conf}% evidence completeness) — provide full experiment data to proceed.`
     : rawFirst || 'No details available.';
