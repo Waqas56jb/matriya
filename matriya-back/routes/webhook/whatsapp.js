@@ -177,13 +177,18 @@ router.post('/', async (req, res) => {
     return res.status(403).send('Invalid Twilio signature');
   }
 
-  // Sender allowlist (optional)
-  const allowed = (process.env.WHATSAPP_ALLOWED_FROM || '').trim();
-  if (allowed) {
-    const allowSet = new Set(allowed.split(',').map(s => s.trim()).filter(Boolean));
+  // ── Phone number whitelist ────────────────────────────────────────────────────
+  // Env var: WHATSAPP_ALLOWED_NUMBERS — comma-separated list of approved numbers.
+  // Format: whatsapp:+972544568078,whatsapp:+972546704797
+  // If the env var is set and the sender is NOT on the list, return access denied.
+  // If the env var is empty/unset, all numbers are allowed (open mode).
+  const allowedRaw = (process.env.WHATSAPP_ALLOWED_NUMBERS || process.env.WHATSAPP_ALLOWED_FROM || '').trim();
+  if (allowedRaw) {
+    const allowSet = new Set(allowedRaw.split(',').map(s => s.trim()).filter(Boolean));
     if (!allowSet.has(from_number)) {
+      logger.warn(`[whatsapp webhook] BLOCKED number=${from_number} — not on whitelist`);
       res.set('Content-Type', 'text/xml');
-      return res.send('<Response></Response>');
+      return res.send(twimlResponse('Access denied. Contact system administrator.'));
     }
   }
 
