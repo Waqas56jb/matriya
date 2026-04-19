@@ -84,7 +84,8 @@ function formatReply(pipelineResult) {
   const missingData = pipelineResult?.decision?.missing_data ?? [];
   const kernelTag   = pipelineResult?.decision?.kernel_tripped ? ' [KERNEL]' : '';
 
-  const noSupportPattern = /no supporting information|no evidence|no data available|insufficient information|אין.*מידע.*תומך|אין מידע/i;
+  const noSupportPattern  = /no supporting information|no evidence|no data available|insufficient information|אין.*מידע.*תומך|אין מידע/i;
+  const sufficientPattern = /sufficient|enough data|adequate|supports? (?:a )?(?:positive |final )?decision|allows? (?:for )?(?:a )?(?:positive )?(?:decision|proceed|go ahead)/i;
 
   const fullReason = (pipelineResult?.decision?.reason || '')
     .replace(/```json[\s\S]*?```/gi, '')
@@ -95,9 +96,14 @@ function formatReply(pipelineResult) {
 
   const rawFirst = fullReason.split(/[.!?\n]/)[0].trim();
 
-  const firstSentence = (noSupportPattern.test(rawFirst) && confidence > 0)
-    ? `Partial data detected (${confidence}% evidence completeness) — provide full experiment data to proceed.`
-    : rawFirst || 'No summary available.';
+  let firstSentence;
+  if (noSupportPattern.test(rawFirst) && confidence > 0) {
+    firstSentence = `Partial data detected (${confidence}% evidence completeness) — provide full experiment data to proceed.`;
+  } else if (action === 'ITERATE' && sufficientPattern.test(rawFirst)) {
+    firstSentence = `Partial evidence supports iteration; additional data may improve decision confidence.`;
+  } else {
+    firstSentence = rawFirst || 'No summary available.';
+  }
 
   let reply = `MATRIYA Decision${kernelTag}:\n${mapAction(action)}\nConfidence: ${confidence}%\n${firstSentence}`;
 

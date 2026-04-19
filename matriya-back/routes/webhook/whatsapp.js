@@ -97,9 +97,17 @@ function formatDecision(pipelineResult) {
 
   // Pattern matches both English and Hebrew "no supporting info" responses
   const noSupportPattern = /no supporting information|no evidence|no data available|insufficient information|אין.*מידע.*תומך|אין מידע|אין תמיכה/i;
-  const firstSentence = (noSupportPattern.test(rawFirst) && conf > 0)
-    ? `Partial data detected (${conf}% evidence completeness) — provide full experiment data to proceed.`
-    : rawFirst || 'No details available.';
+  // "Sufficient" language in an ITERATE decision is semantically misleading — replace it
+  const sufficientPattern = /sufficient|enough data|adequate|supports? (?:a )?(?:positive |final )?decision|allows? (?:for )?(?:a )?(?:positive )?(?:decision|proceed|go ahead)/i;
+
+  let firstSentence;
+  if (noSupportPattern.test(rawFirst) && conf > 0) {
+    firstSentence = `Partial data detected (${conf}% evidence completeness) — provide full experiment data to proceed.`;
+  } else if (action === 'ITERATE' && sufficientPattern.test(rawFirst)) {
+    firstSentence = `Partial evidence supports iteration; additional data may improve decision confidence.`;
+  } else {
+    firstSentence = rawFirst || 'No details available.';
+  }
 
   let reply = `MATRIYA Decision${kernelTag}:\n${actionLine}\nConfidence: ${conf}%\n${firstSentence}`;
 
