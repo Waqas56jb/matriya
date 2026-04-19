@@ -69,7 +69,7 @@ Be concise (max 3 sentences for WhatsApp). End with: decision = GO | STOP | ITER
     }
   );
 
-  const text = resp.data?.choices?.[0]?.message?.content || '';
+  const text = (resp.data?.choices?.[0]?.message?.content || '').trim();
 
   // Extract decision keyword from response
   let decision_status = 'INCONCLUSIVE';
@@ -80,8 +80,12 @@ Be concise (max 3 sentences for WhatsApp). End with: decision = GO | STOP | ITER
   // Extract experiment suggestion if present
   const expMatch = text.match(/experiment[:\s]+(.+)/i);
 
+  // Strip decision keyword from answer — but keep original text as fallback if result is empty
+  const stripped = text.replace(/\bdecision\s*=\s*(GO|STOP|ITERATE)\b/gi, '').trim();
+  const answer = stripped || text || 'MATRIYA: בקשתך התקבלה ועובדה.';
+
   return {
-    answer: text.replace(/decision\s*=\s*(GO|STOP|ITERATE)/i, '').trim(),
+    answer,
     decision_status,
     experiment_suggestion: expMatch ? expMatch[1].trim() : null
   };
@@ -124,7 +128,16 @@ export async function runPipeline(input) {
   }
 
   // 4. Score — Emergence Score using creativityOrchestrator
-  const scoreResult = evaluateCreativity(llmResult.answer || '');
+  // Guard: evaluateCreativity requires a non-empty string
+  let scoreResult = { score: 0, regime: 'UNKNOWN', components: {} };
+  const textForScore = (llmResult.answer || '').trim();
+  if (textForScore) {
+    try {
+      scoreResult = evaluateCreativity(textForScore);
+    } catch (e) {
+      logger.warn(`[pipeline] evaluateCreativity failed: ${e.message}`);
+    }
+  }
   const score = {
     emergence_score: scoreResult.score ?? 0,
     regime: scoreResult.regime ?? 'UNKNOWN',
