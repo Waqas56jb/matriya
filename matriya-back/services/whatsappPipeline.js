@@ -77,20 +77,27 @@ function mapAction(action_required) {
  * Summary: [one sentence]
  */
 function formatReply(pipelineResult) {
-  const action    = pipelineResult?.decision?.action_required ?? 'STOP';
-  const rawScore  = pipelineResult?.score?.emergence_score ?? 0;
-  const confidence = Math.round(Math.min(Math.max(rawScore, 0), 1) * 100);
+  const action      = pipelineResult?.decision?.action_required ?? 'STOP';
+  const rawScore    = pipelineResult?.score?.emergence_score ?? 0;
+  const confidence  = Math.round(Math.min(Math.max(rawScore, 0), 1) * 100);
+  const missingData = pipelineResult?.decision?.missing_data ?? [];
+  const kernelTag   = pipelineResult?.decision?.kernel_tripped ? ' [KERNEL]' : '';
 
-  // One-sentence summary: first sentence of decision.reason, stripped of trailing "decision = X"
-  const fullReason = (pipelineResult?.decision?.reason || '').replace(/decision\s*=\s*(GO|STOP|ITERATE)/gi, '').trim();
+  const fullReason = (pipelineResult?.decision?.reason || '')
+    .replace(/decision\s*=\s*(GO|STOP|ITERATE)/gi, '')
+    .replace(/^\[KERNEL GATE\]\s*/i, '')
+    .trim();
   const firstSentence = fullReason.split(/[.!?\n]/)[0].trim() || 'No summary available.';
 
-  return (
-    `✅ MATRIYA Result:\n` +
-    `${mapAction(action)}\n` +
-    `Confidence: ${confidence}%\n` +
-    `Summary: ${firstSentence}`
-  );
+  let reply = `MATRIYA Decision${kernelTag}:\n${mapAction(action)}\nConfidence: ${confidence}%\n${firstSentence}`;
+
+  // STOP: tell David exactly what data is missing
+  if (action === 'STOP' && missingData.length > 0) {
+    const missingList = missingData.join(', ');
+    reply += `\n\nMissing: ${missingList}.\nSend these to continue.`;
+  }
+
+  return reply;
 }
 
 // ─── Core processing ──────────────────────────────────────────────────────────

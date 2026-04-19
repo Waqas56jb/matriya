@@ -71,21 +71,29 @@ function isTwilioRequestValid(req) {
 // ─── Reply formatter ──────────────────────────────────────────────────────────
 
 function formatDecision(pipelineResult) {
-  const action = pipelineResult?.decision?.action_required ?? 'STOP';
-  const score  = pipelineResult?.score?.emergence_score ?? 0;
-  const conf   = Math.round(Math.min(Math.max(score, 0), 1) * 100);
-  const reason = (pipelineResult?.decision?.reason || '').trim();
-  const kernelTag = pipelineResult?.decision?.kernel_tripped ? ' [KERNEL]' : '';
+  const action      = pipelineResult?.decision?.action_required ?? 'STOP';
+  const score       = pipelineResult?.score?.emergence_score ?? 0;
+  const conf        = Math.round(Math.min(Math.max(score, 0), 1) * 100);
+  const reason      = (pipelineResult?.decision?.reason || '').trim();
+  const missingData = pipelineResult?.decision?.missing_data ?? [];
+  const kernelTag   = pipelineResult?.decision?.kernel_tripped ? ' [KERNEL]' : '';
 
-  const actionLine = action === 'GO'     ? '✅ GO'
+  const actionLine = action === 'GO'      ? '✅ GO'
                    : action === 'ITERATE' ? '⚠️ ITERATE'
                    : '❌ STOP';
 
-  // First sentence of reason only (keep WhatsApp reply concise)
-  const firstSentence = reason.split(/[.!?\n]/)[0].replace(/^\[KERNEL GATE\]\s*/i, '').trim()
-    || 'No details available.';
+  const firstSentence = reason.split(/[.!?\n]/)[0]
+    .replace(/^\[KERNEL GATE\]\s*/i, '').trim() || 'No details available.';
 
-  return `MATRIYA Decision${kernelTag}:\n${actionLine}\nConfidence: ${conf}%\n${firstSentence}`;
+  let reply = `MATRIYA Decision${kernelTag}:\n${actionLine}\nConfidence: ${conf}%\n${firstSentence}`;
+
+  // STOP: always append what is missing so David knows what to send next
+  if (action === 'STOP' && missingData.length > 0) {
+    const missingList = missingData.join(', ');
+    reply += `\n\nMissing: ${missingList}.\nSend these to continue.`;
+  }
+
+  return reply;
 }
 
 function escapeTwiml(text) {

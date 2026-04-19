@@ -104,12 +104,17 @@ RESPONSE FORMAT (always output this exact JSON block, then a plain-language summ
   "decision": "GO" | "STOP" | "ITERATE",
   "confidence": 0-100,
   "reason": "one concise sentence",
+  "missing_data": ["list", "of", "specific", "missing", "items"] | [],
   "insufficient_data": true | false,
   "variables_distinguishable": true | false,
   "extrapolation_intent": true | false,
   "data_in_domain": true | false
 }
 \`\`\`
+
+CRITICAL for STOP decisions: missing_data MUST list exactly what the user needs to provide.
+Examples: ["experiment results", "formulation parameters", "temperature range", "viscosity measurements"]
+If input is not lab data: missing_data: ["experiment results", "formulation parameters"]
 
 Answer in the same language as the user (Hebrew if Hebrew, English if English).`;
 
@@ -135,25 +140,27 @@ Answer in the same language as the user (Hebrew if Hebrew, English if English).`
   // Extract JSON block from response
   const jsonMatch = text.match(/```json\s*([\s\S]*?)```/i) || text.match(/\{[\s\S]*?"decision"[\s\S]*?\}/);
   let signals = {};
-  let llmDecision = null;
-  if (jsonMatch) {
-    try {
-      const parsed = JSON.parse(jsonMatch[1] || jsonMatch[0]);
-      llmDecision = parsed.decision;
-      signals = {
-        sufficient_data: parsed.insufficient_data === false,
-        variables_distinguishable: parsed.variables_distinguishable !== false,
-        extrapolation_intent: parsed.extrapolation_intent === true,
-        data_in_domain: parsed.data_in_domain !== false
-      };
-    } catch (_) { /* ignore parse errors */ }
-  }
+    let llmDecision = null;
+    let missingData = [];
+    if (jsonMatch) {
+      try {
+        const parsed = JSON.parse(jsonMatch[1] || jsonMatch[0]);
+        llmDecision = parsed.decision;
+        missingData = Array.isArray(parsed.missing_data) ? parsed.missing_data.filter(Boolean) : [];
+        signals = {
+          sufficient_data: parsed.insufficient_data === false,
+          variables_distinguishable: parsed.variables_distinguishable !== false,
+          extrapolation_intent: parsed.extrapolation_intent === true,
+          data_in_domain: parsed.data_in_domain !== false
+        };
+      } catch (_) { /* ignore parse errors */ }
+    }
 
   // Extract plain-language part (after JSON block)
   const plainText = text.replace(/```json[\s\S]*?```/gi, '').replace(/\{[\s\S]*?"decision"[\s\S]*?\}/, '').trim();
   const answer = plainText || text;
 
-  return { answer, signals, llmDecision };
+    return { answer, signals, llmDecision, missingData };
 }
 
 // ─── FSCTM kernel gate ────────────────────────────────────────────────────────
@@ -218,13 +225,13 @@ export async function runPipeline(input) {
   let answer = '';
   let signals = {};
   let llmDecision = null;
+  let missingData = [];
   let ragUsed = false;
 
   const ragAnswer = await callRag(input);
   if (ragAnswer) {
     answer = ragAnswer;
     ragUsed = true;
-    // RAG answers don't carry structured signals — use conservative defaults
     signals = { sufficient_data: true, variables_distinguishable: true };
   } else {
     try {
@@ -232,9 +239,11 @@ export async function runPipeline(input) {
       answer = llmResult.answer || '';
       signals = llmResult.signals || {};
       llmDecision = llmResult.llmDecision || null;
+      missingData = llmResult.missingData || [];
     } catch (e) {
       logger.error(`[pipeline] LLM failed: ${e.message}`);
       answer = `MATRIYA: שגיאה בעיבוד. ${e.message}`;
+      missingData = ['experiment results', 'formulation parameters'];
     }
   }
 
@@ -282,10 +291,16 @@ export async function runPipeline(input) {
     components: scoreResult.components ?? {}
   };
 
+  // For STOP: ensure missing_data is populated with defaults if LLM didn't provide it
+  if (action_required === 'STOP' && missingData.length === 0) {
+    missingData = ['experiment results', 'formulation parameters'];
+  }
+
   const decision = {
     status: decision_status,
     action_required,
     reason: decisionReason,
+    missing_data: missingData,
     kernel_tripped: kernel.tripped,
     elapsed_ms: Date.now() - startedAt
   };
