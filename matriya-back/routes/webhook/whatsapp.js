@@ -210,21 +210,33 @@ router.post('/', async (req, res) => {
         // Step 1: check if a request already exists for this number
         const { data: existing } = await sb
           .from('access_requests')
-          .select('id, request_count')
+          .select('id, request_count, status')
           .eq('phone_number', from_number)
           .maybeSingle();
 
         if (existing) {
-          // Already exists → bump count + update last_seen
+          // Already exists → bump count + last_seen; if they were approved/denied
+          // but are blocked again (removed from whitelist), reopen as pending so admin sees them.
+          const updates = {
+            request_count: (existing.request_count || 1) + 1,
+            last_seen:     new Date().toISOString(),
+          };
+          const reopened =
+            existing.status === 'approved' || existing.status === 'denied';
+          if (reopened) {
+            updates.status = 'pending';
+            updates.reviewed_by = null;
+            updates.reviewed_at = null;
+            updates.note = null;
+            updates.first_message = message.slice(0, 500);
+          }
+
           const { error: upErr } = await sb
             .from('access_requests')
-            .update({
-              request_count: (existing.request_count || 1) + 1,
-              last_seen:     new Date().toISOString(),
-            })
+            .update(updates)
             .eq('phone_number', from_number);
           if (upErr) logger.warn(`[whatsapp webhook] access_requests update failed: ${upErr.message}`);
-          else logger.info(`[whatsapp webhook] access_requests bumped count for ${from_number}`);
+          else logger.info(`[whatsapp webhook] access_requests updated for ${from_number}${reopened ? ' (reopened pending)' : ''}`);
         } else {
           // First time → insert new row
           const { error: insErr } = await sb

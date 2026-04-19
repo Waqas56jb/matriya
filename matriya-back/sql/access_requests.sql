@@ -1,6 +1,10 @@
 -- ============================================================
 -- Access Requests — numbers that tried to message but were denied
 -- Run once in Supabase SQL editor.
+--
+-- Re-open: if a number was approved then removed from whatsapp_whitelist,
+-- the next blocked inbound sets status back to pending so the admin panel
+-- shows the request again.
 -- ============================================================
 CREATE TABLE IF NOT EXISTS access_requests (
   id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
