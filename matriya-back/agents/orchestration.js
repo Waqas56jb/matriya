@@ -428,6 +428,20 @@ export async function runPipeline(input) {
     confidence = Math.min(llmConfidence, confidence + 25);
   }
 
+  // ── Rule 6 — deterministic evidence overrides LLM STOP ───────────────────────
+  //
+  // The deterministic scorer uses regex to find real numeric/domain evidence.
+  // If it finds any (≥10 pts), the data is not absent — it's incomplete.
+  // Incomplete data → ITERATE (more data needed), not STOP (no data at all).
+  // This prevents the LLM from returning STOP when actual lab values are present.
+  //
+  // Applied BEFORE the STOP cap so confidence is not already clamped when rule fires.
+  if (completenessScore >= 10 && action_required === 'STOP') {
+    action_required = 'ITERATE';
+    decision_status = 'INCONCLUSIVE';
+    logger.info(`[pipeline] Rule 6: deterministic evidence (${completenessScore}%) → LLM STOP overridden to ITERATE`);
+  }
+
   // STOP always capped at 35% — if there's enough evidence, decision wouldn't be STOP
   if (action_required === 'STOP') confidence = Math.min(confidence, 35);
 
@@ -442,6 +456,7 @@ export async function runPipeline(input) {
   // Rule 3: Response contains "no supporting information" → confidence = 0 → STOP
   // Rule 4: GO requires confidence ≥ 70%; below that, downgrade to ITERATE
   // Rule 5: confidence ≥ 70% with STOP is contradictory → upgrade to ITERATE
+  // Rule 6: deterministic evidence ≥ 10% → LLM STOP overridden to ITERATE (above)
 
   // Rule 3 — detect "no supporting information" language in answer
   const noSupportPattern = /no supporting information|no evidence|no data available|insufficient information|cannot be determined/i;
