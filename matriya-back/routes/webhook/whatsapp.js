@@ -3,70 +3,97 @@
  *
  * POST /api/webhook/whatsapp
  *
- * Receives incoming WhatsApp messages via Twilio webhook.
- *
  * Flow:
- *   1. Validate Twilio signature (skipped if SKIP_TWILIO_SIG_CHECK=1)
- *   2. Save message to whatsapp_tasks (status = PENDING)
- *   3. Return IMMEDIATE TwiML acknowledgment (< 2s — well within Twilio's 15s timeout)
- *   4. whatsappPipeline.js polling loop picks up PENDING rows every 30s,
- *      runs the full RAG pipeline, sends the real answer to DAVID_WHATSAPP,
- *      and marks the row DONE.
+ *   1. Validate Twilio signature
+ *   2. Run full MATRIYA pipeline inline (RAG + kernel gate)
+ *   3. Return TwiML with the REAL decision — no acknowledgment, no echo
+ *   4. Also save to whatsapp_tasks if table exists (best-effort audit log)
  *
- * Env vars:
- *   TWILIO_AUTH_TOKEN            — enables signature check
- *   SKIP_TWILIO_SIG_CHECK        — "1" to bypass signature check (debug)
- *   TWILIO_WEBHOOK_WHATSAPP_URL  — explicit URL override for this endpoint
- *   SUPABASE_URL, SUPABASE_KEY
- *   WHATSAPP_ALLOWED_FROM        — optional comma-separated sender allowlist
+ * Pipeline timeout: 13s race — if LLM/RAG takes longer, returns a
+ * "still processing" message and the result is sent via polling loop.
  */
 
 import twilio from 'twilio';
 import { Router } from 'express';
 import { createClient } from '@supabase/supabase-js';
 import logger from '../../logger.js';
+import { runPipeline } from '../../agents/orchestration.js';
 
 const router = Router();
 const TABLE = 'whatsapp_tasks';
+const PIPELINE_TIMEOUT_MS = 13000; // Twilio's hard limit is 15s
 
-// ─── Lazy Supabase client ─────────────────────────────────────────────────────
+// ─── Supabase (optional — for audit logging only) ─────────────────────────────
 
 let _sbWa = null;
-function getSupabase() {
+function tryGetSupabase() {
   if (_sbWa) return _sbWa;
-  const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-  const key = process.env.SUPABASE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-  if (!url || !key) throw new Error('SUPABASE_URL and SUPABASE_KEY are required');
-  _sbWa = createClient(url, key);
+  try {
+    const url = process.env.SUPABASE_URL || '';
+    const key = process.env.SUPABASE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+    if (url && key) _sbWa = createClient(url, key);
+  } catch (_) {}
   return _sbWa;
+}
+
+async function saveTask(from_number, message, status = 'PENDING') {
+  try {
+    const sb = tryGetSupabase();
+    if (!sb) return;
+    const { error } = await sb.from(TABLE).insert([{ from_number, message, status }]);
+    if (error) logger.warn(`[whatsapp webhook] DB save: ${error.message}`);
+  } catch (e) {
+    logger.warn(`[whatsapp webhook] DB save exception: ${e.message}`);
+  }
 }
 
 // ─── Signature validation ─────────────────────────────────────────────────────
 
 function isTwilioRequestValid(req) {
   if (process.env.SKIP_TWILIO_SIG_CHECK === '1') return true;
-
   const authToken = (process.env.TWILIO_AUTH_TOKEN || '').trim();
-  if (!authToken) {
-    logger.warn('[whatsapp webhook] TWILIO_AUTH_TOKEN not set — skipping sig check');
-    return true;
-  }
+  if (!authToken) return true; // dev mode
 
   const sig = (req.headers['x-twilio-signature'] || '').trim();
   if (!sig) return false;
-
   const params = req.body || {};
 
-  // Derive URL from request (trust proxy: 1 is set in server.js)
   const derivedUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`;
   if (twilio.validateRequest(authToken, sig, derivedUrl, params)) return true;
 
-  // Fallback: try explicit override URL
   const explicit = (process.env.TWILIO_WEBHOOK_WHATSAPP_URL || '').trim();
   if (explicit && twilio.validateRequest(authToken, sig, explicit, params)) return true;
 
-  logger.warn(`[whatsapp webhook] signature invalid for url=${derivedUrl}`);
+  logger.warn(`[whatsapp webhook] sig invalid url=${derivedUrl}`);
   return false;
+}
+
+// ─── Reply formatter ──────────────────────────────────────────────────────────
+
+function formatDecision(pipelineResult) {
+  const action = pipelineResult?.decision?.action_required ?? 'STOP';
+  const score  = pipelineResult?.score?.emergence_score ?? 0;
+  const conf   = Math.round(Math.min(Math.max(score, 0), 1) * 100);
+  const reason = (pipelineResult?.decision?.reason || '').trim();
+  const kernelTag = pipelineResult?.decision?.kernel_tripped ? ' [KERNEL]' : '';
+
+  const actionLine = action === 'GO'     ? '✅ GO'
+                   : action === 'ITERATE' ? '⚠️ ITERATE'
+                   : '❌ STOP';
+
+  // First sentence of reason only (keep WhatsApp reply concise)
+  const firstSentence = reason.split(/[.!?\n]/)[0].replace(/^\[KERNEL GATE\]\s*/i, '').trim()
+    || 'No details available.';
+
+  return `MATRIYA Decision${kernelTag}:\n${actionLine}\nConfidence: ${conf}%\n${firstSentence}`;
+}
+
+function escapeTwiml(text) {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function twimlResponse(text) {
+  return `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeTwiml(text)}</Message></Response>`;
 }
 
 // ─── GET — health check ───────────────────────────────────────────────────────
@@ -81,13 +108,11 @@ router.post('/', async (req, res) => {
   const message     = (req.body?.Body || '').trim();
   const from_number = (req.body?.From || '').trim();
 
-  // Empty body — acknowledge silently
   if (!message || !from_number) {
     res.set('Content-Type', 'text/xml');
     return res.send('<Response></Response>');
   }
 
-  // Signature check
   if (!isTwilioRequestValid(req)) {
     return res.status(403).send('Invalid Twilio signature');
   }
@@ -102,25 +127,49 @@ router.post('/', async (req, res) => {
     }
   }
 
-  logger.info(`[whatsapp webhook] inbound from=${from_number} msg="${message.slice(0, 80)}"`);
+  logger.info(`[whatsapp webhook] from=${from_number} msg="${message.slice(0, 80)}"`);
 
-  // Save to whatsapp_tasks (PENDING) — polled every 30s by whatsappPipeline.js
+  // Save to DB for audit (best-effort — does not block pipeline)
+  saveTask(from_number, message, 'PROCESSING');
+
+  // Run pipeline with timeout race
+  let replyText;
+  let finalStatus = 'DONE';
+
   try {
-    const { error } = await getSupabase()
-      .from(TABLE)
-      .insert([{ from_number, message, status: 'PENDING' }]);
-    if (error) logger.error(`[whatsapp webhook] DB insert: ${error.message}`);
-    else logger.info('[whatsapp webhook] saved to whatsapp_tasks PENDING');
+    const timeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('PIPELINE_TIMEOUT')), PIPELINE_TIMEOUT_MS)
+    );
+
+    const pipelineResult = await Promise.race([runPipeline(message), timeout]);
+    replyText = formatDecision(pipelineResult);
+    logger.info(`[whatsapp webhook] pipeline completed: ${replyText.replace(/\n/g, ' | ')}`);
   } catch (e) {
-    logger.error(`[whatsapp webhook] DB exception: ${e.message}`);
+    if (e.message === 'PIPELINE_TIMEOUT') {
+      logger.warn('[whatsapp webhook] pipeline timed out — sending fallback, polling will retry');
+      replyText = '⏳ MATRIYA: עיבוד מורחב — תשובה תגיע תוך דקה.';
+      finalStatus = 'PENDING'; // let polling loop handle it
+    } else {
+      logger.error(`[whatsapp webhook] pipeline error: ${e.stack || e.message}`);
+      replyText = `MATRIYA: שגיאה בעיבוד הבקשה.\n${e.message}`;
+      finalStatus = 'ERROR';
+    }
   }
 
-  // Immediate TwiML acknowledgment — Twilio delivers this instantly to the sender.
-  // The REAL answer is sent asynchronously by whatsappPipeline.js via Twilio Messages API.
-  const ack = '✅ MATRIYA: הודעתך התקבלה. עיבוד בתהליך — תשובה תגיע תוך דקה.';
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${ack}</Message></Response>`;
+  // Update task status
+  try {
+    const sb = tryGetSupabase();
+    if (sb) {
+      await sb.from(TABLE)
+        .update({ status: finalStatus })
+        .eq('from_number', from_number)
+        .eq('message', message)
+        .eq('status', 'PROCESSING');
+    }
+  } catch (_) {}
+
   res.set('Content-Type', 'text/xml');
-  res.send(twiml);
+  res.send(twimlResponse(replyText));
 });
 
 export default router;
