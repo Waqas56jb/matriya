@@ -5,6 +5,9 @@
 #   managment-front/
 #   matriya-front/  (React)
 # =============================================================================
+
+# Admin panel — not ready for deployment, excluded from repo
+Admin-panel/
 # If Git still lists node_modules as "deleted/changed", those paths were
 # committed before this file existed. Run (from this repo root):
 #   git rm -r --cached node_modules 2>$null
