@@ -165,7 +165,18 @@ router.get('/test-rachel', async (_req, res) => {
 // ─── POST — main handler ──────────────────────────────────────────────────────
 
 router.post('/', async (req, res) => {
-  const message     = (req.body?.Body || '').trim();
+  const incomingBody = req.body?.Body || '';
+
+  // Finance signal echo suppression — matriya-finance sends status alerts via
+  // Twilio; suppress them here so they do not trigger the lab decision pipeline.
+  if (incomingBody.startsWith('🔴 MATRIYA SIGNAL') ||
+      incomingBody.startsWith('🟢 MATRIYA SIGNAL') ||
+      incomingBody.startsWith('🟡 MATRIYA SIGNAL')) {
+    logger.info('[whatsapp webhook] Finance signal echo suppressed');
+    return res.status(200).send('<Response></Response>');
+  }
+
+  const message     = incomingBody.trim();
   const from_number = (req.body?.From || '').trim();
 
   if (!message || !from_number) {
