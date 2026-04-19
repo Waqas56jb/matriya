@@ -631,61 +631,59 @@ const DoEDesign = sequelize ? sequelize.define('DoEDesign', {
   timestamps: false
 }) : null;
 
-// Experiments synced from lab system – for learning and similar_experiments
-const EXPERIMENT_OUTCOMES = ['success', 'failure', 'partial', 'production_formula'];
+// Experiments — full schema per David's spec
 const Experiment = sequelize ? sequelize.define('Experiment', {
   id: {
-    type: DataTypes.INTEGER,
+    type: DataTypes.UUID,
     primaryKey: true,
-    autoIncrement: true
+    defaultValue: DataTypes.UUIDV4
+  },
+  project_id: {
+    type: DataTypes.STRING,
+    allowNull: true
   },
   experiment_id: {
     type: DataTypes.STRING,
     allowNull: false,
-    comment: 'ID from lab system'
+    unique: true
   },
-  /** Optional calendar date for the experiment (e.g. Rachel upload / lab run date). */
-  experiment_date: {
+  date: {
     type: DataTypes.DATEONLY,
     allowNull: true
   },
-  technology_domain: {
+  operator: {
     type: DataTypes.STRING,
     allowNull: true
   },
-  formula: {
-    type: DataTypes.TEXT,
-    allowNull: true
-  },
-  materials: {
+  formulation: {
     type: DataTypes.JSONB,
     allowNull: true,
     defaultValue: null
   },
-  percentages: {
+  conditions: {
     type: DataTypes.JSONB,
     allowNull: true,
     defaultValue: null
   },
   results: {
-    type: DataTypes.TEXT,
+    type: DataTypes.JSONB,
+    allowNull: true,
+    defaultValue: null
+  },
+  outcome: {
+    type: DataTypes.STRING,
     allowNull: true
   },
-  experiment_outcome: {
+  status: {
     type: DataTypes.STRING,
-    allowNull: false,
-    defaultValue: 'success'
+    allowNull: true,
+    validate: { isIn: [['PASS', 'FAIL', 'PARTIAL', 'PENDING']] }
   },
-  is_production_formula: {
+  /** TRUE when a MATRIYA decision caused a shift in experiment direction */
+  decision_shift: {
     type: DataTypes.BOOLEAN,
     allowNull: false,
     defaultValue: false
-  },
-  /** Last MATRIYA decision that evaluated this experiment: GO | ITERATE | STOP */
-  decision_shift: {
-    type: DataTypes.STRING,
-    allowNull: true,
-    defaultValue: null
   },
   /** TRUE when the FSCTM Kernel v1.6 fired a breakdown gate on this experiment */
   breakdown_flag: {
@@ -699,11 +697,11 @@ const Experiment = sequelize ? sequelize.define('Experiment', {
     allowNull: false,
     defaultValue: false
   },
-  created_at: {
-    type: DataTypes.DATE,
-    defaultValue: DataTypes.NOW
+  notes: {
+    type: DataTypes.TEXT,
+    allowNull: true
   },
-  updated_at: {
+  created_at: {
     type: DataTypes.DATE,
     defaultValue: DataTypes.NOW
   }
