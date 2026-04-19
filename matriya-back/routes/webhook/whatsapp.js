@@ -207,19 +207,38 @@ router.post('/', async (req, res) => {
         logger.warn(`[whatsapp webhook] BLOCKED number=${from_number} — not in whitelist`);
 
         // Log access request so admin can approve from the panel
-        try {
-          await sb.from('access_requests').upsert({
-            phone_number:  from_number,
-            first_message: message.slice(0, 500),
-            last_seen:     new Date().toISOString(),
-          }, {
-            onConflict:    'phone_number',
-            ignoreDuplicates: false,
-          });
-          // Increment request_count on repeated attempts
-          await sb.rpc('increment_access_request_count', { p_phone: from_number }).catch(() => {});
-        } catch (e) {
-          logger.warn(`[whatsapp webhook] access_requests log failed: ${e.message}`);
+        // Step 1: check if a request already exists for this number
+        const { data: existing } = await sb
+          .from('access_requests')
+          .select('id, request_count')
+          .eq('phone_number', from_number)
+          .maybeSingle();
+
+        if (existing) {
+          // Already exists → bump count + update last_seen
+          const { error: upErr } = await sb
+            .from('access_requests')
+            .update({
+              request_count: (existing.request_count || 1) + 1,
+              last_seen:     new Date().toISOString(),
+            })
+            .eq('phone_number', from_number);
+          if (upErr) logger.warn(`[whatsapp webhook] access_requests update failed: ${upErr.message}`);
+          else logger.info(`[whatsapp webhook] access_requests bumped count for ${from_number}`);
+        } else {
+          // First time → insert new row
+          const { error: insErr } = await sb
+            .from('access_requests')
+            .insert({
+              phone_number:  from_number,
+              first_message: message.slice(0, 500),
+              request_count: 1,
+              first_seen:    new Date().toISOString(),
+              last_seen:     new Date().toISOString(),
+              status:        'pending',
+            });
+          if (insErr) logger.warn(`[whatsapp webhook] access_requests insert failed: ${insErr.message}`);
+          else logger.info(`[whatsapp webhook] access_requests NEW request saved for ${from_number}`);
         }
 
         res.set('Content-Type', 'text/xml');
