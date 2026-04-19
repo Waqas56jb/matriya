@@ -152,7 +152,11 @@ Answer in the same language as the user (Hebrew if Hebrew, English if English).`
         llmConfidence = Math.round(parsed.confidence);
       }
       signals = {
-        sufficient_data: parsed.insufficient_data === false,
+        // sufficient_data is only false when LLM says GO but marks data insufficient.
+        // For ITERATE, insufficient_data:true is expected and correct — don't treat as failure.
+        sufficient_data: parsed.decision !== 'GO'
+          ? true                                  // ITERATE/STOP: not a kernel concern
+          : parsed.insufficient_data === false,   // GO only: must have sufficient data
         variables_distinguishable: parsed.variables_distinguishable !== false,
         extrapolation_intent: parsed.extrapolation_intent === true,
         data_in_domain: parsed.data_in_domain !== false
@@ -241,22 +245,40 @@ function computeDataCompleteness(input) {
 // ─── FSCTM kernel gate ────────────────────────────────────────────────────────
 
 /**
- * Apply kernelV16 deterministic gates as a post-LLM override.
- * Returns the enforced decision status and reason if kernel trips.
+ * Apply kernelV16 deterministic gates as a post-LLM safety check.
+ *
+ * Design rule (prevents regression):
+ *   The kernel is a DOWNGRADE-ONLY safety net for GO decisions.
+ *   - If LLM says ITERATE → trust it; partial data is the correct reason to iterate.
+ *   - If LLM says STOP   → trust it; nothing to add.
+ *   - If LLM says GO     → validate signals; if bad → downgrade to ITERATE or STOP.
+ *   - If no LLM decision → apply as a general sanity check (RAG path, etc.).
+ *
+ * Root cause of the ITERATE→STOP regression:
+ *   LLM returns insufficient_data:true for partial data (correct — it's not enough for GO)
+ *   but that does NOT mean STOP. ITERATE is the right call for partial data.
+ *   Kernel was treating insufficient_data:true as a STOP signal, which is wrong.
  */
 function applyKernelGate(signals = {}, llmDecision = null) {
-  // FailSafe gate
+  // ITERATE and STOP from the LLM are correct as-is — never override them.
+  if (llmDecision === 'ITERATE' || llmDecision === 'STOP') {
+    return { tripped: false };
+  }
+
+  // For GO (or unknown), validate that data actually supports a positive conclusion.
+  // FailSafe gate — only trips if data is genuinely insufficient (not just partial).
   const failSafe = evaluateFailSafe(signals);
   if (!failSafe.ok && !failSafe.skipped) {
+    // Downgrade GO → ITERATE (not STOP) because partial data = needs more, not rejected.
     return {
       tripped: true,
-      status: 'INSUFFICIENT_DATA',
-      action: 'STOP',
-      reason: failSafe.message_en || failSafe.message_he || 'Insufficient data'
+      status: 'INCONCLUSIVE',
+      action: 'ITERATE',
+      reason: failSafe.message_en || 'Data insufficient for a GO — iterate with more evidence'
     };
   }
 
-  // Extrapolation gate
+  // Extrapolation gate — only relevant when claiming GO beyond observed data range.
   const extrap = checkExtrapolationRule(signals);
   if (!extrap.ok && !extrap.skipped) {
     return {
@@ -267,7 +289,7 @@ function applyKernelGate(signals = {}, llmDecision = null) {
     };
   }
 
-  // Methodology flags
+  // Methodology flags — repeated solutions or patches without hypothesis.
   const meth = checkMethodologyFlags(signals);
   if (meth.trip) {
     return {
