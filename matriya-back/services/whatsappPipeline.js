@@ -129,7 +129,7 @@ export async function processPendingTasks() {
 
   for (const task of tasks) {
     try {
-      // 1. Run the MATRIYA pipeline
+      // 1. Run the MATRIYA pipeline (now uses RAG + OpenAI)
       logger.info(`[whatsappPipeline] task ${task.id} → runPipeline("${task.message.slice(0, 60)}")`);
       let pipelineResult;
       try {
@@ -137,7 +137,7 @@ export async function processPendingTasks() {
       } catch (pipeErr) {
         logger.error(`[whatsappPipeline] runPipeline failed for ${task.id}: ${pipeErr.message}`);
         pipelineResult = {
-          decision: { action_required: 'STOP', reason: 'Pipeline error: ' + pipeErr.message },
+          decision: { action_required: 'STOP', reason: `MATRIYA pipeline error: ${pipeErr.message}` },
           score: { emergence_score: 0 }
         };
       }
@@ -146,12 +146,21 @@ export async function processPendingTasks() {
       const replyText = formatReply(pipelineResult);
       logger.info(`[whatsappPipeline] task ${task.id} → reply: ${replyText.replace(/\n/g, ' | ')}`);
 
-      // 3. Send WhatsApp reply to David's number (non-fatal — log and continue)
-      try {
-        await sendReply(replyText);
-      } catch (replyErr) {
-        logger.error(`[whatsappPipeline] sendReply failed for ${task.id}: ${replyErr.message}`);
-        // Don't abort — still mark as DONE so we don't loop forever
+      // 3. Send reply — first to task sender, also to DAVID_WHATSAPP if different
+      const recipientNumbers = new Set();
+      if (task.from_number) recipientNumbers.add(task.from_number);
+      const davidRaw = (process.env.DAVID_WHATSAPP || '').trim();
+      if (davidRaw) {
+        const davidAddr = davidRaw.startsWith('whatsapp:') ? davidRaw : `whatsapp:${davidRaw}`;
+        recipientNumbers.add(davidAddr);
+      }
+
+      for (const recipient of recipientNumbers) {
+        try {
+          await sendReplyTo(recipient, replyText);
+        } catch (replyErr) {
+          logger.error(`[whatsappPipeline] sendReply to ${recipient} failed: ${replyErr.message}`);
+        }
       }
 
       // 4. Mark task as DONE
@@ -185,27 +194,22 @@ export async function processPendingTasks() {
 // ─── Twilio sender ────────────────────────────────────────────────────────────
 
 /**
- * Send a WhatsApp message to David's number (DAVID_WHATSAPP env var).
- * Falls back to TWILIO_WHATSAPP_FROM as "from".
+ * Send a WhatsApp message to a specific recipient address.
+ * @param {string} to   — whatsapp:+972... or plain +972...
+ * @param {string} body — message text
  */
-async function sendReply(body) {
-  const davidRaw = (process.env.DAVID_WHATSAPP || '').trim();
-  const fromRaw  = (process.env.TWILIO_WHATSAPP_FROM || process.env.TWILIO_WHATSAPP_NUMBER || '').trim();
-
-  if (!davidRaw) {
-    logger.warn('[whatsappPipeline] DAVID_WHATSAPP not set — skipping reply');
-    return;
-  }
+async function sendReplyTo(to, body) {
+  const fromRaw = (process.env.TWILIO_WHATSAPP_FROM || process.env.TWILIO_WHATSAPP_NUMBER || '').trim();
   if (!fromRaw) {
     logger.warn('[whatsappPipeline] TWILIO_WHATSAPP_FROM not set — skipping reply');
     return;
   }
 
-  const to   = davidRaw.startsWith('whatsapp:') ? davidRaw : `whatsapp:${davidRaw}`;
-  const from = fromRaw.startsWith('whatsapp:') ? fromRaw  : `whatsapp:${fromRaw}`;
+  const toAddr   = to.startsWith('whatsapp:')     ? to      : `whatsapp:${to}`;
+  const fromAddr = fromRaw.startsWith('whatsapp:') ? fromRaw : `whatsapp:${fromRaw}`;
 
-  await getTwilio().messages.create({ from, to, body });
-  logger.info(`[whatsappPipeline] sent reply to ${to}`);
+  await getTwilio().messages.create({ from: fromAddr, to: toAddr, body });
+  logger.info(`[whatsappPipeline] sent reply to ${toAddr}`);
 }
 
 // ─── Polling (non-serverless environments) ────────────────────────────────────
