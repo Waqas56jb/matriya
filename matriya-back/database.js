@@ -631,6 +631,9 @@ const DoEDesign = sequelize ? sequelize.define('DoEDesign', {
   timestamps: false
 }) : null;
 
+// Kept for backwards-compatibility — other modules may import this constant
+const EXPERIMENT_OUTCOMES = ['success', 'failure', 'partial', 'production_formula'];
+
 // Experiments — full schema per David's spec
 const Experiment = sequelize ? sequelize.define('Experiment', {
   id: {
