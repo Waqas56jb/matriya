@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState } from 'react';
+import { ADMIN_API_BASE } from '../config.js';
 
 const AuthContext = createContext(null);
 
@@ -9,8 +10,7 @@ export function AuthProvider({ children }) {
   });
 
   const login = async (email, password) => {
-    const base = import.meta.env.VITE_ADMIN_API_URL || 'http://localhost:9000';
-    const res = await fetch(`${base}/api/admin/auth/login`, {
+    const res = await fetch(`${ADMIN_API_BASE}/api/admin/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),

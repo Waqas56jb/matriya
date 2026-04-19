@@ -1,19 +1,30 @@
-const BASE = import.meta.env.VITE_ADMIN_API_URL || 'http://localhost:9000';
+import { ADMIN_API_BASE } from '../config.js';
 
-function getToken() { return localStorage.getItem('admin_token'); }
+function getToken() {
+  return localStorage.getItem('admin_token');
+}
 
 async function req(method, path, body) {
-  const res = await fetch(`${BASE}${path}`, {
+  const headers = { 'Content-Type': 'application/json' };
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const res = await fetch(`${ADMIN_API_BASE}${path}`, {
     method,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${getToken()}`,
-    },
+    headers,
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
+}
+
+/** Raw fetch for non-JSON responses (e.g. CSV blob). Caller must set Authorization if needed. */
+export async function apiFetch(path, options = {}) {
+  const token = getToken();
+  const headers = { ...options.headers };
+  if (token && !headers.Authorization) headers.Authorization = `Bearer ${token}`;
+  return fetch(`${ADMIN_API_BASE}${path}`, { ...options, headers });
 }
 
 export const api = {

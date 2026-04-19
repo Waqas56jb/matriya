@@ -53,8 +53,17 @@ export const supabase = createClient(
 
 const app = express();
 
+// CORS: comma-separated origins, or omit / use * for dev (reflects request origin).
+// Browsers reject credentials with Access-Control-Allow-Origin: * — avoid that in production.
+function corsOrigin() {
+  const raw = (process.env.ADMIN_FRONTEND_URL || '').trim();
+  if (!raw || raw === '*') return true;
+  const list = raw.split(',').map(s => s.trim()).filter(Boolean);
+  return list.length === 1 ? list[0] : list;
+}
+
 app.use(cors({
-  origin: process.env.ADMIN_FRONTEND_URL || '*',
+  origin: corsOrigin(),
   credentials: true,
 }));
 

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { ADMIN_API_BASE } from '../config.js';
 import './Auth.css';
 
 export default function ResetPassword() {
@@ -13,8 +14,7 @@ export default function ResetPassword() {
     setError('');
     setLoading(true);
     try {
-      const base = import.meta.env.VITE_ADMIN_API_URL || 'http://localhost:9000';
-      const res  = await fetch(`${base}/api/admin/auth/reset-request`, {
+      const res  = await fetch(`${ADMIN_API_BASE}/api/admin/auth/reset-request`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email }),

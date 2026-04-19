@@ -1,7 +1,5 @@
 import { useState, useEffect } from 'react';
-import { api } from '../utils/api.js';
-
-const BASE = import.meta.env.VITE_ADMIN_API_URL || 'http://localhost:9000';
+import { api, apiFetch } from '../utils/api.js';
 
 export default function Experiments() {
   const [data,    setData]    = useState([]);
@@ -44,9 +42,20 @@ export default function Experiments() {
     } catch (e) { showToast(e.message, 'error'); }
   };
 
-  const exportCSV = () => {
-    const token = localStorage.getItem('admin_token');
-    window.open(`${BASE}/api/admin/experiments/export?token=${token}`, '_blank');
+  const exportCSV = async () => {
+    try {
+      const res = await apiFetch('/api/admin/experiments/export');
+      if (!res.ok) throw new Error('Export failed');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'experiments.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      showToast(e.message || 'Export failed', 'error');
+    }
   };
 
   const totalPages = Math.ceil(total / 20);
