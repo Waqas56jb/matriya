@@ -165,18 +165,23 @@ router.get('/test-rachel', async (_req, res) => {
 // ─── POST — main handler ──────────────────────────────────────────────────────
 
 router.post('/', async (req, res) => {
-  const incomingBody = req.body?.Body || '';
+  const incomingBody = (req.body?.Body || '').trim();
 
-  // Finance signal echo suppression — matriya-finance sends status alerts via
-  // Twilio; suppress them here so they do not trigger the lab decision pipeline.
+  // Finance signal + operator commands — must not run the lab MATRIYA decision pipeline
+  // (otherwise e.g. STATUS gets answered with "MATRIYA Decision: STOP").
   if (incomingBody.startsWith('🔴 MATRIYA SIGNAL') ||
       incomingBody.startsWith('🟢 MATRIYA SIGNAL') ||
-      incomingBody.startsWith('🟡 MATRIYA SIGNAL')) {
-    logger.info('[whatsapp webhook] Finance signal echo suppressed');
+      incomingBody.startsWith('🟡 MATRIYA SIGNAL') ||
+      incomingBody === 'STATUS' ||
+      incomingBody === 'WATCHLIST' ||
+      incomingBody === 'LOG' ||
+      incomingBody === 'HELP') {
+    logger.info(`[whatsapp webhook] command/finance echo suppressed len=${incomingBody.length}`);
+    res.set('Content-Type', 'text/xml');
     return res.status(200).send('<Response></Response>');
   }
 
-  const message     = incomingBody.trim();
+  const message     = incomingBody;
   const from_number = (req.body?.From || '').trim();
 
   if (!message || !from_number) {

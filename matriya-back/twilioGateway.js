@@ -103,6 +103,19 @@ export async function handleInbound(req, res) {
   const from = (req.body?.From || '').trim();        // whatsapp:+972...
   const userMessage = (req.body?.Body || '').trim();
 
+  // Same routing as /api/webhook/whatsapp: finance signals + operator commands must not run the lab pipeline.
+  if (userMessage.startsWith('🔴 MATRIYA SIGNAL') ||
+      userMessage.startsWith('🟢 MATRIYA SIGNAL') ||
+      userMessage.startsWith('🟡 MATRIYA SIGNAL') ||
+      userMessage === 'STATUS' ||
+      userMessage === 'WATCHLIST' ||
+      userMessage === 'LOG' ||
+      userMessage === 'HELP') {
+    logger.info(`[twilioGateway] command/finance echo suppressed msg="${userMessage.slice(0, 40)}"`);
+    res.set('Content-Type', 'text/xml');
+    return res.send('<Response></Response>');
+  }
+
   if (!from || !userMessage) {
     logger.warn('[twilioGateway] handleInbound: missing From or Body');
     // Still return 200 so Twilio doesn't retry
