@@ -27,6 +27,7 @@ import twilio from 'twilio';
 import { createClient } from '@supabase/supabase-js';
 import { runPipeline, createActionPackage } from './agents/orchestration.js';
 import logger from './logger.js';
+import { isFinanceWhatsappCommand, sendFinanceCommandTwiml } from './lib/financeWhatsAppCommands.js';
 
 // ─── Lazy singletons ──────────────────────────────────────────────────────────
 
@@ -103,15 +104,11 @@ export async function handleInbound(req, res) {
   const from = (req.body?.From || '').trim();        // whatsapp:+972...
   const userMessage = (req.body?.Body || '').trim();
 
-  // Same routing as /api/webhook/whatsapp: finance signals + operator commands must not run the lab pipeline.
+  // Finance signal echoes — empty TwiML (same as /api/webhook/whatsapp).
   if (userMessage.startsWith('🔴 MATRIYA SIGNAL') ||
       userMessage.startsWith('🟢 MATRIYA SIGNAL') ||
-      userMessage.startsWith('🟡 MATRIYA SIGNAL') ||
-      userMessage === 'STATUS' ||
-      userMessage === 'WATCHLIST' ||
-      userMessage === 'LOG' ||
-      userMessage === 'HELP') {
-    logger.info(`[twilioGateway] command/finance echo suppressed msg="${userMessage.slice(0, 40)}"`);
+      userMessage.startsWith('🟡 MATRIYA SIGNAL')) {
+    logger.info('[twilioGateway] finance MATRIYA SIGNAL echo suppressed');
     res.set('Content-Type', 'text/xml');
     return res.send('<Response></Response>');
   }
@@ -121,6 +118,11 @@ export async function handleInbound(req, res) {
     // Still return 200 so Twilio doesn't retry
     res.set('Content-Type', 'text/xml');
     return res.send('<Response></Response>');
+  }
+
+  if (isFinanceWhatsappCommand(userMessage)) {
+    logger.info(`[twilioGateway] finance command cmd=${userMessage.toUpperCase()}`);
+    return sendFinanceCommandTwiml(res, userMessage);
   }
 
   logger.info(`[twilioGateway] inbound from=${from} message="${userMessage.slice(0, 80)}"`);

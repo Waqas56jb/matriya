@@ -19,6 +19,7 @@ import { createClient } from '@supabase/supabase-js';
 import logger from '../../logger.js';
 import { runPipeline } from '../../agents/orchestration.js';
 import { sendWhatsAppMessage, logTicket } from '../../twilioGateway.js';
+import { isFinanceWhatsappCommand, sendFinanceCommandTwiml } from '../../lib/financeWhatsAppCommands.js';
 
 const router = Router();
 const TABLE = 'whatsapp_tasks';
@@ -167,16 +168,11 @@ router.get('/test-rachel', async (_req, res) => {
 router.post('/', async (req, res) => {
   const incomingBody = (req.body?.Body || '').trim();
 
-  // Finance signal + operator commands — must not run the lab MATRIYA decision pipeline
-  // (otherwise e.g. STATUS gets answered with "MATRIYA Decision: STOP").
+  // Finance *signal* echoes from matriya-finance — suppress (no TwiML body).
   if (incomingBody.startsWith('🔴 MATRIYA SIGNAL') ||
       incomingBody.startsWith('🟢 MATRIYA SIGNAL') ||
-      incomingBody.startsWith('🟡 MATRIYA SIGNAL') ||
-      incomingBody === 'STATUS' ||
-      incomingBody === 'WATCHLIST' ||
-      incomingBody === 'LOG' ||
-      incomingBody === 'HELP') {
-    logger.info(`[whatsapp webhook] command/finance echo suppressed len=${incomingBody.length}`);
+      incomingBody.startsWith('🟡 MATRIYA SIGNAL')) {
+    logger.info('[whatsapp webhook] finance MATRIYA SIGNAL echo suppressed');
     res.set('Content-Type', 'text/xml');
     return res.status(200).send('<Response></Response>');
   }
@@ -191,6 +187,12 @@ router.post('/', async (req, res) => {
 
   if (!isTwilioRequestValid(req)) {
     return res.status(403).send('Invalid Twilio signature');
+  }
+
+  // Operator finance commands — TwiML reply (must not run lab pipeline).
+  if (isFinanceWhatsappCommand(incomingBody)) {
+    logger.info(`[whatsapp webhook] finance command cmd=${incomingBody.toUpperCase()}`);
+    return sendFinanceCommandTwiml(res, incomingBody);
   }
 
   // ── Phone number whitelist (Supabase-backed) ─────────────────────────────────
