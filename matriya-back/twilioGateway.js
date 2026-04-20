@@ -27,7 +27,11 @@ import twilio from 'twilio';
 import { createClient } from '@supabase/supabase-js';
 import { runPipeline, createActionPackage } from './agents/orchestration.js';
 import logger from './logger.js';
-import { isFinanceWhatsappCommand, sendFinanceCommandTwiml } from './lib/financeWhatsAppCommands.js';
+import {
+  isFinanceWhatsappCommand,
+  normalizeFinanceCommandBody,
+  sendFinanceCommandTwiml,
+} from './lib/financeWhatsAppCommands.js';
 
 // ─── Lazy singletons ──────────────────────────────────────────────────────────
 
@@ -121,7 +125,7 @@ export async function handleInbound(req, res) {
   }
 
   if (isFinanceWhatsappCommand(userMessage)) {
-    logger.info(`[twilioGateway] finance command cmd=${userMessage.toUpperCase()}`);
+    logger.info(`[twilioGateway] finance command inner=${normalizeFinanceCommandBody(userMessage)}`);
     return sendFinanceCommandTwiml(res, userMessage);
   }
 

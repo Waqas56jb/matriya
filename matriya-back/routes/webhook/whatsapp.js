@@ -19,7 +19,11 @@ import { createClient } from '@supabase/supabase-js';
 import logger from '../../logger.js';
 import { runPipeline } from '../../agents/orchestration.js';
 import { sendWhatsAppMessage, logTicket } from '../../twilioGateway.js';
-import { isFinanceWhatsappCommand, sendFinanceCommandTwiml } from '../../lib/financeWhatsAppCommands.js';
+import {
+  isFinanceWhatsappCommand,
+  normalizeFinanceCommandBody,
+  sendFinanceCommandTwiml,
+} from '../../lib/financeWhatsAppCommands.js';
 
 const router = Router();
 const TABLE = 'whatsapp_tasks';
@@ -191,7 +195,7 @@ router.post('/', async (req, res) => {
 
   // Operator finance commands — TwiML reply (must not run lab pipeline).
   if (isFinanceWhatsappCommand(incomingBody)) {
-    logger.info(`[whatsapp webhook] finance command cmd=${incomingBody.toUpperCase()}`);
+    logger.info(`[whatsapp webhook] finance command inner=${normalizeFinanceCommandBody(incomingBody)}`);
     return sendFinanceCommandTwiml(res, incomingBody);
   }
 

@@ -1,5 +1,6 @@
 /**
  * WhatsApp finance operator commands (STATUS / WATCHLIST / LOG / HELP).
+ * Prefixed form "F STATUS" etc. avoids routing single letter "F" or finance text to the lab pipeline.
  * Reads matriya-finance shadow signals NDJSON; path override via FINANCE_SHADOW_SIGNALS_PATH.
  */
 import fs from 'node:fs';
@@ -84,13 +85,12 @@ export function buildFinanceCommandReply(body) {
 
   if (cmd === 'HELP') {
     return [
-      'Commands:',
-      'STATUS — last 5 signals',
-      'WATCHLIST — monitored instruments',
-      'LOG — last 10 entries',
-      'DETAIL [ID] — signal detail',
-      'CLOSE [ID] — close signal',
-      'HELP — this list'
+      'Finance commands (prefix F + space):',
+      'F STATUS — last 5 signals',
+      'F WATCHLIST — monitored instruments',
+      'F LOG — last 10 entries',
+      'F HELP — this list',
+      'DETAIL [ID] / CLOSE [ID] — same prefix when supported'
     ].join('\n');
   }
 
@@ -125,7 +125,8 @@ export function isFinanceWhatsappCommand(trimmedBody) {
  * @param {string} incomingBody trimmed
  */
 export function sendFinanceCommandTwiml(res, incomingBody) {
-  const reply = buildFinanceCommandReply(incomingBody);
+  const inner = normalizeFinanceCommandBody(incomingBody);
+  const reply = buildFinanceCommandReply(inner);
   const xml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeTwiml(reply)}</Message></Response>`;
   res.set('Content-Type', 'text/xml');
   return res.status(200).send(xml);
