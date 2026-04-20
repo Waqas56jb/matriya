@@ -1,12 +1,19 @@
 import { useState, useEffect } from 'react';
 import { api } from '../utils/api.js';
+import { t } from '../i18n/i18n.js';
+
+const TABS = [
+  { id: 'health', labelKey: 'system.healthTab' },
+  { id: 'logs', labelKey: 'system.logsTab' },
+  { id: 'env', labelKey: 'system.envTab' },
+];
 
 export default function System() {
   const [health,  setHealth]  = useState(null);
   const [logs,    setLogs]    = useState([]);
   const [env,     setEnv]     = useState({});
   const [loading, setLoading] = useState(true);
-  const [tab,     setTab]     = useState('Health');
+  const [tab,     setTab]     = useState('health');
   const [logLevel,setLogLevel]= useState('error');
 
   const loadHealth = () => api.get('/api/admin/system/health').then(d => setHealth(d)).catch(console.error);
@@ -26,32 +33,32 @@ export default function System() {
   return (
     <div>
       <div className="page-header" style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
-        <div><h1>System Health</h1><p>Service status and infrastructure</p></div>
-        <button className="btn btn-secondary" onClick={loadHealth}>↺ Refresh</button>
+        <div><h1>{t('pages.system')}</h1><p>{t('system.subtitle')}</p></div>
+        <button className="btn btn-secondary" onClick={loadHealth}>↺ {t('system.refresh')}</button>
       </div>
 
       {/* Overall status */}
-      <div className="section-card" style={{ marginBottom: 24, background: 'var(--bg-card2)', border: `1px solid ${overallColor[overall]}40`, padding: '20px 24px', display: 'flex', alignItems: 'center', gap: 16 }}>
-        <div style={{ width: 14, height: 14, background: overallColor[overall], borderRadius: '50%', boxShadow: `0 0 10px ${overallColor[overall]}`, flexShrink: 0 }} />
+      <div className="section-card" style={{ marginBottom: 24, background: 'var(--bg-card2)', border: `1px solid ${(overallColor[overall] || overallColor.unknown)}40`, padding: '20px 24px', display: 'flex', alignItems: 'center', gap: 16 }}>
+        <div style={{ width: 14, height: 14, background: overallColor[overall] || overallColor.unknown, borderRadius: '50%', boxShadow: `0 0 10px ${overallColor[overall] || overallColor.unknown}`, flexShrink: 0 }} />
         <div>
-          <div style={{ fontSize: 16, fontWeight: 700 }}>System status: <span style={{ color: overallColor[overall], textTransform: 'capitalize' }}>{overall}</span></div>
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>Checked at {health?.checked_at ? new Date(health.checked_at).toLocaleString() : '—'}</div>
+          <div style={{ fontSize: 16, fontWeight: 700 }}>{t('system.systemStatus')} <span style={{ color: overallColor[overall] || overallColor.unknown, textTransform: 'capitalize' }}>{overall}</span></div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{t('system.checkedAt')} {health?.checked_at ? new Date(health.checked_at).toLocaleString() : '—'}</div>
         </div>
       </div>
 
       {/* Tabs */}
-      <div style={{ display: 'flex', gap: 4, marginBottom: 20, background: 'var(--bg-card2)', padding: 4, borderRadius: 10, border: '1px solid var(--border)', width: 'fit-content' }}>
-        {['Health', 'Logs', 'Env Vars'].map(t => (
-          <button key={t} className={`btn btn-sm ${tab === t ? 'btn-primary' : 'btn-secondary'}`} style={{ border: 'none' }} onClick={() => setTab(t)}>{t}</button>
+      <div style={{ display: 'flex', gap: 4, marginBottom: 20, background: 'var(--bg-card2)', padding: 4, borderRadius: 10, border: '1px solid var(--border)', width: 'fit-content', flexWrap: 'wrap' }}>
+        {TABS.map(({ id, labelKey }) => (
+          <button key={id} className={`btn btn-sm ${tab === id ? 'btn-primary' : 'btn-secondary'}`} style={{ border: 'none' }} onClick={() => setTab(id)}>{t(labelKey)}</button>
         ))}
       </div>
 
       {loading ? <div className="loading"><div className="spinner" /></div> : (
         <>
-          {tab === 'Health' && (
+          {tab === 'health' && (
             <div className="section-card" style={{ padding: 0, overflow: 'hidden' }}>
               <table>
-                <thead><tr><th>Service</th><th>Status</th><th>Latency</th></tr></thead>
+                <thead><tr><th>{t('system.thService')}</th><th>{t('system.thStatus')}</th><th>{t('system.thLatency')}</th></tr></thead>
                 <tbody>
                   {(health?.services || []).map(s => (
                     <tr key={s.service}>
@@ -71,7 +78,7 @@ export default function System() {
             </div>
           )}
 
-          {tab === 'Logs' && (
+          {tab === 'logs' && (
             <div className="section-card" style={{ padding: 0, overflow: 'hidden' }}>
               <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8 }}>
                 {['error', 'warn', 'info'].map(l => (
@@ -80,7 +87,7 @@ export default function System() {
                 ))}
               </div>
               {logs.length === 0 ? (
-                <div className="empty-state"><div className="icon">📋</div><p>No {logLevel} logs</p></div>
+                <div className="empty-state"><div className="icon">📋</div><p>{t('system.noLogsForLevel', { level: logLevel })}</p></div>
               ) : (
                 <div style={{ maxHeight: 500, overflowY: 'auto' }}>
                   {logs.map(l => (
@@ -98,10 +105,10 @@ export default function System() {
             </div>
           )}
 
-          {tab === 'Env Vars' && (
+          {tab === 'env' && (
             <div className="section-card" style={{ padding: 0, overflow: 'hidden' }}>
               <table>
-                <thead><tr><th>Variable</th><th>Value</th></tr></thead>
+                <thead><tr><th>{t('system.thVariable')}</th><th>{t('system.thValue')}</th></tr></thead>
                 <tbody>
                   {Object.entries(env).map(([k, v]) => (
                     <tr key={k}>

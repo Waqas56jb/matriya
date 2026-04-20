@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
+import LanguageSwitcher from '../components/LanguageSwitcher.jsx';
+import { t } from '../i18n/i18n.js';
 import './Auth.css';
 
 export default function Login() {
@@ -20,7 +22,7 @@ export default function Login() {
       await login(email, password);
       navigate('/dashboard');
     } catch (err) {
-      setError(err.message || 'Login failed. Check credentials.');
+      setError(err.message || t('login.loginFailed'));
     } finally {
       setLoading(false);
     }
@@ -35,22 +37,25 @@ export default function Login() {
       </div>
 
       <div className="auth-card">
+        <div className="auth-card-top">
+          <LanguageSwitcher className="lang-switcher--auth" />
+        </div>
         <div className="auth-logo">
           <div className="auth-logo-icon">M</div>
           <div>
             <div className="auth-logo-name">MATRIYA</div>
-            <div className="auth-logo-sub">Admin Command Center</div>
+            <div className="auth-logo-sub">{t('login.commandCenter')}</div>
           </div>
         </div>
 
         <div className="auth-tabs">
-          <div className="auth-tab active">Sign In</div>
-          <Link to="/reset-password" className="auth-tab">Reset Password</Link>
+          <div className="auth-tab active">{t('login.signInTab')}</div>
+          <Link to="/reset-password" className="auth-tab">{t('login.resetTab')}</Link>
         </div>
 
         <form onSubmit={handleSubmit}>
           <div className="input-group">
-            <label className="input-label">Email Address</label>
+            <label className="input-label">{t('login.email')}</label>
             <div className="input-icon-wrap">
               <span className="input-icon">✉</span>
               <input
@@ -66,7 +71,7 @@ export default function Login() {
           </div>
 
           <div className="input-group">
-            <label className="input-label">Password</label>
+            <label className="input-label">{t('login.password')}</label>
             <div className="input-icon-wrap">
               <span className="input-icon">🔒</span>
               <input
@@ -87,13 +92,13 @@ export default function Login() {
           {error && <div className="auth-error">⚠ {error}</div>}
 
           <button type="submit" className="btn btn-primary btn-lg auth-submit" disabled={loading}>
-            {loading ? <><span className="btn-spinner" /> Signing in…</> : 'Sign In to Dashboard'}
+            {loading ? <><span className="btn-spinner" /> {t('login.signingIn')}</> : t('login.signInCta')}
           </button>
         </form>
 
         <div className="auth-footer-link">
-          Forgot your password?{' '}
-          <Link to="/reset-password">Reset it here</Link>
+          {t('login.forgot')}{' '}
+          <Link to="/reset-password">{t('login.resetHere')}</Link>
         </div>
       </div>
     </div>

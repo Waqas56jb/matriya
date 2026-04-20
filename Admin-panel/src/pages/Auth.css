@@ -41,6 +41,12 @@
   50%       { transform: translate(20px, -20px) scale(1.05); }
 }
 
+.auth-card-top {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
 /* Card */
 .auth-card {
   background: var(--bg-card);

@@ -1,10 +1,32 @@
 import { useState, useEffect } from 'react';
 import { api } from '../utils/api.js';
+import { t } from '../i18n/i18n.js';
 
-const TABS = ['Requests', 'Queue', 'Whitelist', 'Blocked'];
+const TAB_KEYS = ['requests', 'queue', 'whitelist', 'blocked'];
+
+const TAB_LABEL = {
+  requests: 'whatsapp.tabRequests',
+  queue: 'whatsapp.tabQueue',
+  whitelist: 'whatsapp.tabWhitelist',
+  blocked: 'whatsapp.tabBlocked',
+};
+
+const REQ_FILTER_KEYS = {
+  pending: 'whatsapp.filterPending',
+  approved: 'whatsapp.filterApproved',
+  denied: 'whatsapp.filterDenied',
+  all: 'whatsapp.filterAll',
+};
+
+function translateRequestStatus(s) {
+  if (s === 'pending') return t('whatsapp.statusPending');
+  if (s === 'approved') return t('whatsapp.statusApproved');
+  if (s === 'denied') return t('whatsapp.statusDenied');
+  return s;
+}
 
 export default function WhatsApp() {
-  const [tab,       setTab]       = useState('Requests');
+  const [tab,       setTab]       = useState('requests');
   const [requests,  setRequests]  = useState([]);
   const [reqFilter, setReqFilter] = useState('pending');
   const [queue,     setQueue]     = useState([]);
@@ -71,7 +93,7 @@ export default function WhatsApp() {
   };
 
   const removeFromWhitelist = async (phone) => {
-    if (!confirm(`Remove ${phone} from whitelist?`)) return;
+    if (!confirm(t('whatsapp.confirmRemoveWhitelist', { phone }))) return;
     try { await api.delete(`/api/admin/whatsapp/whitelist/${encodeURIComponent(phone)}`); showToast('Removed'); load(); }
     catch (e) { showToast(e.message, 'error'); }
   };
@@ -85,16 +107,16 @@ export default function WhatsApp() {
   return (
     <div>
       <div className="page-header">
-        <h1>WhatsApp Management</h1>
-        <p>Task queue, whitelist, and blocked numbers</p>
+        <h1>{t('whatsapp.pageTitle')}</h1>
+        <p>{t('whatsapp.subtitle')}</p>
       </div>
 
       <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(4,1fr)', marginBottom: 24 }}>
         {[
-          { icon: '🔔', color: 'orange', label: 'Access Requests', value: requests.filter(r => r.status === 'pending').length },
-          { icon: '📨', color: 'cyan',   label: 'Queue Tasks',     value: queue.length     },
-          { icon: '✅', color: 'green',  label: 'Whitelisted',     value: whitelist.length },
-          { icon: '🚫', color: 'red',    label: 'Blocked Numbers', value: blocked.length   },
+          { icon: '🔔', color: 'orange', label: t('whatsapp.requests'), value: requests.filter(r => r.status === 'pending').length },
+          { icon: '📨', color: 'cyan',   label: t('whatsapp.queueTasks'),     value: queue.length     },
+          { icon: '✅', color: 'green',  label: t('whatsapp.whitelisted'),     value: whitelist.length },
+          { icon: '🚫', color: 'red',    label: t('whatsapp.blockedNums'), value: blocked.length   },
         ].map(s => (
           <div className="stat-card" key={s.label}>
             <div className={`stat-icon ${s.color}`}>{s.icon}</div>
@@ -107,23 +129,22 @@ export default function WhatsApp() {
       </div>
 
       {/* Tabs */}
-      <div style={{ display: 'flex', gap: 4, marginBottom: 20, background: 'var(--bg-card2)', padding: 4, borderRadius: 10, border: '1px solid var(--border)', width: 'fit-content' }}>
-        {TABS.map(t => (
-          <button key={t} className={`btn btn-sm ${tab === t ? 'btn-primary' : 'btn-secondary'}`}
-            style={{ border: 'none' }} onClick={() => setTab(t)}>{t}</button>
+      <div style={{ display: 'flex', gap: 4, marginBottom: 20, background: 'var(--bg-card2)', padding: 4, borderRadius: 10, border: '1px solid var(--border)', width: 'fit-content', flexWrap: 'wrap' }}>
+        {TAB_KEYS.map(k => (
+          <button key={k} className={`btn btn-sm ${tab === k ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ border: 'none' }} onClick={() => setTab(k)}>{t(TAB_LABEL[k])}</button>
         ))}
       </div>
 
       {loading ? <div className="loading"><div className="spinner" /></div> : (
         <>
-          {/* Access Requests */}
-          {tab === 'Requests' && (
+          {tab === 'requests' && (
             <>
               <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center', flexWrap: 'wrap' }}>
-                <span style={{ fontSize: 13, color: 'var(--text-secondary)', marginRight: 4 }}>Show:</span>
+                <span style={{ fontSize: 13, color: 'var(--text-secondary)', marginInlineEnd: 4 }}>{t('whatsapp.show')}</span>
                 {['pending', 'approved', 'denied', 'all'].map(f => (
                   <button key={f} className={`btn btn-sm ${reqFilter === f ? 'btn-primary' : 'btn-secondary'}`}
-                    onClick={() => setReqFilter(f)} style={{ textTransform: 'capitalize' }}>{f}</button>
+                    onClick={() => setReqFilter(f)}>{t(REQ_FILTER_KEYS[f])}</button>
                 ))}
               </div>
 
@@ -131,20 +152,20 @@ export default function WhatsApp() {
                 {requests.length === 0 ? (
                   <div className="empty-state">
                     <div className="icon">🔔</div>
-                    <p>{reqFilter === 'pending' ? 'No pending access requests' : `No ${reqFilter} requests`}</p>
+                    <p>{reqFilter === 'pending' ? t('whatsapp.noPendingReq') : t('whatsapp.noReqFilter')}</p>
                   </div>
                 ) : (
                   <div style={{ overflowX: 'auto' }}>
                     <table>
                       <thead>
                         <tr>
-                          <th>Phone Number</th>
-                          <th>First Message</th>
-                          <th>Attempts</th>
-                          <th>First Seen</th>
-                          <th>Last Seen</th>
-                          <th>Status</th>
-                          <th style={{ minWidth: 160 }}>Actions</th>
+                          <th>{t('whatsapp.thPhone')}</th>
+                          <th>{t('whatsapp.thFirstMsg')}</th>
+                          <th>{t('whatsapp.thAttempts')}</th>
+                          <th>{t('whatsapp.thFirstSeen')}</th>
+                          <th>{t('whatsapp.thLastSeen')}</th>
+                          <th>{t('whatsapp.thStatus')}</th>
+                          <th style={{ minWidth: 160 }}>{t('whatsapp.thActions')}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -159,13 +180,13 @@ export default function WhatsApp() {
                                   <div style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
                                     {(r.phone_number || '').replace('whatsapp:', '')}
                                   </div>
-                                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>WhatsApp</div>
+                                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{t('whatsapp.whatsappLabel')}</div>
                                 </div>
                               </div>
                             </td>
                             <td style={{ maxWidth: 200, fontSize: 12, color: 'var(--text-secondary)' }}>
                               <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                "{r.first_message || '—'}"
+                                &quot;{r.first_message || '—'}&quot;
                               </div>
                             </td>
                             <td>
@@ -181,10 +202,10 @@ export default function WhatsApp() {
                             </td>
                             <td>
                               <span className={`badge badge-${r.status === 'approved' ? 'success' : r.status === 'denied' ? 'danger' : 'warning'}`}>
-                                {r.status}
+                                {translateRequestStatus(r.status)}
                               </span>
                               {r.reviewed_by && (
-                                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 3 }}>by {r.reviewed_by}</div>
+                                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 3 }}>{t('whatsapp.reviewedBy')} {r.reviewed_by}</div>
                               )}
                             </td>
                             <td>
@@ -192,19 +213,19 @@ export default function WhatsApp() {
                                 <div style={{ display: 'flex', gap: 6 }}>
                                   <button className="btn btn-success btn-sm"
                                     onClick={() => approveRequest(r.id, r.phone_number)}>
-                                    ✓ Approve
+                                    ✓ {t('whatsapp.approve')}
                                   </button>
                                   <button className="btn btn-danger btn-sm"
                                     onClick={() => denyRequest(r.id, r.phone_number)}>
-                                    ✕ Deny
+                                    ✕ {t('whatsapp.deny')}
                                   </button>
                                 </div>
                               )}
                               {r.status === 'approved' && (
-                                <span style={{ fontSize: 12, color: 'var(--success)' }}>✓ Access granted</span>
+                                <span style={{ fontSize: 12, color: 'var(--success)' }}>✓ {t('whatsapp.accessGranted')}</span>
                               )}
                               {r.status === 'denied' && (
-                                <span style={{ fontSize: 12, color: 'var(--danger)' }}>✕ Access denied</span>
+                                <span style={{ fontSize: 12, color: 'var(--danger)' }}>✕ {t('whatsapp.accessDenied')}</span>
                               )}
                             </td>
                           </tr>
@@ -217,30 +238,29 @@ export default function WhatsApp() {
             </>
           )}
 
-          {/* Queue */}
-          {tab === 'Queue' && (
+          {tab === 'queue' && (
             <div className="section-card" style={{ padding: 0, overflow: 'hidden' }}>
               <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
                 <div className="search-bar">
                   <span className="search-icon">🔍</span>
-                  <input className="input-field" placeholder="Search by number or message…" value={search} onChange={e => setSearch(e.target.value)} />
+                  <input className="input-field" placeholder={t('whatsapp.searchQueuePh')} value={search} onChange={e => setSearch(e.target.value)} />
                 </div>
               </div>
               {filteredQueue.length === 0 ? (
-                <div className="empty-state"><div className="icon">💬</div><p>No messages in queue</p></div>
+                <div className="empty-state"><div className="icon">💬</div><p>{t('whatsapp.noQueue')}</p></div>
               ) : (
                 <div style={{ overflowX: 'auto' }}>
                   <table>
-                    <thead><tr><th>From</th><th>Message</th><th>Decision</th><th>Status</th><th>Time</th><th>Action</th></tr></thead>
+                    <thead><tr><th>{t('whatsapp.thFrom')}</th><th>{t('whatsapp.thMessage')}</th><th>{t('whatsapp.thDecision')}</th><th>{t('whatsapp.thQueueStatus')}</th><th>{t('whatsapp.thTime')}</th><th>{t('whatsapp.thAction')}</th></tr></thead>
                     <tbody>
-                      {filteredQueue.map(t => (
-                        <tr key={t.id}>
-                          <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{(t.from_number || '').replace('whatsapp:', '')}</td>
-                          <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12 }}>{t.message || '—'}</td>
-                          <td>{t.decision ? <>{decisionIcon(t.decision)} <span style={{ fontSize: 12 }}>{t.decision}</span></> : '—'}</td>
-                          <td><span className={`badge badge-${t.status === 'completed' ? 'success' : t.status === 'failed' ? 'danger' : 'warning'}`}>{t.status || 'pending'}</span></td>
-                          <td style={{ fontSize: 11, color: 'var(--text-muted)' }}>{t.received_at ? new Date(t.received_at).toLocaleString() : '—'}</td>
-                          <td><button className="btn btn-secondary btn-sm" onClick={() => resend(t.id)}>↺ Resend</button></td>
+                      {filteredQueue.map(tk => (
+                        <tr key={tk.id}>
+                          <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{(tk.from_number || '').replace('whatsapp:', '')}</td>
+                          <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12 }}>{tk.message || '—'}</td>
+                          <td>{tk.decision ? <>{decisionIcon(tk.decision)} <span style={{ fontSize: 12 }}>{tk.decision}</span></> : '—'}</td>
+                          <td><span className={`badge badge-${tk.status === 'completed' ? 'success' : tk.status === 'failed' ? 'danger' : 'warning'}`}>{tk.status || 'pending'}</span></td>
+                          <td style={{ fontSize: 11, color: 'var(--text-muted)' }}>{tk.received_at ? new Date(tk.received_at).toLocaleString() : '—'}</td>
+                          <td><button className="btn btn-secondary btn-sm" onClick={() => resend(tk.id)}>↺ {t('whatsapp.resend')}</button></td>
                         </tr>
                       ))}
                     </tbody>
@@ -250,30 +270,29 @@ export default function WhatsApp() {
             </div>
           )}
 
-          {/* Whitelist */}
-          {tab === 'Whitelist' && (
+          {tab === 'whitelist' && (
             <>
               <div className="section-card" style={{ marginBottom: 20 }}>
-                <div className="section-title">➕ Add to Whitelist</div>
+                <div className="section-title">➕ {t('whatsapp.addWhitelist')}</div>
                 <form onSubmit={addToWhitelist} style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
                   <input className="input-field" style={{ flex: 1, minWidth: 160 }} placeholder="+972501234567" value={newPhone} onChange={e => setNewPhone(e.target.value)} required />
-                  <input className="input-field" style={{ flex: 1, minWidth: 160 }} placeholder="Label (optional)" value={newLabel} onChange={e => setNewLabel(e.target.value)} />
-                  <button type="submit" className="btn btn-primary">Add Number</button>
+                  <input className="input-field" style={{ flex: 1, minWidth: 160 }} placeholder={t('whatsapp.labelPh')} value={newLabel} onChange={e => setNewLabel(e.target.value)} />
+                  <button type="submit" className="btn btn-primary">{t('whatsapp.addNumber')}</button>
                 </form>
               </div>
               <div className="section-card" style={{ padding: 0, overflow: 'hidden' }}>
                 {whitelist.length === 0 ? (
-                  <div className="empty-state"><div className="icon">✅</div><p>No whitelisted numbers</p></div>
+                  <div className="empty-state"><div className="icon">✅</div><p>{t('whatsapp.noWhitelist')}</p></div>
                 ) : (
                   <table>
-                    <thead><tr><th>Phone Number</th><th>Label</th><th>Added</th><th>Action</th></tr></thead>
+                    <thead><tr><th>{t('whatsapp.thPhone')}</th><th>{t('whatsapp.thLabel')}</th><th>{t('whatsapp.thAdded')}</th><th>{t('whatsapp.thAction')}</th></tr></thead>
                     <tbody>
                       {whitelist.map(w => (
                         <tr key={w.phone}>
                           <td style={{ fontFamily: 'monospace' }}>{w.phone}</td>
                           <td style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{w.label || '—'}</td>
                           <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{w.added_at ? new Date(w.added_at).toLocaleDateString() : '—'}</td>
-                          <td><button className="btn btn-danger btn-sm" onClick={() => removeFromWhitelist(w.phone)}>Remove</button></td>
+                          <td><button className="btn btn-danger btn-sm" onClick={() => removeFromWhitelist(w.phone)}>{t('whatsapp.remove')}</button></td>
                         </tr>
                       ))}
                     </tbody>
@@ -283,22 +302,21 @@ export default function WhatsApp() {
             </>
           )}
 
-          {/* Blocked */}
-          {tab === 'Blocked' && (
+          {tab === 'blocked' && (
             <div className="section-card" style={{ padding: 0, overflow: 'hidden' }}>
               {blocked.length === 0 ? (
-                <div className="empty-state"><div className="icon">🚫</div><p>No blocked numbers</p></div>
+                <div className="empty-state"><div className="icon">🚫</div><p>{t('whatsapp.noBlocked')}</p></div>
               ) : (
-                  <table>
-                    <thead><tr><th>Phone Number</th><th>Label</th><th>Added At</th></tr></thead>
-                    <tbody>
-                      {blocked.map(b => (
-                        <tr key={b.phone}>
-                          <td style={{ fontFamily: 'monospace' }}>{b.phone}</td>
-                          <td style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{b.label || '—'}</td>
-                          <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{b.added_at ? new Date(b.added_at).toLocaleString() : '—'}</td>
-                        </tr>
-                      ))}
+                <table>
+                  <thead><tr><th>{t('whatsapp.thPhone')}</th><th>{t('whatsapp.thLabel')}</th><th>{t('whatsapp.thAddedAt')}</th></tr></thead>
+                  <tbody>
+                    {blocked.map(b => (
+                      <tr key={b.phone}>
+                        <td style={{ fontFamily: 'monospace' }}>{b.phone}</td>
+                        <td style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{b.label || '—'}</td>
+                        <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{b.added_at ? new Date(b.added_at).toLocaleString() : '—'}</td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               )}

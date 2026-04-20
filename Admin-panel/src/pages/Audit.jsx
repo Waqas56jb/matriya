@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../utils/api.js';
+import { t } from '../i18n/i18n.js';
 
 export default function Audit() {
   const [logs,    setLogs]    = useState([]);
@@ -19,7 +20,7 @@ export default function Audit() {
   };
 
   useEffect(() => { load(); }, [page]);
-  useEffect(() => { const t = setTimeout(load, 400); return () => clearTimeout(t); }, [search]);
+  useEffect(() => { const tm = setTimeout(load, 400); return () => clearTimeout(tm); }, [search]);
 
   const totalPages = Math.ceil(total / 50);
 
@@ -33,14 +34,14 @@ export default function Audit() {
   return (
     <div>
       <div className="page-header">
-        <h1>Audit Log</h1>
-        <p>{total} admin actions recorded — immutable history</p>
+        <h1>{t('pages.audit')}</h1>
+        <p>{t('audit.subtitleCount', { count: total })}</p>
       </div>
 
       <div className="toolbar">
         <div className="search-bar" style={{ flex: 1, minWidth: 200 }}>
           <span className="search-icon">🔍</span>
-          <input className="input-field" placeholder="Filter by action or endpoint…" value={search} onChange={e => { setSearch(e.target.value); setPage(1); }} />
+          <input className="input-field" placeholder={t('audit.filterPh')} value={search} onChange={e => { setSearch(e.target.value); setPage(1); }} />
         </div>
       </div>
 
@@ -48,11 +49,11 @@ export default function Audit() {
         {loading ? (
           <div className="loading"><div className="spinner" /></div>
         ) : logs.length === 0 ? (
-          <div className="empty-state"><div className="icon">🔍</div><p>No audit logs found</p></div>
+          <div className="empty-state"><div className="icon">🔍</div><p>{t('audit.noLogs')}</p></div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table>
-              <thead><tr><th>Admin</th><th>Action</th><th>IP</th><th>Payload</th><th>Time</th></tr></thead>
+              <thead><tr><th>{t('audit.thAdmin')}</th><th>{t('audit.thAction')}</th><th>{t('audit.thIp')}</th><th>{t('audit.thPayload')}</th><th>{t('audit.thTime')}</th></tr></thead>
               <tbody>
                 {logs.map(l => (
                   <tr key={l.id}>
@@ -79,9 +80,9 @@ export default function Audit() {
 
       {totalPages > 1 && (
         <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 16 }}>
-          <button className="btn btn-secondary btn-sm" disabled={page === 1} onClick={() => setPage(p => p - 1)}>← Prev</button>
+          <button className="btn btn-secondary btn-sm" disabled={page === 1} onClick={() => setPage(p => p - 1)}>{t('users.prev')}</button>
           <span style={{ display: 'flex', alignItems: 'center', color: 'var(--text-secondary)', fontSize: 13 }}>{page} / {totalPages}</span>
-          <button className="btn btn-secondary btn-sm" disabled={page === totalPages} onClick={() => setPage(p => p + 1)}>Next →</button>
+          <button className="btn btn-secondary btn-sm" disabled={page === totalPages} onClick={() => setPage(p => p + 1)}>{t('users.next')}</button>
         </div>
       )}
     </div>

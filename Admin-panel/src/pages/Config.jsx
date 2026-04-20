@@ -1,17 +1,18 @@
 import { useState, useEffect } from 'react';
 import { api } from '../utils/api.js';
+import { t } from '../i18n/i18n.js';
 
-const CONFIG_META = {
-  system_prompt:         { label: 'System Prompt',           type: 'textarea', description: 'MATRIYA LLM system instructions' },
-  stop_threshold:        { label: 'STOP Max Confidence',     type: 'number',   description: 'Max confidence % for STOP decision (default 0)' },
-  iterate_min:           { label: 'ITERATE Min Confidence',  type: 'number',   description: 'Min confidence % for ITERATE decision (default 1)' },
-  iterate_max:           { label: 'ITERATE Max Confidence',  type: 'number',   description: 'Max confidence % for ITERATE decision (default 69)' },
-  go_threshold:          { label: 'GO Min Confidence',       type: 'number',   description: 'Min confidence % for GO decision (default 70)' },
-  finance_cron_schedule: { label: 'Finance Cron Schedule',   type: 'text',     description: 'Cron expression for matriya-finance (default: 0 7 * * *)' },
-  daily_pipeline_limit:  { label: 'Daily Pipeline Limit',    type: 'number',   description: 'Max pipeline calls per user per day' },
-  whitelist_enabled:     { label: 'Whitelist Enabled',       type: 'select',   options: ['true','false'], description: 'Enable phone number whitelist enforcement' },
-  rachel_enabled:        { label: 'Rachel Notifications',    type: 'select',   options: ['true','false'], description: 'Send outbound WhatsApp alerts to Rachel on ITERATE' },
-};
+const CONFIG_KEYS = [
+  { key: 'system_prompt',         type: 'textarea' },
+  { key: 'stop_threshold',        type: 'number' },
+  { key: 'iterate_min',           type: 'number' },
+  { key: 'iterate_max',           type: 'number' },
+  { key: 'go_threshold',          type: 'number' },
+  { key: 'finance_cron_schedule', type: 'text' },
+  { key: 'daily_pipeline_limit',  type: 'number' },
+  { key: 'whitelist_enabled',     type: 'select', options: ['true', 'false'] },
+  { key: 'rachel_enabled',        type: 'select', options: ['true', 'false'] },
+];
 
 export default function Config() {
   const [config,  setConfig]  = useState({});
@@ -34,7 +35,7 @@ export default function Config() {
     try {
       await api.put('/api/admin/config', edits);
       setConfig({ ...edits });
-      showToast('Configuration saved');
+      showToast(t('config.toastSaved'));
     } catch (e) { showToast(e.message, 'error'); }
     finally { setSaving(false); }
   };
@@ -46,20 +47,20 @@ export default function Config() {
   return (
     <div>
       <div className="page-header" style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
-        <div><h1>Configuration</h1><p>Live system settings — changes apply instantly</p></div>
+        <div><h1>{t('pages.config')}</h1><p>{t('config.subtitle')}</p></div>
         <button className="btn btn-primary" onClick={save} disabled={!hasChanges || saving}>
-          {saving ? <><span className="btn-spinner" /> Saving…</> : '💾 Save Changes'}
+          {saving ? <><span className="btn-spinner" /> {t('config.saving')}</> : `💾 ${t('config.save')}`}
         </button>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 20 }}>
-        {Object.entries(CONFIG_META).map(([key, meta]) => (
+        {CONFIG_KEYS.map(({ key, type, options }) => (
           <div className="section-card" key={key}>
             <div style={{ marginBottom: 8 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{meta.label}</div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{meta.description}</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{t(`configMeta.${key}.label`)}</div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{t(`configMeta.${key}.description`)}</div>
             </div>
-            {meta.type === 'textarea' ? (
+            {type === 'textarea' ? (
               <textarea
                 className="input-field"
                 rows={4}
@@ -67,33 +68,33 @@ export default function Config() {
                 value={edits[key] ?? ''}
                 onChange={e => setEdits(p => ({ ...p, [key]: e.target.value }))}
               />
-            ) : meta.type === 'select' ? (
+            ) : type === 'select' ? (
               <select className="input-field" value={edits[key] ?? ''} onChange={e => setEdits(p => ({ ...p, [key]: e.target.value }))}>
-                {(meta.options || []).map(o => <option key={o} value={o}>{o}</option>)}
+                {(options || []).map(o => <option key={o} value={o}>{o}</option>)}
               </select>
             ) : (
               <input
-                type={meta.type}
+                type={type}
                 className="input-field"
                 value={edits[key] ?? ''}
                 onChange={e => setEdits(p => ({ ...p, [key]: e.target.value }))}
               />
             )}
             {edits[key] !== config[key] && (
-              <div style={{ fontSize: 11, color: 'var(--warning)', marginTop: 6 }}>⚠ Unsaved change</div>
+              <div style={{ fontSize: 11, color: 'var(--warning)', marginTop: 6 }}>⚠ {t('config.unsavedChange')}</div>
             )}
           </div>
         ))}
       </div>
 
       {hasChanges && (
-        <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 100 }}>
+        <div style={{ position: 'fixed', bottom: 24, insetInlineStart: '50%', transform: 'translateX(-50%)', zIndex: 100 }}>
           <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12, padding: '14px 24px', display: 'flex', gap: 12, alignItems: 'center', boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }}>
-            <span style={{ fontSize: 13, color: 'var(--warning)' }}>⚠ Unsaved changes</span>
+            <span style={{ fontSize: 13, color: 'var(--warning)' }}>⚠ {t('config.unsaved')}</span>
             <button className="btn btn-primary btn-sm" onClick={save} disabled={saving}>
-              {saving ? 'Saving…' : '💾 Save'}
+              {saving ? t('config.saving') : `💾 ${t('config.saveSm')}`}
             </button>
-            <button className="btn btn-secondary btn-sm" onClick={() => setEdits({ ...config })}>Discard</button>
+            <button className="btn btn-secondary btn-sm" onClick={() => setEdits({ ...config })}>{t('config.discard')}</button>
           </div>
         </div>
       )}

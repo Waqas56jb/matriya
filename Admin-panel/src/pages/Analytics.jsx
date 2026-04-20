@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line, CartesianGrid } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { api } from '../utils/api.js';
+import { t } from '../i18n/i18n.js';
 
 const TT_STYLE = { background: '#0b1630', border: '1px solid #1e3a5f', borderRadius: 8, fontSize: 12 };
 
@@ -35,7 +36,7 @@ export default function Analytics() {
   return (
     <div>
       <div className="page-header" style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
-        <div><h1>Analytics</h1><p>Traffic and decision statistics</p></div>
+        <div><h1>{t('pages.analytics')}</h1><p>{t('analytics.subtitle')}</p></div>
         <div style={{ display: 'flex', gap: 6 }}>
           {[7, 14, 30].map(d => (
             <button key={d} className={`btn btn-sm ${days === d ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setDays(d)}>
@@ -47,12 +48,12 @@ export default function Analytics() {
 
       <div className="stats-grid">
         {[
-          { icon: '👥', color: 'cyan',   label: 'Total Users',     value: overview?.total_users ?? '—'      },
-          { icon: '💬', color: 'purple', label: 'Total Messages',   value: overview?.total_messages ?? '—'  },
-          { icon: '✅', color: 'green',  label: 'GO decisions',     value: decCounts.GO ?? 0                 },
-          { icon: '⚠',  color: 'orange', label: 'ITERATE decisions',value: decCounts.ITERATE ?? 0           },
-          { icon: '🛑', color: 'red',    label: 'STOP decisions',   value: decCounts.STOP ?? 0              },
-          { icon: '⏱',  color: 'cyan',  label: 'Avg Response',     value: times ? `${(times.avg_ms/1000).toFixed(1)}s` : '—' },
+          { icon: '👥', color: 'cyan',   label: t('analytics.totalUsers'),     value: overview?.total_users ?? '—'      },
+          { icon: '💬', color: 'purple', label: t('analytics.totalMessages'),   value: overview?.total_messages ?? '—'  },
+          { icon: '✅', color: 'green',  label: t('analytics.goDecisions'),     value: decCounts.GO ?? 0                 },
+          { icon: '⚠',  color: 'orange', label: t('analytics.iterateDecisions'),value: decCounts.ITERATE ?? 0           },
+          { icon: '🛑', color: 'red',    label: t('analytics.stopDecisions'),   value: decCounts.STOP ?? 0              },
+          { icon: '⏱',  color: 'cyan',  label: t('analytics.avgResponse'),     value: times ? `${(times.avg_ms / 1000).toFixed(1)}s` : '—' },
         ].map(s => (
           <div className="stat-card" key={s.label}>
             <div className={`stat-icon ${s.color}`}>{s.icon}</div>
@@ -66,20 +67,20 @@ export default function Analytics() {
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, marginBottom: 24 }}>
         <div className="section-card">
-          <div className="section-title">📈 Message Volume</div>
+          <div className="section-title">📈 {t('analytics.msgVolume')}</div>
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={volume} margin={{ left: -10 }}>
               <XAxis dataKey="date" tick={{ fill: '#8baac8', fontSize: 10 }} />
               <YAxis tick={{ fill: '#8baac8', fontSize: 10 }} />
               <Tooltip contentStyle={TT_STYLE} labelStyle={{ color: '#f0f6ff' }} />
               <defs><linearGradient id="vg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#00d4ff" /><stop offset="100%" stopColor="#7c3aed" /></linearGradient></defs>
-              <Bar dataKey="count" fill="url(#vg)" radius={[4,4,0,0]} />
+              <Bar dataKey="count" fill="url(#vg)" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
 
         <div className="section-card">
-          <div className="section-title">🎯 Decision Distribution</div>
+          <div className="section-title">🎯 {t('analytics.decisionDist')}</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginTop: 8 }}>
             {[
               { label: 'GO',      color: '#10b981', count: decCounts.GO      || 0 },
@@ -104,9 +105,9 @@ export default function Analytics() {
       </div>
 
       <div className="section-card">
-        <div className="section-title">🏆 Most Active Users</div>
+        <div className="section-title">🏆 {t('analytics.topUsers')}</div>
         {topUsers.length === 0 ? (
-          <div className="empty-state"><div className="icon">📊</div><p>No data yet</p></div>
+          <div className="empty-state"><div className="icon">📊</div><p>{t('analytics.noData')}</p></div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {topUsers.map((u, i) => {
@@ -114,12 +115,12 @@ export default function Analytics() {
               const pct = Math.round((u.count / max) * 100);
               return (
                 <div key={u.phone} style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                  <div style={{ width: 24, fontSize: 12, color: 'var(--text-muted)', textAlign: 'right', flexShrink: 0 }}>#{i+1}</div>
+                  <div style={{ width: 24, fontSize: 12, color: 'var(--text-muted)', textAlign: 'end', flexShrink: 0 }}>#{i + 1}</div>
                   <div style={{ flex: 1, fontSize: 13, fontFamily: 'monospace', color: 'var(--text-primary)' }}>{u.phone}</div>
                   <div style={{ flex: 2, background: 'var(--border)', borderRadius: 4, height: 8, overflow: 'hidden' }}>
                     <div style={{ height: '100%', width: `${pct}%`, background: 'var(--accent-grad)', borderRadius: 4 }} />
                   </div>
-                  <div style={{ width: 40, textAlign: 'right', fontSize: 13, fontWeight: 700, color: 'var(--accent-cyan)' }}>{u.count}</div>
+                  <div style={{ width: 40, textAlign: 'end', fontSize: 13, fontWeight: 700, color: 'var(--accent-cyan)' }}>{u.count}</div>
                 </div>
               );
             })}

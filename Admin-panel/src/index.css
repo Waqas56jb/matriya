@@ -39,6 +39,10 @@
 
 html { scroll-behavior: smooth; }
 
+html[lang="he"] body {
+  font-family: 'Segoe UI', 'Rubik', 'Noto Sans Hebrew', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
 body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   background: var(--bg-root);
@@ -182,7 +186,7 @@ tbody td { padding: 14px 16px; font-size: 13px; color: var(--text-primary); vert
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .toast {
-  position: fixed; bottom: 24px; right: 24px; z-index: 9999;
+  position: fixed; bottom: 24px; inset-inline-end: 24px; z-index: 9999;
   background: var(--bg-card2); border: 1px solid var(--border);
   border-radius: var(--radius-md); padding: 14px 20px;
   display: flex; align-items: center; gap: 12px;
@@ -190,9 +194,9 @@ tbody td { padding: 14px 16px; font-size: 13px; color: var(--text-primary); vert
   animation: slideIn 0.3s ease;
   max-width: 340px;
 }
-.toast.success { border-left: 3px solid var(--success); }
-.toast.error   { border-left: 3px solid var(--danger); }
-@keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+.toast.success { border-inline-start: 3px solid var(--success); }
+.toast.error   { border-inline-start: 3px solid var(--danger); }
+@keyframes slideIn { from { transform: translateX(20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 
 @media (max-width: 768px) {
   .stats-grid { grid-template-columns: 1fr 1fr; }

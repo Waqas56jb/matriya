@@ -1,24 +1,27 @@
 import { useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import Sidebar from './Sidebar.jsx';
+import LanguageSwitcher from './LanguageSwitcher.jsx';
+import { t } from '../i18n/i18n.js';
 import './Layout.css';
 
-const PAGE_TITLES = {
-  '/dashboard':   'Dashboard',
-  '/users':       'User Management',
-  '/sessions':    'Active Sessions',
-  '/analytics':   'Analytics',
-  '/whatsapp':    'WhatsApp',
-  '/experiments': 'Experiments',
-  '/system':      'System Health',
-  '/audit':       'Audit Log',
-  '/config':      'Configuration',
+const PATH_PAGE = {
+  '/dashboard':   'dashboard',
+  '/users':       'users',
+  '/sessions':    'sessions',
+  '/analytics':   'analytics',
+  '/whatsapp':    'whatsapp',
+  '/experiments': 'experiments',
+  '/system':      'system',
+  '/audit':       'audit',
+  '/config':      'config',
 };
 
 export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
-  const title = PAGE_TITLES[location.pathname] || 'Admin Panel';
+  const pageKey = PATH_PAGE[location.pathname];
+  const title = pageKey ? t(`pages.${pageKey}`) : t('layout.defaultTitle');
 
   return (
     <div className="layout">
@@ -28,7 +31,7 @@ export default function Layout() {
       {/* Mobile sidebar overlay */}
       {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
       <div className={`sidebar sidebar-mobile ${sidebarOpen ? 'open' : ''}`}
-        style={{ position: 'fixed', top: 0, left: 0, zIndex: 200 }}>
+        style={{ position: 'fixed', top: 0, insetInlineStart: 0, zIndex: 200 }}>
         <Sidebar mobile onClose={() => setSidebarOpen(false)} />
       </div>
 
@@ -40,9 +43,12 @@ export default function Layout() {
           </button>
           <div className="topbar-title">{title}</div>
           <div className="topbar-right">
+            <div className="topbar-lang-mobile">
+              <LanguageSwitcher />
+            </div>
             <div className="topbar-status">
               <span className="status-dot" />
-              <span>Live</span>
+              <span>{t('layout.live')}</span>
             </div>
           </div>
         </header>

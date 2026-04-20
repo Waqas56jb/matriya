@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ADMIN_API_BASE } from '../config.js';
+import LanguageSwitcher from '../components/LanguageSwitcher.jsx';
+import { t } from '../i18n/i18n.js';
 import './Auth.css';
 
 export default function ResetPassword() {
@@ -21,7 +23,7 @@ export default function ResetPassword() {
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        throw new Error(d.error || 'Request failed');
+        throw new Error(d.error || t('reset.requestFailed'));
       }
       setStep(2);
     } catch (err) {
@@ -40,27 +42,30 @@ export default function ResetPassword() {
       </div>
 
       <div className="auth-card">
+        <div className="auth-card-top">
+          <LanguageSwitcher className="lang-switcher--auth" />
+        </div>
         <div className="auth-logo">
           <div className="auth-logo-icon">M</div>
           <div>
             <div className="auth-logo-name">MATRIYA</div>
-            <div className="auth-logo-sub">Admin Command Center</div>
+            <div className="auth-logo-sub">{t('login.commandCenter')}</div>
           </div>
         </div>
 
         <div className="auth-tabs">
-          <Link to="/login" className="auth-tab">Sign In</Link>
-          <div className="auth-tab active">Reset Password</div>
+          <Link to="/login" className="auth-tab">{t('login.signInTab')}</Link>
+          <div className="auth-tab active">{t('reset.title')}</div>
         </div>
 
         {step === 1 ? (
           <form onSubmit={handleSubmit}>
             <p className="auth-description">
-              Enter your admin email address and we'll send a reset link to your inbox.
+              {t('reset.description')}
             </p>
 
             <div className="input-group">
-              <label className="input-label">Email Address</label>
+              <label className="input-label">{t('login.email')}</label>
               <div className="input-icon-wrap">
                 <span className="input-icon">✉</span>
                 <input
@@ -77,20 +82,22 @@ export default function ResetPassword() {
             {error && <div className="auth-error">⚠ {error}</div>}
 
             <button type="submit" className="btn btn-primary btn-lg auth-submit" disabled={loading}>
-              {loading ? <><span className="btn-spinner" /> Sending…</> : 'Send Reset Link'}
+              {loading ? <><span className="btn-spinner" /> {t('reset.sending')}</> : t('reset.sendLink')}
             </button>
           </form>
         ) : (
           <div className="auth-success-state">
             <div className="auth-success-icon">✓</div>
-            <h3>Check your inbox</h3>
-            <p>A reset link has been sent to <strong>{email}</strong>. It expires in 30 minutes.</p>
+            <h3>{t('reset.successTitle')}</h3>
+            <p>
+              {t('reset.successBody')} <strong>{email}</strong>. {t('reset.successExpire')}
+            </p>
           </div>
         )}
 
         <div className="auth-footer-link">
-          Remember your password?{' '}
-          <Link to="/login">Sign in here</Link>
+          {t('reset.remember')}{' '}
+          <Link to="/login">{t('reset.signInHere')}</Link>
         </div>
       </div>
     </div>

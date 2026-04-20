@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 import { api } from '../utils/api.js';
+import { t } from '../i18n/i18n.js';
 
 function RoleBadge({ is_admin }) {
   return is_admin
-    ? <span className="badge badge-danger">Admin</span>
-    : <span className="badge badge-info">Operator</span>;
+    ? <span className="badge badge-danger">{t('users.admin')}</span>
+    : <span className="badge badge-info">{t('users.operator')}</span>;
 }
 
 function StatusBadge({ is_active, status }) {
@@ -39,12 +40,12 @@ export default function Users() {
   };
 
   useEffect(() => { load(); }, [page, active]);
-  useEffect(() => { const t = setTimeout(load, 400); return () => clearTimeout(t); }, [search]);
+  useEffect(() => { const tm = setTimeout(load, 400); return () => clearTimeout(tm); }, [search]);
 
   const action = async (userId, endpoint, body) => {
     try {
       await api.post(`/api/admin/users/${userId}/${endpoint}`, body);
-      showToast(`Done — ${endpoint}`);
+      showToast(`${t('users.toastDone')} — ${endpoint}`);
       load();
     } catch (e) { showToast(e.message, 'error'); }
   };
@@ -54,8 +55,8 @@ export default function Users() {
   return (
     <div>
       <div className="page-header">
-        <h1>User Management</h1>
-        <p>{total} total users registered</p>
+        <h1>{t('pages.users')}</h1>
+        <p>{t('users.subtitleCount', { count: total })}</p>
       </div>
 
       <div className="toolbar">
@@ -63,16 +64,16 @@ export default function Users() {
           <span className="search-icon">🔍</span>
           <input
             className="input-field"
-            placeholder="Search by email or username…"
+            placeholder={t('users.searchPh')}
             value={search}
             onChange={e => { setSearch(e.target.value); setPage(1); }}
           />
         </div>
         <select className="input-field" style={{ width: 'auto' }}
           value={active} onChange={e => { setActive(e.target.value); setPage(1); }}>
-          <option value="all">All Users</option>
-          <option value="true">Active</option>
-          <option value="false">Inactive / Blocked</option>
+          <option value="all">{t('users.allUsers')}</option>
+          <option value="true">{t('users.active')}</option>
+          <option value="false">{t('users.inactive')}</option>
         </select>
       </div>
 
@@ -80,17 +81,17 @@ export default function Users() {
         {loading ? (
           <div className="loading"><div className="spinner" /></div>
         ) : users.length === 0 ? (
-          <div className="empty-state"><div className="icon">👥</div><p>No users found</p></div>
+          <div className="empty-state"><div className="icon">👥</div><p>{t('users.noUsers')}</p></div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table>
               <thead>
                 <tr>
-                  <th>User</th>
-                  <th>Role</th>
-                  <th>Status</th>
-                  <th>Last Login</th>
-                  <th>Actions</th>
+                  <th>{t('users.thUser')}</th>
+                  <th>{t('users.thRole')}</th>
+                  <th>{t('users.thStatus')}</th>
+                  <th>{t('users.thLastLogin')}</th>
+                  <th>{t('users.thActions')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -114,15 +115,15 @@ export default function Users() {
                     <td>
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                         {!u.is_active && (
-                          <button className="btn btn-success btn-sm" onClick={() => action(u.id, 'approve')}>✓ Activate</button>
+                          <button className="btn btn-success btn-sm" onClick={() => action(u.id, 'approve')}>✓ {t('users.activate')}</button>
                         )}
                         {u.is_active && (
-                          <button className="btn btn-danger btn-sm" onClick={() => action(u.id, 'block', { reason: 'Blocked by admin' })}>🚫 Block</button>
+                          <button className="btn btn-danger btn-sm" onClick={() => action(u.id, 'block', { reason: 'Blocked by admin' })}>🚫 {t('users.block')}</button>
                         )}
                         {!u.is_active && u.status === 'blocked' && (
-                          <button className="btn btn-success btn-sm" onClick={() => action(u.id, 'unblock')}>✓ Unblock</button>
+                          <button className="btn btn-success btn-sm" onClick={() => action(u.id, 'unblock')}>✓ {t('users.unblock')}</button>
                         )}
-                        <button className="btn btn-secondary btn-sm" onClick={() => action(u.id, 'revoke')}>⎋ Revoke</button>
+                        <button className="btn btn-secondary btn-sm" onClick={() => action(u.id, 'revoke')}>⎋ {t('users.revoke')}</button>
                       </div>
                     </td>
                   </tr>
@@ -135,9 +136,9 @@ export default function Users() {
 
       {totalPages > 1 && (
         <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 16 }}>
-          <button className="btn btn-secondary btn-sm" disabled={page === 1} onClick={() => setPage(p => p - 1)}>← Prev</button>
+          <button className="btn btn-secondary btn-sm" disabled={page === 1} onClick={() => setPage(p => p - 1)}>{t('users.prev')}</button>
           <span style={{ display: 'flex', alignItems: 'center', color: 'var(--text-secondary)', fontSize: 13 }}>{page} / {totalPages}</span>
-          <button className="btn btn-secondary btn-sm" disabled={page === totalPages} onClick={() => setPage(p => p + 1)}>Next →</button>
+          <button className="btn btn-secondary btn-sm" disabled={page === totalPages} onClick={() => setPage(p => p + 1)}>{t('users.next')}</button>
         </div>
       )}
 

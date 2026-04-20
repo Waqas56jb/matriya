@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 import { api } from '../utils/api.js';
+import { t } from '../i18n/i18n.js';
 import './Dashboard.css';
 
 const DECISION_COLORS = { GO: '#10b981', ITERATE: '#f59e0b', STOP: '#ef4444', OTHER: '#4d6a88' };
@@ -30,21 +31,30 @@ export default function Dashboard() {
   if (loading) return <div className="loading"><div className="spinner" /></div>;
 
   const decisionPie = decisions?.counts
-    ? Object.entries(decisions.counts).filter(([,v]) => v > 0).map(([name, value]) => ({ name, value }))
+    ? Object.entries(decisions.counts).filter(([, v]) => v > 0).map(([name, value]) => ({ name, value }))
     : [];
 
   const STATS = [
-    { icon: '👥', color: 'cyan',   label: 'Total Users',       value: overview?.total_users ?? '—'       },
-    { icon: '💬', color: 'purple', label: 'Total Messages',     value: overview?.total_messages ?? '—'    },
-    { icon: '🧪', color: 'green',  label: 'Experiments',        value: overview?.total_experiments ?? '—' },
-    { icon: '⏳', color: 'orange', label: 'Pending Approvals',  value: overview?.pending_approvals ?? '—' },
+    { icon: '👥', color: 'cyan',   label: t('dashboard.totalUsers'),       value: overview?.total_users ?? '—'       },
+    { icon: '💬', color: 'purple', label: t('dashboard.totalMessages'),     value: overview?.total_messages ?? '—'    },
+    { icon: '🧪', color: 'green',  label: t('dashboard.experiments'),        value: overview?.total_experiments ?? '—' },
+    { icon: '⏳', color: 'orange', label: t('dashboard.pendingApprovals'),  value: overview?.pending_approvals ?? '—' },
+  ];
+
+  const quickLinks = [
+    { to: '/users?status=pending', icon: '✅', label: t('dashboard.approveUsers'),    color: 'success' },
+    { to: '/whatsapp',             icon: '💬', label: t('dashboard.viewQueue'),       color: 'info'    },
+    { to: '/sessions',             icon: '👁', label: t('dashboard.liveSessions'),    color: 'cyan'    },
+    { to: '/experiments',          icon: '🧪', label: t('nav.experiments'),      color: 'purple'  },
+    { to: '/audit',                icon: '🔍', label: t('dashboard.auditLog'),        color: 'warning' },
+    { to: '/system',               icon: '🖥', label: t('dashboard.systemHealth'),   color: 'green'   },
   ];
 
   return (
     <div>
       <div className="page-header">
-        <h1>Dashboard</h1>
-        <p>MATRIYA system overview — live data</p>
+        <h1>{t('pages.dashboard')}</h1>
+        <p>{t('dashboard.subtitle')}</p>
       </div>
 
       {/* Stats */}
@@ -63,7 +73,7 @@ export default function Dashboard() {
       <div className="dashboard-charts">
         {/* Message volume chart */}
         <div className="section-card">
-          <div className="section-title">📈 WhatsApp Messages (Last 7 days)</div>
+          <div className="section-title">📈 {t('dashboard.msgChart')}</div>
           {msgVolume.length > 0 ? (
             <ResponsiveContainer width="100%" height={200}>
               <BarChart data={msgVolume} margin={{ left: -10 }}>
@@ -73,7 +83,7 @@ export default function Dashboard() {
                   contentStyle={{ background: '#0b1630', border: '1px solid #1e3a5f', borderRadius: 8, fontSize: 12 }}
                   labelStyle={{ color: '#f0f6ff' }}
                 />
-                <Bar dataKey="count" fill="url(#barGrad)" radius={[4,4,0,0]} />
+                <Bar dataKey="count" fill="url(#barGrad)" radius={[4, 4, 0, 0]} />
                 <defs>
                   <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor="#00d4ff" />
@@ -83,13 +93,13 @@ export default function Dashboard() {
               </BarChart>
             </ResponsiveContainer>
           ) : (
-            <div className="empty-state"><div className="icon">📊</div><p>No message data yet</p></div>
+            <div className="empty-state"><div className="icon">📊</div><p>{t('dashboard.noMsgData')}</p></div>
           )}
         </div>
 
         {/* Decision breakdown */}
         <div className="section-card">
-          <div className="section-title">🎯 Decision Breakdown (7 days)</div>
+          <div className="section-title">🎯 {t('dashboard.decisionChart')}</div>
           {decisionPie.length > 0 ? (
             <ResponsiveContainer width="100%" height={200}>
               <PieChart>
@@ -105,14 +115,14 @@ export default function Dashboard() {
               </PieChart>
             </ResponsiveContainer>
           ) : (
-            <div className="empty-state"><div className="icon">🎯</div><p>No decisions recorded yet</p></div>
+            <div className="empty-state"><div className="icon">🎯</div><p>{t('dashboard.noDecisionData')}</p></div>
           )}
         </div>
       </div>
 
       {/* Service Health */}
       <div className="section-card">
-        <div className="section-title">🖥 Service Health</div>
+        <div className="section-title">🖥 {t('dashboard.serviceHealth')}</div>
         <div className="health-grid">
           {(health?.services || []).map(s => (
             <div className="health-item" key={s.service}>
@@ -127,16 +137,9 @@ export default function Dashboard() {
 
       {/* Quick Actions */}
       <div className="section-card">
-        <div className="section-title">⚡ Quick Actions</div>
+        <div className="section-title">⚡ {t('dashboard.quickActions')}</div>
         <div className="quick-actions">
-          {[
-            { to: '/users?status=pending', icon: '✅', label: 'Approve Users',    color: 'success' },
-            { to: '/whatsapp',             icon: '💬', label: 'View Queue',       color: 'info'    },
-            { to: '/sessions',             icon: '👁', label: 'Live Sessions',    color: 'cyan'    },
-            { to: '/experiments',          icon: '🧪', label: 'Experiments',      color: 'purple'  },
-            { to: '/audit',                icon: '🔍', label: 'Audit Log',        color: 'warning' },
-            { to: '/system',               icon: '🖥', label: 'System Health',   color: 'green'   },
-          ].map(a => (
+          {quickLinks.map(a => (
             <Link key={a.to} to={a.to} className={`quick-action quick-action-${a.color}`}>
               <span className="quick-action-icon">{a.icon}</span>
               <span>{a.label}</span>

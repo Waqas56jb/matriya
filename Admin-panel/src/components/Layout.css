@@ -6,7 +6,7 @@
 
 .layout-main {
   flex: 1;
-  margin-left: 240px;
+  margin-inline-start: 240px;
   display: flex;
   flex-direction: column;
   min-height: 100vh;
@@ -57,6 +57,10 @@
   gap: 16px;
 }
 
+.topbar-lang-mobile {
+  display: none;
+}
+
 .topbar-status {
   display: flex;
   align-items: center;
@@ -95,8 +99,9 @@
 
 /* Responsive */
 @media (max-width: 900px) {
-  .layout-main { margin-left: 0; }
+  .layout-main { margin-inline-start: 0; }
   .topbar-menu { display: flex; }
+  .topbar-lang-mobile { display: flex; align-items: center; }
 }
 
 @media (max-width: 600px) {
