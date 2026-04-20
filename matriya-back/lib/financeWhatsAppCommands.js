@@ -15,9 +15,26 @@ export function defaultShadowSignalsPath() {
   return path.join(__dirname, '..', '..', 'matriya-finance', 'Layer3_Shadow_Signals.ndjson');
 }
 
+/**
+ * First existing path wins: explicit env → sibling matriya-finance → bundled matriya-back/data.
+ * Railway often deploys only matriya-back; sibling repo is missing unless you set FINANCE_SHADOW_SIGNALS_PATH.
+ */
 export function resolveShadowSignalsLogPath() {
   const env = (process.env.FINANCE_SHADOW_SIGNALS_PATH || '').trim();
-  return env || defaultShadowSignalsPath();
+  if (env) return env;
+
+  const candidates = [
+    defaultShadowSignalsPath(),
+    path.join(__dirname, '..', 'data', 'Layer3_Shadow_Signals.ndjson'),
+  ];
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) return p;
+    } catch {
+      /* ignore */
+    }
+  }
+  return candidates[1];
 }
 
 function escapeTwiml(text) {
@@ -57,7 +74,9 @@ export function buildFinanceCommandReply(body) {
 
   if (cmd === 'STATUS') {
     const lines = parseNdjsonTail(logPath, 5);
-    if (lines === null) return 'Log not found.';
+    if (lines === null) {
+      return 'Log not readable. Set FINANCE_SHADOW_SIGNALS_PATH on the server (see server logs for path).';
+    }
     if (lines.length === 0) return 'No signals yet.';
     return lines
       .map((s) => {
@@ -85,18 +104,19 @@ export function buildFinanceCommandReply(body) {
 
   if (cmd === 'HELP') {
     return [
-      'Finance commands (prefix F + space):',
-      'F STATUS — last 5 signals',
-      'F WATCHLIST — monitored instruments',
-      'F LOG — last 10 entries',
-      'F HELP — this list',
-      'DETAIL [ID] / CLOSE [ID] — same prefix when supported'
+      'Finance commands (use F + space so lab does not intercept):',
+      'F STATUS — last 5 signals (legacy: STATUS)',
+      'F WATCHLIST — list (legacy: WATCHLIST)',
+      'F LOG — last 10 entries (legacy: LOG)',
+      'F HELP — this list (legacy: HELP)'
     ].join('\n');
   }
 
   if (cmd === 'LOG') {
     const lines = parseNdjsonTail(logPath, 10);
-    if (lines === null) return 'Log not found.';
+    if (lines === null) {
+      return 'Log not readable. Set FINANCE_SHADOW_SIGNALS_PATH on the server (see server logs for path).';
+    }
     if (lines.length === 0) return 'No signals yet.';
     return lines
       .map((s) => {
@@ -112,12 +132,24 @@ export function buildFinanceCommandReply(body) {
   return 'Unknown command. Send HELP for list.';
 }
 
-/** Finance commands that return TwiML (not the lab pipeline). */
+/** Finance commands that return TwiML (not the lab pipeline), without F prefix. */
 export const FINANCE_WHATSAPP_COMMANDS = ['STATUS', 'WATCHLIST', 'LOG', 'HELP'];
 
+/**
+ * Inbound body after trim → uppercase inner command for buildFinanceCommandReply.
+ * "F STATUS" → "STATUS"; legacy "status" → "STATUS".
+ */
+export function normalizeFinanceCommandBody(trimmedBody) {
+  const upper = String(trimmedBody || '').trim().toUpperCase();
+  if (upper.startsWith('F ')) return upper.slice(2).trim();
+  return upper;
+}
+
+/** True if message should be handled as finance (not lab / RAG pipeline). */
 export function isFinanceWhatsappCommand(trimmedBody) {
-  const cmd = String(trimmedBody || '').trim().toUpperCase();
-  return FINANCE_WHATSAPP_COMMANDS.includes(cmd);
+  const upper = String(trimmedBody || '').trim().toUpperCase();
+  if (upper.startsWith('F ')) return true;
+  return FINANCE_WHATSAPP_COMMANDS.includes(upper);
 }
 
 /**

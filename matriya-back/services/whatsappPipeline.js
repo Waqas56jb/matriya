@@ -25,6 +25,11 @@ import { createClient } from '@supabase/supabase-js';
 import twilio from 'twilio';
 import { runPipeline } from '../agents/orchestration.js';
 import logger from '../logger.js';
+import {
+  buildFinanceCommandReply,
+  isFinanceWhatsappCommand,
+  normalizeFinanceCommandBody,
+} from '../lib/financeWhatsAppCommands.js';
 
 const TABLE = 'whatsapp_tasks';
 const POLL_INTERVAL_MS = 30_000; // 30 seconds
@@ -152,6 +157,25 @@ export async function processPendingTasks() {
 
   for (const task of tasks) {
     try {
+      // Finance commands must never hit the lab pipeline (e.g. rows queued before routing fix).
+      if (isFinanceWhatsappCommand(task.message)) {
+        const replyText = buildFinanceCommandReply(normalizeFinanceCommandBody(task.message));
+        logger.info(`[whatsappPipeline] task ${task.id} → finance inner=${normalizeFinanceCommandBody(task.message)}`);
+        try {
+          await sendReplyTo(task.from_number, replyText);
+        } catch (replyErr) {
+          logger.error(`[whatsappPipeline] finance sendReply failed: ${replyErr.message}`);
+        }
+        const { error: finUpd } = await sb.from(TABLE).update({ status: 'DONE' }).eq('id', task.id);
+        if (finUpd) {
+          logger.error(`[whatsappPipeline] finance DB update: ${finUpd.message}`);
+          errors++;
+        } else {
+          processed++;
+        }
+        continue;
+      }
+
       // 1. Run the MATRIYA pipeline (now uses RAG + OpenAI)
       logger.info(`[whatsappPipeline] task ${task.id} → runPipeline("${task.message.slice(0, 60)}")`);
       let pipelineResult;
