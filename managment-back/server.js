@@ -217,6 +217,7 @@ app.set('trust proxy', 1); // Vercel sends X-Forwarded-For; required for express
 const DEFAULT_CORS_ORIGINS = [
   'https://manegment-front.vercel.app',
   'https://matriya-front.vercel.app',
+  'https://matriya-system-project.vercel.app',
   'http://localhost:5173',
   'http://localhost:3000',
   'http://localhost:3001',
@@ -239,10 +240,11 @@ function getAllowedOrigins() {
 function shouldAllowVercelOriginsByDefault() {
   // Security rule:
   // - If user explicitly set CORS_ORIGINS, respect it strictly (no wildcard).
-  // - If not set, allow *.vercel.app so new frontend deployments don't break auth preflight.
+  // - If not set, allow https://*.vercel.app so preview/production frontends work. The API
+  //   usually runs on Railway/Heroku/etc., where VERCEL_* is never set — do not require it.
   const hasExplicitList = Boolean((process.env.CORS_ORIGINS || '').trim());
   if (hasExplicitList) return false;
-  return Boolean(process.env.VERCEL_ENV || process.env.VERCEL_URL);
+  return true;
 }
 
 function isOriginAllowed(origin, allowedList) {
