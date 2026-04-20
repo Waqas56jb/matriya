@@ -10,7 +10,10 @@ import {
   getUserByUsername,
   getUserByEmail,
   createAccessToken,
-  ACCESS_TOKEN_EXPIRE_MINUTES_EXPORT as ACCESS_TOKEN_EXPIRE_MINUTES
+  ACCESS_TOKEN_EXPIRE_MINUTES_EXPORT as ACCESS_TOKEN_EXPIRE_MINUTES,
+  createPasswordResetToken,
+  verifyPasswordResetToken,
+  setUserPassword
 } from './auth.js';
 import { getDb, initDb } from './database.js';
 import logger from './logger.js';
@@ -93,8 +96,16 @@ async function requireAuth(req, res, next) {
  * Returns:
  *   Access token and user information
  */
+function isPublicSignupDisabled() {
+  const v = process.env.MATRIYA_DISABLE_PUBLIC_SIGNUP || process.env.DISABLE_MATRIYA_PUBLIC_SIGNUP;
+  return v === '1' || v === 'true' || String(v).toLowerCase() === 'yes';
+}
+
 router.post("/signup", ensureDbInitialized, async (req, res) => {
   try {
+    if (isPublicSignupDisabled()) {
+      return res.status(403).json({ error: 'Self-registration is disabled. Use an administrator-provisioned account.' });
+    }
     const { username, email, password, full_name } = req.body;
     
     if (!username || !email || !password) {
@@ -154,15 +165,16 @@ router.post("/signup", ensureDbInitialized, async (req, res) => {
  */
 router.post("/login", ensureDbInitialized, async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const identifier = (req.body.email || req.body.username || '').trim();
+    const { password } = req.body;
     
-    if (!username || !password) {
-      return res.status(400).json({ error: "username and password are required" });
+    if (!identifier || !password) {
+      return res.status(400).json({ error: "email (or username) and password are required" });
     }
     
-    const user = await authenticateUser(username, password);
+    const user = await authenticateUser(identifier, password);
     if (!user) {
-      return res.status(401).json({ error: "Incorrect username or password" });
+      return res.status(401).json({ error: "Incorrect email or password" });
     }
     
     // Update last login
@@ -219,6 +231,98 @@ router.get("/me", ensureDbInitialized, requireAuth, async (req, res) => {
  * List all users (id, username) for manager "add member" dropdown.
  * Same users as Matriya auth; requires any authenticated user.
  */
+const PROVISION_HEADER = 'x-matriya-provision-key';
+
+/** Admin-backend only: create Management panel user (same users table; bcrypt + admin-visible plain copy). */
+router.post("/management/provision", ensureDbInitialized, async (req, res) => {
+  try {
+    const secret = process.env.MATRIYA_PROVISION_SECRET || '';
+    const sent = req.get(PROVISION_HEADER) || req.headers[PROVISION_HEADER];
+    if (!secret || sent !== secret) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    const { username, email, password, full_name } = req.body || {};
+    if (!username || !email || !password) {
+      return res.status(400).json({ error: 'username, email, and password are required' });
+    }
+    if (!String(email).includes('@')) {
+      return res.status(400).json({ error: 'Invalid email format' });
+    }
+    if (String(password).length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    }
+    if (await getUserByUsername(String(username).trim())) {
+      return res.status(400).json({ error: 'Username already registered' });
+    }
+    if (await getUserByEmail(String(email).trim())) {
+      return res.status(400).json({ error: 'Email already registered' });
+    }
+    const user = await createUser(String(username).trim(), String(email).trim(), String(password), full_name || null, {
+      isManagementUser: true,
+      storePlainPasswordForAdmin: true
+    });
+    return res.status(201).json({
+      id: user.id,
+      username: user.username,
+      email: user.email,
+      full_name: user.full_name,
+      is_management_user: true,
+      password_updated_at: user.password_updated_at ? user.password_updated_at.toISOString() : null
+    });
+  } catch (e) {
+    logger.error(`Management provision error: ${e.message}`);
+    return res.status(500).json({ error: e.message || 'Provision failed' });
+  }
+});
+
+/** Step 1: request reset token (management users only). */
+router.post("/management/forgot-request", ensureDbInitialized, async (req, res) => {
+  try {
+    const email = String((req.body || {}).email || '').trim().toLowerCase();
+    if (!email || !email.includes('@')) {
+      return res.status(400).json({ error: 'Valid email is required' });
+    }
+    const user = await getUserByEmail(email);
+    if (!user || !user.is_management_user) {
+      return res.status(404).json({ error: 'No management account found for this email' });
+    }
+    if (!user.is_active) {
+      return res.status(403).json({ error: 'Account is inactive' });
+    }
+    const reset_token = createPasswordResetToken(email);
+    return res.json({ reset_token, email: user.email });
+  } catch (e) {
+    logger.error(`Forgot request error: ${e.message}`);
+    return res.status(500).json({ error: e.message || 'Request failed' });
+  }
+});
+
+/** Step 2: set new password using reset_token from forgot-request. */
+router.post("/management/forgot-complete", ensureDbInitialized, async (req, res) => {
+  try {
+    const { reset_token, new_password, confirm_password } = req.body || {};
+    const email = verifyPasswordResetToken(String(reset_token || ''));
+    if (!email) {
+      return res.status(400).json({ error: 'Invalid or expired reset link. Start over from Forgot password.' });
+    }
+    if (!new_password || new_password !== confirm_password) {
+      return res.status(400).json({ error: 'Passwords do not match' });
+    }
+    if (String(new_password).length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    }
+    const user = await getUserByEmail(email);
+    if (!user || !user.is_management_user) {
+      return res.status(404).json({ error: 'Account not found' });
+    }
+    await setUserPassword(user, new_password, { isManagementReset: true });
+    return res.json({ ok: true, message: 'Password updated. You can sign in now.' });
+  } catch (e) {
+    logger.error(`Forgot complete error: ${e.message}`);
+    return res.status(500).json({ error: e.message || 'Reset failed' });
+  }
+});
+
 router.get("/users", ensureDbInitialized, requireAuth, async (req, res) => {
   try {
     if (!User) return res.status(503).json({ error: "Database not available" });

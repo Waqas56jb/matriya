@@ -1454,7 +1454,14 @@ function forwardAuth(method, path, req, res) {
 }
 
 app.post('/api/auth/login', limiterLoginMw, (req, res) => forwardAuth('POST', '/login', req, res));
-app.post('/api/auth/signup', limiterLoginMw, (req, res) => forwardAuth('POST', '/signup', req, res));
+/** Management panel: accounts are created by MATRIYA Admin only — no self-registration. */
+app.post('/api/auth/signup', limiterLoginMw, (_req, res) => {
+  res.status(403).json({ error: 'Self-registration is disabled. Ask your administrator for an account.' });
+});
+app.post('/api/auth/management/forgot-request', limiterLoginMw, (req, res) =>
+  forwardAuth('POST', '/management/forgot-request', req, res));
+app.post('/api/auth/management/forgot-complete', limiterLoginMw, (req, res) =>
+  forwardAuth('POST', '/management/forgot-complete', req, res));
 app.get('/api/auth/me', (req, res) => {
   if (!MATRIYA_BACK_URL) return res.status(503).json({ error: 'MATRIYA_BACK_URL not set' });
   const url = `${MATRIYA_BACK_URL}/auth/me`;

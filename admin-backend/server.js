@@ -23,6 +23,8 @@
  *   GET  /api/admin/audit                  — full admin audit log
  *   GET  /api/admin/config                 — system config values
  *   PUT  /api/admin/config                 — update config values
+ *   GET  /api/admin/management-users       — list Management panel users (plain password column for admin)
+ *   POST /api/admin/management-users       — provision user (calls Matriya with MATRIYA_PROVISION_SECRET)
  */
 
 import 'dotenv/config';
@@ -40,6 +42,7 @@ import experimentsRouter from './routes/experiments.js';
 import systemRouter   from './routes/system.js';
 import auditRouter    from './routes/audit.js';
 import configRouter   from './routes/config.js';
+import managementUsersRouter from './routes/managementUsers.js';
 
 import { requireAdmin } from './middleware/auth.js';
 import { logAdminAction } from './middleware/auditLogger.js';
@@ -95,6 +98,7 @@ app.use('/api/admin/experiments', experimentsRouter);
 app.use('/api/admin/system',      systemRouter);
 app.use('/api/admin/audit',       auditRouter);
 app.use('/api/admin/config',      configRouter);
+app.use('/api/admin/management-users', managementUsersRouter);
 
 app.use((_req, res) => res.status(404).json({ error: 'Not found' }));
 

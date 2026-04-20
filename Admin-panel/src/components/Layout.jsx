@@ -15,6 +15,8 @@ const PATH_PAGE = {
   '/system':      'system',
   '/audit':       'audit',
   '/config':      'config',
+  '/management-users':     'managementUsers',
+  '/management-users/new': 'managementUserNew',
 };
 
 export default function Layout() {

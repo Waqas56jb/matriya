@@ -38,6 +38,7 @@
     "system": "System",
     "audit": "Audit Log",
     "config": "Config",
+    "managementUsers": "Management users",
     "adminPanel": "Admin Panel",
     "administrator": "Administrator",
     "signOut": "Sign out"
@@ -55,7 +56,29 @@
     "experiments": "Experiments",
     "system": "System Health",
     "audit": "Audit Log",
-    "config": "Configuration"
+    "config": "Configuration",
+    "managementUsers": "Management users",
+    "managementUserNew": "Create management user"
+  },
+  "mgmtUsers": {
+    "subtitle": "Accounts for the Management panel. Sign-in uses email and password.",
+    "createCta": "Create user",
+    "createLead": "After saving, the user can log in to the Management panel with this email and password.",
+    "empty": "No management users yet.",
+    "thUsername": "Username",
+    "thEmail": "Email",
+    "thPassword": "Password",
+    "thPwUpdated": "Password updated",
+    "thCreated": "Created",
+    "fieldUsername": "Username",
+    "fieldEmail": "Email",
+    "fieldPassword": "Password",
+    "submitCreate": "Create account",
+    "saving": "Saving…",
+    "valRequired": "All fields are required.",
+    "valEmail": "Enter a valid email address.",
+    "valPasswordLen": "Password must be at least 6 characters.",
+    "createFailed": "Could not create user."
   },
   "dashboard": {
     "subtitle": "MATRIYA system overview — live data",

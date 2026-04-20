@@ -12,6 +12,8 @@ import Experiments    from './pages/Experiments.jsx';
 import System         from './pages/System.jsx';
 import Audit          from './pages/Audit.jsx';
 import Config         from './pages/Config.jsx';
+import ManagementUsers from './pages/ManagementUsers.jsx';
+import ManagementUserCreate from './pages/ManagementUserCreate.jsx';
 
 function PrivateRoute({ children }) {
   const { isAuth } = useAuth();
@@ -49,6 +51,8 @@ export default function App() {
           <Route path="/system"      element={<System />}      />
           <Route path="/audit"       element={<Audit />}       />
           <Route path="/config"      element={<Config />}      />
+          <Route path="/management-users"     element={<ManagementUsers />} />
+          <Route path="/management-users/new" element={<ManagementUserCreate />} />
         </Route>
 
         <Route path="*" element={<Navigate to="/login" replace />} />

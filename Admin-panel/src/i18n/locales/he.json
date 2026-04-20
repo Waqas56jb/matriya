@@ -38,6 +38,7 @@
     "system": "מערכת",
     "audit": "יומן ביקורת",
     "config": "הגדרות",
+    "managementUsers": "משתמשי ניהול",
     "adminPanel": "פאנל ניהול",
     "administrator": "מנהל מערכת",
     "signOut": "התנתק"
@@ -55,7 +56,29 @@
     "experiments": "ניסויים",
     "system": "תקינות המערכת",
     "audit": "יומן ביקורת",
-    "config": "תצורה"
+    "config": "תצורה",
+    "managementUsers": "משתמשי ניהול",
+    "managementUserNew": "יצירת משתמש ניהול"
+  },
+  "mgmtUsers": {
+    "subtitle": "חשבונות לפאנל הניהול. כניסה באמצעות אימייל וסיסמה.",
+    "createCta": "צור משתמש",
+    "createLead": "לאחר השמירה המשתמש יוכל להתחבר לפאנל הניהול עם האימייל והסיסמה.",
+    "empty": "אין עדיין משתמשי ניהול.",
+    "thUsername": "שם משתמש",
+    "thEmail": "אימייל",
+    "thPassword": "סיסמה",
+    "thPwUpdated": "עדכון סיסמה",
+    "thCreated": "נוצר",
+    "fieldUsername": "שם משתמש",
+    "fieldEmail": "אימייל",
+    "fieldPassword": "סיסמה",
+    "submitCreate": "צור חשבון",
+    "saving": "שומר…",
+    "valRequired": "כל השדות נדרשים.",
+    "valEmail": "הזן כתובת אימייל תקינה.",
+    "valPasswordLen": "הסיסמה חייבת להכיל לפחות 6 תווים.",
+    "createFailed": "יצירת המשתמש נכשלה."
   },
   "dashboard": {
     "subtitle": "סקירת מערכת MATRIYA — נתונים חיים",

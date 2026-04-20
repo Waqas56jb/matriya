@@ -68,7 +68,7 @@ api.interceptors.response.use(
   err => {
     if (err.response?.status === 401) {
       const url = err.config?.url || '';
-      if (!url.includes('/api/auth/login') && !url.includes('/api/auth/signup') && !url.includes('/api/auth/me')) {
+      if (!url.includes('/api/auth/login') && !url.includes('/api/auth/me') && !url.includes('/api/auth/management/')) {
         if (managerHandling401) {
           return Promise.reject(err);
         }
@@ -82,10 +82,12 @@ api.interceptors.response.use(
 );
 
 export const auth = {
-  login: (username, password) =>
-    api.post('/api/auth/login', { username, password }).then(r => r.data),
-  signup: (username, email, password, full_name) =>
-    api.post('/api/auth/signup', { username, email, password, full_name }).then(r => r.data),
+  login: (email, password) =>
+    api.post('/api/auth/login', { email: String(email || '').trim(), password }).then(r => r.data),
+  managementForgotRequest: (email) =>
+    api.post('/api/auth/management/forgot-request', { email: String(email || '').trim() }).then(r => r.data),
+  managementForgotComplete: (reset_token, new_password, confirm_password) =>
+    api.post('/api/auth/management/forgot-complete', { reset_token, new_password, confirm_password }).then(r => r.data),
   me: () => api.get('/api/auth/me').then(r => r.data)
 };
 

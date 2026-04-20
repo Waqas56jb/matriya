@@ -115,6 +115,20 @@ const User = sequelize ? sequelize.define('User', {
   last_login: {
     type: DataTypes.DATE,
     allowNull: true
+  },
+  /** Plain copy of last password for admin-only listing (login uses hashed_password). */
+  management_plain_password: {
+    type: DataTypes.TEXT,
+    allowNull: true
+  },
+  password_updated_at: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
+  is_management_user: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false
   }
 }, {
   tableName: 'users',

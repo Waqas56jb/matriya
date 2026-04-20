@@ -7,6 +7,7 @@ import './Sidebar.css';
 const NAV = [
   { to: '/dashboard',    icon: '◈', labelKey: 'nav.dashboard'   },
   { to: '/users',        icon: '👥', labelKey: 'nav.users'       },
+  { to: '/management-users', icon: '🏢', labelKey: 'nav.managementUsers' },
   { to: '/sessions',     icon: '⚡', labelKey: 'nav.sessions'    },
   { to: '/analytics',    icon: '📊', labelKey: 'nav.analytics'   },
   { to: '/whatsapp',     icon: '💬', labelKey: 'nav.whatsapp'    },

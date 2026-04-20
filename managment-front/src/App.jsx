@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
-import { HiEye, HiEyeSlash, HiOutlineSparkles, HiOutlineUserPlus } from 'react-icons/hi2';
+import { HiEye, HiEyeSlash, HiOutlineSparkles } from 'react-icons/hi2';
 import { BrowserRouter, Routes, Route, Link, NavLink, Outlet, useParams, useNavigate, Navigate, useLocation } from 'react-router-dom';
 import { projects as projectsApi, users as usersApi, tasks as tasksApi, milestones as milestonesApi, documents as documentsApi, notes as notesApi, projectFiles as projectFilesApi, rag as ragApi, gptRag as gptRagApi, chat as chatApi, emails as emailsApi, lab as labApi, auth as authApi, getStoredToken, getStoredUser, setAuth, clearAuth, getNetworkErrorMessage } from './api';
 import { LabExcelSpreadsheet } from './LabExcelSpreadsheet';
@@ -4209,8 +4209,133 @@ function AuthPasswordField({ id, value, onChange, autoComplete, inputClassName =
   );
 }
 
+function ForgotPasswordView() {
+  const [step, setStep] = React.useState(1);
+  const [email, setEmail] = React.useState('');
+  const [resetToken, setResetToken] = React.useState('');
+  const [np, setNp] = React.useState('');
+  const [cp, setCp] = React.useState('');
+  const [error, setError] = React.useState(null);
+  const [loading, setLoading] = React.useState(false);
+  const [done, setDone] = React.useState(false);
+
+  const submitEmail = (e) => {
+    e.preventDefault();
+    if (!email.trim()) return;
+    setError(null);
+    setLoading(true);
+    authApi.managementForgotRequest(email.trim())
+      .then((data) => {
+        setResetToken(data.reset_token || '');
+        setStep(2);
+      })
+      .catch((err) => {
+        setError(errorMessageFromResponse(err, t.forgotNoAccount));
+      })
+      .finally(() => setLoading(false));
+  };
+
+  const submitNewPw = (e) => {
+    e.preventDefault();
+    if (!np || np !== cp) {
+      setError(t.forgotMismatch);
+      return;
+    }
+    if (np.length < 6) {
+      setError(t.forgotPwShort);
+      return;
+    }
+    if (!resetToken) {
+      setError(t.forgotTokenMissing);
+      return;
+    }
+    setError(null);
+    setLoading(true);
+    authApi.managementForgotComplete(resetToken, np, cp)
+      .then(() => {
+        setDone(true);
+      })
+      .catch((err) => {
+        setError(errorMessageFromResponse(err, t.forgotTokenMissing));
+      })
+      .finally(() => setLoading(false));
+  };
+
+  return (
+    <div className="auth-page" dir="rtl">
+      <div className="auth-page__glow" aria-hidden />
+      <div className="auth-page__inner">
+        <div className="auth-panel">
+          <header className="auth-panel__header">
+            <div className="auth-panel__logo" aria-hidden>
+              <HiOutlineSparkles size={28} />
+            </div>
+            <h1 className="auth-panel__title">{t.forgotTitle}</h1>
+            <p className="auth-panel__lead">{step === 1 ? t.forgotLead : t.forgotNewLead}</p>
+          </header>
+          {error && (
+            <div className="auth-error" role="alert">
+              {typeof error === 'string' ? error : String(error)}
+            </div>
+          )}
+          {done ? (
+            <p className="auth-panel__switch">{t.forgotSuccess}</p>
+          ) : step === 1 ? (
+            <form className="auth-form" onSubmit={submitEmail}>
+              <div className="form-group">
+                <label htmlFor="forgot-email">{t.loginEmailLabel}</label>
+                <input
+                  id="forgot-email"
+                  className="auth-input"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  autoComplete="email"
+                  required
+                />
+              </div>
+              <button type="submit" className={`auth-submit ${loading ? 'auth-submit--loading' : ''}`} disabled={loading}>
+                {loading ? t.loading : t.forgotContinue}
+              </button>
+            </form>
+          ) : (
+            <form className="auth-form" onSubmit={submitNewPw}>
+              <div className="form-group">
+                <label htmlFor="forgot-np">{t.password}</label>
+                <AuthPasswordField
+                  id="forgot-np"
+                  value={np}
+                  onChange={(e) => setNp(e.target.value)}
+                  autoComplete="new-password"
+                  inputClassName="auth-input auth-input--password"
+                />
+              </div>
+              <div className="form-group">
+                <label htmlFor="forgot-cp">{t.forgotConfirm}</label>
+                <AuthPasswordField
+                  id="forgot-cp"
+                  value={cp}
+                  onChange={(e) => setCp(e.target.value)}
+                  autoComplete="new-password"
+                  inputClassName="auth-input auth-input--password"
+                />
+              </div>
+              <button type="submit" className={`auth-submit ${loading ? 'auth-submit--loading' : ''}`} disabled={loading}>
+                {loading ? t.loading : t.forgotSubmit}
+              </button>
+            </form>
+          )}
+          <p className="auth-panel__switch">
+            <Link to="/login" className="auth-link">{t.forgotBackLogin}</Link>
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function LoginView({ onLogin }) {
-  const [username, setUsername] = React.useState('');
+  const [email, setEmail] = React.useState('');
   const [password, setPassword] = React.useState('');
   const [error, setError] = React.useState(null);
   const [loading, setLoading] = React.useState(false);
@@ -4218,10 +4343,10 @@ function LoginView({ onLogin }) {
 
   const submit = (e) => {
     e.preventDefault();
-    if (!username.trim() || !password) return;
+    if (!email.trim() || !password) return;
     setError(null);
     setLoading(true);
-    authApi.login(username.trim(), password)
+    authApi.login(email.trim(), password)
       .then(data => {
         setAuth(data.access_token, data.user);
         onLogin(data.user);
@@ -4252,13 +4377,14 @@ function LoginView({ onLogin }) {
           )}
           <form className="auth-form" onSubmit={submit}>
             <div className="form-group">
-              <label htmlFor="login-username">{t.username}</label>
+              <label htmlFor="login-email">{t.loginEmailLabel}</label>
               <input
-                id="login-username"
+                id="login-email"
                 className="auth-input"
-                value={username}
-                onChange={e => setUsername(e.target.value)}
-                autoComplete="username"
+                type="email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                autoComplete="email"
                 required
               />
             </div>
@@ -4277,110 +4403,7 @@ function LoginView({ onLogin }) {
             </button>
           </form>
           <p className="auth-panel__switch">
-            {t.noAccount}{' '}
-            <Link to="/signup" className="auth-link">{t.signup}</Link>
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function SignupView({ onSignup }) {
-  const [username, setUsername] = React.useState('');
-  const [email, setEmail] = React.useState('');
-  const [password, setPassword] = React.useState('');
-  const [fullName, setFullName] = React.useState('');
-  const [error, setError] = React.useState(null);
-  const [loading, setLoading] = React.useState(false);
-  const navigate = useNavigate();
-
-  const submit = (e) => {
-    e.preventDefault();
-    if (!username.trim() || !email.trim() || !password) return;
-    setError(null);
-    setLoading(true);
-    authApi.signup(username.trim(), email.trim(), password, fullName.trim() || null)
-      .then(data => {
-        setAuth(data.access_token, data.user);
-        onSignup(data.user);
-        navigate('/');
-      })
-      .catch(err => {
-        setError(errorMessageFromResponse(err, t.signupError));
-        setLoading(false);
-      });
-  };
-
-  return (
-    <div className="auth-page" dir="rtl">
-      <div className="auth-page__glow" aria-hidden />
-      <div className="auth-page__inner">
-        <div className="auth-panel auth-panel--wide">
-          <header className="auth-panel__header">
-            <div className="auth-panel__logo auth-panel__logo--alt" aria-hidden>
-              <HiOutlineUserPlus size={28} />
-            </div>
-            <h1 className="auth-panel__title">{t.signupTitle}</h1>
-            <p className="auth-panel__lead">{t.authSignupLead}</p>
-          </header>
-          {error && (
-            <div className="auth-error" role="alert">
-              {typeof error === 'string' ? error : String(error)}
-            </div>
-          )}
-          <form className="auth-form" onSubmit={submit}>
-            <div className="form-group">
-              <label htmlFor="signup-username">{t.username}</label>
-              <input
-                id="signup-username"
-                className="auth-input"
-                value={username}
-                onChange={e => setUsername(e.target.value)}
-                autoComplete="username"
-                required
-              />
-            </div>
-            <div className="form-group">
-              <label htmlFor="signup-email">{t.email}</label>
-              <input
-                id="signup-email"
-                className="auth-input"
-                type="email"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                autoComplete="email"
-                required
-              />
-            </div>
-            <div className="form-group">
-              <label htmlFor="signup-password">{t.password}</label>
-              <AuthPasswordField
-                id="signup-password"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                autoComplete="new-password"
-                inputClassName="auth-input auth-input--password"
-              />
-            </div>
-            <div className="form-group">
-              <label htmlFor="signup-fullname">{t.fullName}</label>
-              <input
-                id="signup-fullname"
-                className="auth-input"
-                value={fullName}
-                onChange={e => setFullName(e.target.value)}
-                placeholder={t.optional}
-                autoComplete="name"
-              />
-            </div>
-            <button type="submit" className={`auth-submit ${loading ? 'auth-submit--loading' : ''}`} disabled={loading}>
-              {loading ? t.loading : t.signupButton}
-            </button>
-          </form>
-          <p className="auth-panel__switch">
-            {t.haveAccount}{' '}
-            <Link to="/login" className="auth-link">{t.login}</Link>
+            <Link to="/forgot-password" className="auth-link">{t.forgotPassword}</Link>
           </p>
         </div>
       </div>
@@ -4435,7 +4458,8 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={user ? <Navigate to="/" replace /> : <LoginView onLogin={setUser} />} />
-        <Route path="/signup" element={user ? <Navigate to="/" replace /> : <SignupView onSignup={setUser} />} />
+        <Route path="/forgot-password" element={user ? <Navigate to="/" replace /> : <ForgotPasswordView />} />
+        <Route path="/signup" element={<Navigate to="/login" replace />} />
         <Route path="/" element={<ProtectedRoute user={user}><AuthenticatedLayout user={user} onLogout={handleLogout} /></ProtectedRoute>}>
           <Route index element={<Home user={user} onLogout={handleLogout} dashboardMode />} />
           <Route path="projects" element={<Home user={user} onLogout={handleLogout} />} />
