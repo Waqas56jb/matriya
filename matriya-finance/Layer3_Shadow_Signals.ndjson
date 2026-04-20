@@ -1,0 +1,9 @@
+{"signal_id": "yf-ZION-2026-04-20", "instrument": "ZION", "A": 1.26, "decision": "Observe", "signal_timestamp": "2026-04-20T15:35:44Z"}
+{"signal_id": "yf-^VIX-2026-04-20", "instrument": "VIX", "A": 12.13, "decision": "Act", "signal_timestamp": "2026-04-20T15:35:44Z"}
+{"signal_id": "yf-^TNX-2026-04-20", "instrument": "TNX", "A": 0.47, "decision": "Observe", "signal_timestamp": "2026-04-20T15:35:44Z"}
+{"signal_id": "yf-ZION-2026-04-20", "instrument": "ZION", "A": 1.26, "decision": "Observe", "signal_timestamp": "2026-04-20T15:36:31Z"}
+{"signal_id": "yf-^VIX-2026-04-20", "instrument": "VIX", "A": 12.13, "decision": "Act", "signal_timestamp": "2026-04-20T15:36:31Z"}
+{"signal_id": "yf-^TNX-2026-04-20", "instrument": "TNX", "A": 0.42, "decision": "Observe", "signal_timestamp": "2026-04-20T15:36:31Z"}
+{"signal_id":"a4b6727b-f1b2-42b2-8080-0bd56715037c","instrument":"ZION","A":1.22,"decision":"Hold","signal_timestamp":"2026-04-20T15:42:52.137161+00:00","trigger_type":null,"source":"trigger_monitor_heartbeat"}
+{"signal_id":"de65bbec-e8eb-4449-91bd-12262ed5d1ab","instrument":"ZION","A":1.2,"decision":"Hold","signal_timestamp":"2026-04-20T15:43:24.465693+00:00","trigger_type":null,"source":"trigger_monitor_heartbeat"}
+{"signal_id":"b439d137-aeb9-4f61-a86b-51b45f40904f","instrument":"ZION","A":1.18,"decision":"Hold","signal_timestamp":"2026-04-20T15:44:13.105835+00:00","trigger_type":null,"source":"trigger_monitor_heartbeat"}

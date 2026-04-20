@@ -8,13 +8,16 @@
  *   2. Cron job: daily at 07:00 UTC → runs `python trigger_monitor.py`
  *   3. Manual trigger endpoint  POST /run    → runs the pipeline on demand
  *
- * Environment variables:
- *   PORT                 — HTTP port (Railway sets this automatically)
- *   PYTHON_CMD           — Python binary to use (default: python3)
- *   TWILIO_ACCOUNT_SID   — Twilio SID (forwarded to Python via env)
- *   TWILIO_AUTH_TOKEN    — Twilio token
- *   TWILIO_WHATSAPP_FROM — Sender number e.g. whatsapp:+14155238886
- *   TWILIO_WHATSAPP_TO   — Recipient number e.g. whatsapp:+972...
+ * Environment variables (Twilio matches matriya-back — copy same Railway vars):
+ *   PORT                    — HTTP port (Railway sets this automatically)
+ *   PYTHON_CMD              — Python binary (default: python3)
+ *   TWILIO_ACCOUNT_SID      — same as matriya-back
+ *   TWILIO_AUTH_TOKEN       — same as matriya-back
+ *   TWILIO_WHATSAPP_FROM    — preferred sender (whatsapp:+…)
+ *   TWILIO_WHATSAPP_NUMBER  — if FROM unset, backend-style plain +E164 is normalized to whatsapp:+…
+ *   TWILIO_WHATSAPP_TO      — finance alert recipient
+ *   DAVID_WHATSAPP          — matriya-back; used if TWILIO_WHATSAPP_TO unset
+ *   RACHEL_WHATSAPP         — same as matriya-back; passed through for Python alerts
  */
 
 import express from 'express';
@@ -27,6 +30,32 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app  = express();
 const PORT = process.env.PORT || 3100;
 const PYTHON = process.env.PYTHON_CMD || 'python3';
+
+/** Normalize E164 or whatsapp:+… to Twilio WhatsApp address (same rules as matriya-back). */
+function normalizeWhatsAppAddress(raw) {
+  if (!raw) return '';
+  const t = String(raw).trim();
+  if (t.startsWith('whatsapp:')) return t;
+  if (t.startsWith('+')) return `whatsapp:${t}`;
+  const digits = t.replace(/\D/g, '');
+  if (!digits) return '';
+  return `whatsapp:+${digits}`;
+}
+
+/** Twilio env aligned with matriya-back; merged into Python child env. */
+function twilioEnvForChild() {
+  const fromRaw = (process.env.TWILIO_WHATSAPP_FROM || process.env.TWILIO_WHATSAPP_NUMBER || '').trim();
+  const toRaw = (process.env.TWILIO_WHATSAPP_TO || process.env.DAVID_WHATSAPP || '').trim();
+  const rachelNorm = normalizeWhatsAppAddress((process.env.RACHEL_WHATSAPP || '').trim());
+  const out = {
+    TWILIO_ACCOUNT_SID: (process.env.TWILIO_ACCOUNT_SID || '').trim(),
+    TWILIO_AUTH_TOKEN: (process.env.TWILIO_AUTH_TOKEN || '').trim(),
+    TWILIO_WHATSAPP_FROM: normalizeWhatsAppAddress(fromRaw),
+    TWILIO_WHATSAPP_TO: normalizeWhatsAppAddress(toRaw),
+  };
+  if (rachelNorm) out.RACHEL_WHATSAPP = rachelNorm;
+  return out;
+}
 
 app.use(express.json());
 
@@ -54,9 +83,10 @@ function runTriggerMonitor() {
     const proc = spawn(PYTHON, [scriptPath], {
       env: {
         ...process.env,
-        PYTHONUNBUFFERED: '1'
+        ...twilioEnvForChild(),
+        PYTHONUNBUFFERED: '1',
       },
-      cwd: __dirname
+      cwd: __dirname,
     });
 
     let stdout = '';
