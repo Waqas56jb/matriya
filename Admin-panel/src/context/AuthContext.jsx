@@ -12,8 +12,8 @@ export function AuthProvider({ children }) {
   const login = async (email, password) => {
     const res = await fetch(`${ADMIN_API_BASE}/api/admin/auth/login`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ email, password }).toString(),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Login failed');

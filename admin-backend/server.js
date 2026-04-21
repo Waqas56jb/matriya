@@ -56,13 +56,22 @@ export const supabase = createClient(
 
 const app = express();
 
-// CORS: comma-separated origins, or omit / use * for dev (reflects request origin).
-// Browsers reject credentials with Access-Control-Allow-Origin: * — avoid that in production.
+// CORS: comma-separated origins in ADMIN_FRONTEND_URL. Always includes localhost ports for dev.
+// If ADMIN_FRONTEND_URL is empty or *, all origins are reflected (dev-only).
+const DEV_ORIGINS = [
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'http://localhost:3002',
+  'http://localhost:3003',
+  'http://localhost:5173',
+];
+
 function corsOrigin() {
   const raw = (process.env.ADMIN_FRONTEND_URL || '').trim();
   if (!raw || raw === '*') return true;
-  const list = raw.split(',').map(s => s.trim()).filter(Boolean);
-  return list.length === 1 ? list[0] : list;
+  const explicit = raw.split(',').map(s => s.trim()).filter(Boolean);
+  const all = [...new Set([...explicit, ...DEV_ORIGINS])];
+  return all;
 }
 
 app.use(cors({
@@ -104,7 +113,9 @@ app.use((_req, res) => res.status(404).json({ error: 'Not found' }));
 
 app.use((err, _req, res, _next) => {
   console.error('[admin-backend error]', err);
-  res.status(500).json({ error: err.message || 'Internal server error' });
+  // body-parser sets err.status for JSON parse failures (400), respect it
+  const status = err.status || err.statusCode || 500;
+  res.status(status).json({ error: err.message || 'Internal server error' });
 });
 
 app.listen(PORT, () => {

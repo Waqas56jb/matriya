@@ -14,27 +14,35 @@ import { signAdminToken } from '../middleware/auth.js';
 const router = Router();
 
 router.post('/login', async (req, res) => {
-  const { email, password } = req.body || {};
-  if (!email || !password) return res.status(400).json({ error: 'email and password required' });
+  try {
+    // Support both application/json and application/x-www-form-urlencoded
+    const body = req.body || {};
+    const email = (body.email || '').toString().trim();
+    const password = (body.password || '').toString();
+    if (!email || !password) return res.status(400).json({ error: 'email and password required' });
 
-  const { data: admin, error } = await supabase
-    .from('admin_users')
-    .select('id, email, password_hash, role, is_active')
-    .eq('email', email.toLowerCase().trim())
-    .single();
+    const { data: admin, error } = await supabase
+      .from('admin_users')
+      .select('id, email, password_hash, role, is_active')
+      .eq('email', email.toLowerCase().trim())
+      .single();
 
-  if (error || !admin) return res.status(401).json({ error: 'Invalid credentials' });
-  if (!admin.is_active) return res.status(403).json({ error: 'Account disabled' });
+    if (error || !admin) return res.status(401).json({ error: 'Invalid credentials' });
+    if (!admin.is_active) return res.status(403).json({ error: 'Account disabled' });
 
-  const valid = await bcrypt.compare(password, admin.password_hash);
-  if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
+    const valid = await bcrypt.compare(password, admin.password_hash);
+    if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
 
-  const token = signAdminToken(admin.id, admin.email);
+    const token = signAdminToken(admin.id, admin.email);
 
-  res.json({
-    token,
-    admin: { id: admin.id, email: admin.email, role: admin.role },
-  });
+    res.json({
+      token,
+      admin: { id: admin.id, email: admin.email, role: admin.role },
+    });
+  } catch (err) {
+    console.error('[auth/login]', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 /**

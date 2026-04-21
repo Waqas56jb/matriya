@@ -18,11 +18,14 @@
  *   TWILIO_WHATSAPP_TO      — finance alert recipient
  *   DAVID_WHATSAPP          — matriya-back; used if TWILIO_WHATSAPP_TO unset
  *   RACHEL_WHATSAPP         — same as matriya-back; passed through for Python alerts
+ *   FINANCE_SHADOW_SIGNALS_PATH — NDJSON log (default: ./Layer3_Shadow_Signals.ndjson)
+ *   FINANCE_CORS_ORIGINS    — comma-separated origins for dashboard (Vercel), or * for dev
  */
 
 import express from 'express';
 import cron    from 'node-cron';
 import { spawn } from 'child_process';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import path from 'path';
 
@@ -58,6 +61,101 @@ function twilioEnvForChild() {
 }
 
 app.use(express.json());
+
+// ─── CORS (Vercel dashboard → Railway API) ────────────────────────────────────
+
+app.use((req, res, next) => {
+  const raw = (process.env.FINANCE_CORS_ORIGINS || '*').trim();
+  const origin = req.headers.origin;
+  if (raw === '*' || raw === '') {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  } else {
+    const list = raw.split(',').map((s) => s.trim()).filter(Boolean);
+    if (origin && list.includes(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+    }
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
+function ndjsonSignalsPath() {
+  const o = (process.env.FINANCE_SHADOW_SIGNALS_PATH || '').trim();
+  if (o) return o;
+  return path.join(__dirname, 'Layer3_Shadow_Signals.ndjson');
+}
+
+function readSignalsFromNdjson(limit = 200) {
+  const filePath = ndjsonSignalsPath();
+  if (!fs.existsSync(filePath)) {
+    return { path: filePath, signals: [], file_exists: false, error: 'ndjson_missing' };
+  }
+  const raw = fs.readFileSync(filePath, 'utf8');
+  const lines = raw.split('\n').map((l) => l.trim()).filter(Boolean);
+  const tail = lines.slice(-limit);
+  const signals = [];
+  for (const line of tail) {
+    try {
+      signals.push(JSON.parse(line));
+    } catch {
+      /* skip */
+    }
+  }
+  let mtime = null;
+  try {
+    mtime = fs.statSync(filePath).mtime.toISOString();
+  } catch {
+    /* */
+  }
+  return { path: filePath, signals, file_exists: true, line_count: lines.length, mtime_iso: mtime };
+}
+
+function financeRuntimeStatus() {
+  const filePath = ndjsonSignalsPath();
+  let st = null;
+  try {
+    st = fs.statSync(filePath);
+  } catch {
+    /* */
+  }
+  return {
+    service: 'matriya-finance',
+    time: new Date().toISOString(),
+    ndjson_path: filePath,
+    ndjson_exists: !!st,
+    ndjson_bytes: st?.size ?? 0,
+    ndjson_mtime_iso: st?.mtime?.toISOString?.() ?? null,
+    twilio_ready: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN),
+    fred_configured: !!(process.env.FRED_API_KEY || '').trim(),
+    sec_user_agent_set: !!(process.env.SEC_EDGAR_USER_AGENT || '').trim(),
+  };
+}
+
+// ─── Finance API (React dashboard on Vercel) ─────────────────────────────────
+
+app.get('/api/finance/signals', (_req, res) => {
+  try {
+    const { path: p, signals, file_exists, line_count, mtime_iso, error } = readSignalsFromNdjson(300);
+    res.json({
+      ok: true,
+      path: p,
+      file_exists,
+      line_count: line_count ?? signals.length,
+      mtime_iso: mtime_iso ?? null,
+      error: error || null,
+      signals,
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || 'read_failed' });
+  }
+});
+
+app.get('/api/finance/status', (_req, res) => {
+  res.json({ ok: true, ...financeRuntimeStatus() });
+});
 
 // ─── Health endpoint (Railway checks this) ────────────────────────────────────
 
