@@ -1,25 +1,25 @@
 .matriya-evidence {
-    border: 1px solid var(--matriya-border, #e5e7eb);
+    border: 1px solid rgba(0, 212, 255, 0.12);
     border-radius: 12px;
     padding: 14px 16px;
     margin-top: 16px;
-    background: var(--matriya-surface, #fafafa);
-    direction: rtl;
-    text-align: right;
+    background: rgba(11, 22, 48, 0.8);
+    direction: ltr;
+    text-align: left;
 }
 
 .matriya-evidence__title {
     margin: 0 0 6px 0;
     font-size: 1rem;
     font-weight: 700;
-    color: var(--matriya-text, #111);
+    color: var(--matriya-text, #f0f6ff);
 }
 
 .matriya-evidence__hint {
     margin: 0 0 12px 0;
     font-size: 0.85rem;
     line-height: 1.45;
-    color: var(--matriya-muted, #6b7280);
+    color: var(--matriya-muted, #8baac8);
 }
 
 .matriya-evidence__list {
@@ -32,19 +32,19 @@
 }
 
 .matriya-evidence__card {
-    border: 1px solid var(--matriya-border, #e5e7eb);
+    border: 1px solid rgba(0, 212, 255, 0.1);
     border-radius: 8px;
     overflow: hidden;
-    background: #fff;
+    background: rgba(6, 13, 31, 0.6);
 }
 
 .matriya-evidence__file {
     padding: 8px 12px;
     font-size: 0.88rem;
     font-weight: 600;
-    color: var(--matriya-accent, #166534);
-    border-bottom: 1px solid var(--matriya-border, #e5e7eb);
-    background: rgba(22, 101, 52, 0.06);
+    color: var(--matriya-accent, #00d4ff);
+    border-bottom: 1px solid rgba(0, 212, 255, 0.1);
+    background: rgba(0, 212, 255, 0.06);
 }
 
 .matriya-evidence__quote {
@@ -54,9 +54,9 @@
     line-height: 1.55;
     white-space: pre-wrap;
     word-break: break-word;
-    color: var(--matriya-text, #111);
-    border-right: 4px solid var(--matriya-accent, #166534);
-    border-left: none;
+    color: var(--matriya-text, #f0f6ff);
+    border-left: 4px solid var(--matriya-accent, #00d4ff);
+    border-right: none;
     background: transparent;
     max-height: 32rem;
     overflow-y: auto;

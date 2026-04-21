@@ -1,4 +1,4 @@
-/* LTR code panel — isolated from document RTL */
+/* LTR code panel */
 
 .json-viewer {
   direction: ltr;
@@ -7,11 +7,9 @@
   margin-top: 0.75rem;
   border-radius: 14px;
   overflow: hidden;
-  border: 1px solid #cbd5e1;
-  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.9),
-    0 2px 8px rgba(15, 23, 42, 0.06);
+  border: 1px solid rgba(0, 212, 255, 0.12);
+  background: rgba(6, 13, 31, 0.9);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 .json-viewer__pre {
@@ -30,7 +28,7 @@
     Monaco,
     Consolas,
     monospace;
-  color: #1e293b;
+  color: #8baac8;
   text-align: left !important;
   direction: ltr !important;
   unicode-bidi: plaintext;
@@ -41,28 +39,28 @@
 }
 
 .json-viewer__pre:focus {
-  outline: 2px solid #6366f1;
+  outline: 2px solid #00d4ff;
   outline-offset: -2px;
 }
 
-/* Scrollbars on the right (LTR) */
+/* Scrollbars */
 .json-viewer__pre::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 
 .json-viewer__pre::-webkit-scrollbar-track {
-  background: #e2e8f0;
+  background: rgba(6, 13, 31, 0.5);
   border-radius: 6px;
 }
 
 .json-viewer__pre::-webkit-scrollbar-thumb {
-  background: #94a3b8;
+  background: #243d60;
   border-radius: 6px;
 }
 
 .json-viewer__pre::-webkit-scrollbar-thumb:hover {
-  background: #64748b;
+  background: #4d6a88;
 }
 
 @media (max-width: 480px) {
