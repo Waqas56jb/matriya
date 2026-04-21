@@ -65,20 +65,25 @@ CREATE TABLE IF NOT EXISTS public.project_files (
 
 -- ─────────────────────────────────────────────
 -- 6. PROJECT EMAILS
+-- Columns match managment-back/server.js insert payloads exactly.
 -- ─────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS public.project_emails (
-  id                  uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-  project_id          text        NOT NULL,
-  from_email          text,
-  to_email            text,
-  subject             text,
-  body_text           text,
-  direction           text        NOT NULL DEFAULT 'outbound',
-  status              text        NOT NULL DEFAULT 'draft',
-  provider_message_id text,
-  error_message       text,
-  created_at          timestamptz NOT NULL DEFAULT now(),
-  sent_at             timestamptz
+  id               uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id       text        NOT NULL,
+  direction        text        NOT NULL DEFAULT 'sent',  -- 'sent' | 'received'
+  from_email       text,
+  to_emails        text[],                               -- array of recipients
+  subject          text,
+  body_text        text,
+  body_html        text,
+  resend_email_id  text,                                 -- Resend message ID
+  sent_by_user_id  text,
+  sent_by_username text,
+  attachments      jsonb        NOT NULL DEFAULT '[]',
+  status           text         NOT NULL DEFAULT 'sent',
+  error_message    text,
+  created_at       timestamptz  NOT NULL DEFAULT now(),
+  sent_at          timestamptz
 );
 
 -- ─────────────────────────────────────────────
@@ -358,10 +363,15 @@ ALTER TABLE public.project_files ADD COLUMN IF NOT EXISTS file_size    integer;
 ALTER TABLE public.project_files ADD COLUMN IF NOT EXISTS storage_path text;
 ALTER TABLE public.project_files ADD COLUMN IF NOT EXISTS uploaded_by  text;
 
--- project_emails
-ALTER TABLE public.project_emails ADD COLUMN IF NOT EXISTS provider_message_id text;
-ALTER TABLE public.project_emails ADD COLUMN IF NOT EXISTS error_message       text;
-ALTER TABLE public.project_emails ADD COLUMN IF NOT EXISTS sent_at             timestamptz;
+-- project_emails — patch old incomplete schema
+ALTER TABLE public.project_emails ADD COLUMN IF NOT EXISTS to_emails        text[];
+ALTER TABLE public.project_emails ADD COLUMN IF NOT EXISTS body_html        text;
+ALTER TABLE public.project_emails ADD COLUMN IF NOT EXISTS resend_email_id  text;
+ALTER TABLE public.project_emails ADD COLUMN IF NOT EXISTS sent_by_user_id  text;
+ALTER TABLE public.project_emails ADD COLUMN IF NOT EXISTS sent_by_username text;
+ALTER TABLE public.project_emails ADD COLUMN IF NOT EXISTS attachments      jsonb NOT NULL DEFAULT '[]';
+ALTER TABLE public.project_emails ADD COLUMN IF NOT EXISTS error_message    text;
+ALTER TABLE public.project_emails ADD COLUMN IF NOT EXISTS sent_at          timestamptz;
 
 -- tasks
 ALTER TABLE public.tasks ADD COLUMN IF NOT EXISTS priority    text NOT NULL DEFAULT 'בינוני';
