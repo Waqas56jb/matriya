@@ -119,6 +119,10 @@ function projectGptNoSupportMessage(lang) {
 const RESEND_API_KEY = (process.env.RESEND_API_KEY || '').trim();
 /** Verified-domain sender in Resend. Set RESEND_FROM_EMAIL (e.g. noreply@yourdomain.com). Default is sandbox only. */
 const RESEND_FROM_EMAIL = (process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev').trim();
+/** Display name shown in inbox: "MATRIYA <noreply@matriya.app>". Set RESEND_FROM_NAME to override. */
+const RESEND_FROM_NAME = (process.env.RESEND_FROM_NAME || 'MATRIYA').trim();
+/** Reply-To address — who receives replies to outbound emails. Set RESEND_REPLY_TO env var. */
+const RESEND_REPLY_TO = (process.env.RESEND_REPLY_TO || '').trim();
 /** Optional: require ?secret= or Authorization: Bearer for POST /api/webhooks/resend-inbound */
 const RESEND_INBOUND_WEBHOOK_SECRET = (process.env.RESEND_INBOUND_WEBHOOK_SECRET || '').trim();
 /** Domain for Reply-To addresses: `<project_uuid>@DOMAIN` so replies route to the right project (Receiving must accept this address). */
@@ -1061,11 +1065,13 @@ app.post('/api/projects/:projectId/emails/send', limiterEmail, async (req, res) 
     const { to, subject, text, html, attachment_file_ids: attachIds, inline_attachments: inlineAtt } = parsed.data;
     if (!text && !html) return res.status(400).json({ error: 'Email body required (text or html).' });
     const toArr = Array.isArray(to) ? to : [to];
-    const payload = { from: RESEND_FROM_EMAIL, to: toArr, subject };
+    const fromFormatted = RESEND_FROM_NAME ? `${RESEND_FROM_NAME} <${RESEND_FROM_EMAIL}>` : RESEND_FROM_EMAIL;
+    const payload = { from: fromFormatted, to: toArr, subject };
     if (text) payload.text = text;
     if (html) payload.html = html;
-    const replyTo = replyToAddressForProject(projectId);
-    if (replyTo) payload.reply_to = [replyTo];
+    const projectReplyTo = replyToAddressForProject(projectId);
+    const replyToAddr = projectReplyTo || RESEND_REPLY_TO || null;
+    if (replyToAddr) payload.reply_to = [replyToAddr];
     let attachmentMeta = [];
     const resendAttachments = [];
     let bytesUsed = 0;
