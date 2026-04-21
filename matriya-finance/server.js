@@ -7,19 +7,23 @@
  *   1. Express health endpoint  GET /health  → 200 OK (Railway health check)
  *   2. Cron job: daily at 07:00 UTC → runs `python trigger_monitor.py`
  *   3. Manual trigger endpoint  POST /run    → runs the pipeline on demand
+ *   4. GET /api/finance/signals → signals from Supabase (NDJSON fallback)
+ *   5. GET /api/finance/status  → runtime status
  *
- * Environment variables (Twilio matches matriya-back — copy same Railway vars):
- *   PORT                    — HTTP port (Railway sets this automatically)
- *   PYTHON_CMD              — Python binary (default: python3)
- *   TWILIO_ACCOUNT_SID      — same as matriya-back
- *   TWILIO_AUTH_TOKEN       — same as matriya-back
- *   TWILIO_WHATSAPP_FROM    — preferred sender (whatsapp:+…)
- *   TWILIO_WHATSAPP_NUMBER  — if FROM unset, backend-style plain +E164 is normalized to whatsapp:+…
- *   TWILIO_WHATSAPP_TO      — finance alert recipient
- *   DAVID_WHATSAPP          — matriya-back; used if TWILIO_WHATSAPP_TO unset
- *   RACHEL_WHATSAPP         — same as matriya-back; passed through for Python alerts
- *   FINANCE_SHADOW_SIGNALS_PATH — NDJSON log (default: ./Layer3_Shadow_Signals.ndjson)
- *   FINANCE_CORS_ORIGINS    — comma-separated origins for dashboard (Vercel), or * for dev
+ * Environment variables:
+ *   PORT                       — HTTP port (Railway sets this automatically)
+ *   PYTHON_CMD                 — Python binary (default: python3)
+ *   SUPABASE_URL               — Supabase project URL (for signal reads)
+ *   SUPABASE_SERVICE_ROLE_KEY  — Supabase service key
+ *   TWILIO_ACCOUNT_SID         — same as matriya-back
+ *   TWILIO_AUTH_TOKEN          — same as matriya-back
+ *   TWILIO_WHATSAPP_FROM       — preferred sender (whatsapp:+…)
+ *   TWILIO_WHATSAPP_NUMBER     — if FROM unset, plain +E164 normalized
+ *   TWILIO_WHATSAPP_TO         — finance alert recipient
+ *   DAVID_WHATSAPP             — used if TWILIO_WHATSAPP_TO unset
+ *   RACHEL_WHATSAPP            — passed through for Python alerts
+ *   FINANCE_SHADOW_SIGNALS_PATH — NDJSON log path (local dev fallback)
+ *   FINANCE_CORS_ORIGINS       — comma-separated origins for dashboard, or *
  */
 
 import express from 'express';
@@ -82,48 +86,88 @@ app.use((req, res, next) => {
   next();
 });
 
+// ─── Supabase client (lazy) ───────────────────────────────────────────────────
+
+let _supabaseClient = null;
+function getSupabase() {
+  if (_supabaseClient) return _supabaseClient;
+  const url = (process.env.SUPABASE_URL || '').trim();
+  const key = (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || '').trim();
+  if (!url || !key) return null;
+  // Dynamic import — @supabase/supabase-js is not in package.json for this service
+  // so we use the REST API directly via fetch instead.
+  _supabaseClient = { url, key };
+  return _supabaseClient;
+}
+
+/**
+ * Read up to `limit` most-recent signals from Supabase finance_signals table.
+ * Falls back to NDJSON if Supabase is not configured.
+ */
+async function readSignals(limit = 300) {
+  const sb = getSupabase();
+  if (sb) {
+    try {
+      const url = `${sb.url}/rest/v1/finance_signals?order=signal_timestamp.desc&limit=${limit}`;
+      const res = await fetch(url, {
+        headers: {
+          apikey: sb.key,
+          Authorization: `Bearer ${sb.key}`,
+          Accept: 'application/json',
+        },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!res.ok) {
+        console.warn(`[matriya-finance] Supabase /finance_signals ${res.status} — falling back to NDJSON`);
+        return readSignalsFromNdjson(limit);
+      }
+      const rows = await res.json();
+      // Return in chronological order (oldest first) so dashboards can slice(-N) for "latest"
+      return { signals: rows.reverse(), source: 'supabase', count: rows.length };
+    } catch (e) {
+      console.warn(`[matriya-finance] Supabase read failed: ${e.message} — falling back to NDJSON`);
+      return readSignalsFromNdjson(limit);
+    }
+  }
+  return readSignalsFromNdjson(limit);
+}
+
+// ─── NDJSON fallback (local dev / when Supabase not configured) ───────────────
+
 function ndjsonSignalsPath() {
   const o = (process.env.FINANCE_SHADOW_SIGNALS_PATH || '').trim();
   if (o) return o;
   return path.join(__dirname, 'Layer3_Shadow_Signals.ndjson');
 }
 
-function readSignalsFromNdjson(limit = 200) {
+function readSignalsFromNdjson(limit = 300) {
   const filePath = ndjsonSignalsPath();
   if (!fs.existsSync(filePath)) {
-    return { path: filePath, signals: [], file_exists: false, error: 'ndjson_missing' };
+    return { signals: [], file_exists: false, error: 'ndjson_missing', source: 'ndjson', count: 0 };
   }
   const raw = fs.readFileSync(filePath, 'utf8');
   const lines = raw.split('\n').map((l) => l.trim()).filter(Boolean);
   const tail = lines.slice(-limit);
   const signals = [];
   for (const line of tail) {
-    try {
-      signals.push(JSON.parse(line));
-    } catch {
-      /* skip */
-    }
+    try { signals.push(JSON.parse(line)); } catch { /* skip bad line */ }
   }
   let mtime = null;
-  try {
-    mtime = fs.statSync(filePath).mtime.toISOString();
-  } catch {
-    /* */
-  }
-  return { path: filePath, signals, file_exists: true, line_count: lines.length, mtime_iso: mtime };
+  try { mtime = fs.statSync(filePath).mtime.toISOString(); } catch { /* */ }
+  return { signals, file_exists: true, line_count: lines.length, mtime_iso: mtime, source: 'ndjson', count: signals.length };
 }
 
 function financeRuntimeStatus() {
   const filePath = ndjsonSignalsPath();
   let st = null;
-  try {
-    st = fs.statSync(filePath);
-  } catch {
-    /* */
-  }
+  try { st = fs.statSync(filePath); } catch { /* */ }
+  const sbUrl = (process.env.SUPABASE_URL || '').trim();
+  const sbKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || '').trim();
   return {
     service: 'matriya-finance',
     time: new Date().toISOString(),
+    signal_storage: sbUrl && sbKey ? 'supabase' : 'ndjson_fallback',
+    supabase_configured: !!(sbUrl && sbKey),
     ndjson_path: filePath,
     ndjson_exists: !!st,
     ndjson_bytes: st?.size ?? 0,
@@ -131,23 +175,16 @@ function financeRuntimeStatus() {
     twilio_ready: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN),
     fred_configured: !!(process.env.FRED_API_KEY || '').trim(),
     sec_user_agent_set: !!(process.env.SEC_EDGAR_USER_AGENT || '').trim(),
+    watchlist_v2: ['ZION','CMA','KRE','^TNX','BUND','^VIX','MOVE','HYG','DXY','GLD'],
   };
 }
 
-// ─── Finance API (React dashboard on Vercel) ─────────────────────────────────
+// ─── Finance API (React dashboard on Vercel + matriya-back F STATUS) ─────────
 
-app.get('/api/finance/signals', (_req, res) => {
+app.get('/api/finance/signals', async (_req, res) => {
   try {
-    const { path: p, signals, file_exists, line_count, mtime_iso, error } = readSignalsFromNdjson(300);
-    res.json({
-      ok: true,
-      path: p,
-      file_exists,
-      line_count: line_count ?? signals.length,
-      mtime_iso: mtime_iso ?? null,
-      error: error || null,
-      signals,
-    });
+    const result = await readSignals(300);
+    res.json({ ok: true, ...result });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message || 'read_failed' });
   }

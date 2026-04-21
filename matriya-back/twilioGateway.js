@@ -126,7 +126,7 @@ export async function handleInbound(req, res) {
 
   if (isFinanceWhatsappCommand(userMessage)) {
     logger.info(`[twilioGateway] finance command inner=${normalizeFinanceCommandBody(userMessage)}`);
-    return sendFinanceCommandTwiml(res, userMessage);
+    return await sendFinanceCommandTwiml(res, userMessage);
   }
 
   logger.info(`[twilioGateway] inbound from=${from} message="${userMessage.slice(0, 80)}"`);

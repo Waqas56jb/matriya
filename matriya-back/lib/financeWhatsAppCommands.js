@@ -1,41 +1,63 @@
 /**
- * WhatsApp finance operator commands (STATUS / WATCHLIST / LOG / HELP).
- * Prefixed form "F STATUS" etc. avoids routing single letter "F" or finance text to the lab pipeline.
- * Reads matriya-finance shadow signals NDJSON; path override via FINANCE_SHADOW_SIGNALS_PATH.
+ * WhatsApp finance operator commands (F STATUS / F WATCHLIST / F LOG / F HELP).
+ * Prefixed form "F STATUS" etc. avoids routing to the lab/RAG pipeline.
+ *
+ * Signal data is read via HTTP from matriya-finance /api/finance/signals
+ * (Railway deploys matriya-back and matriya-finance as separate containers —
+ * they cannot share a filesystem, so NDJSON file access is not possible).
+ *
+ * Required env var in matriya-back:
+ *   FINANCE_API_URL — base URL of matriya-finance service
+ *                     e.g. https://matriya-finance.up.railway.app
+ *
+ * Watchlist v2 — 10 instruments:
+ *   ZION, CMA, KRE             (bank equity / regional banks, Bf-s)
+ *   ^TNX, BUND                 (rates 10Y US/DE, Bf-m)
+ *   ^VIX, MOVE                 (stress indices, Bf-m)
+ *   HYG                        (credit spread, Bf-m)
+ *   DXY                        (dollar liquidity, Bf-m)
+ *   GLD                        (flight-to-safety, Bf-m)
  */
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+
 import logger from '../logger.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// ─── Finance API base URL ─────────────────────────────────────────────────────
 
-/** Default: repo sibling matriya-finance (works in monorepo checkout). */
-export function defaultShadowSignalsPath() {
-  return path.join(__dirname, '..', '..', 'matriya-finance', 'Layer3_Shadow_Signals.ndjson');
+function financeApiUrl() {
+  return (process.env.FINANCE_API_URL || '').trim().replace(/\/$/, '');
 }
+
+// ─── HTTP fetch of signals from matriya-finance ───────────────────────────────
 
 /**
- * First existing path wins: explicit env → sibling matriya-finance → bundled matriya-back/data.
- * Railway often deploys only matriya-back; sibling repo is missing unless you set FINANCE_SHADOW_SIGNALS_PATH.
+ * Fetches signals from matriya-finance /api/finance/signals.
+ * Returns array of signal objects, or null on error.
+ * @returns {Promise<Array|null>}
  */
-export function resolveShadowSignalsLogPath() {
-  const env = (process.env.FINANCE_SHADOW_SIGNALS_PATH || '').trim();
-  if (env) return env;
-
-  const candidates = [
-    defaultShadowSignalsPath(),
-    path.join(__dirname, '..', 'data', 'Layer3_Shadow_Signals.ndjson'),
-  ];
-  for (const p of candidates) {
-    try {
-      if (fs.existsSync(p)) return p;
-    } catch {
-      /* ignore */
-    }
+async function fetchSignalsFromApi() {
+  const base = financeApiUrl();
+  if (!base) {
+    logger.warn('[financeWhatsAppCommands] FINANCE_API_URL is not set — cannot fetch signals');
+    return null;
   }
-  return candidates[1];
+  try {
+    const res = await fetch(`${base}/api/finance/signals`, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) {
+      logger.warn(`[financeWhatsAppCommands] /api/finance/signals responded ${res.status}`);
+      return null;
+    }
+    const json = await res.json();
+    // Server returns { ok, signals: [...] }
+    if (Array.isArray(json.signals)) return json.signals;
+    if (Array.isArray(json)) return json;
+    return null;
+  } catch (e) {
+    logger.error(`[financeWhatsAppCommands] fetchSignalsFromApi: ${e.message}`);
+    return null;
+  }
 }
+
+// ─── TwiML helper ─────────────────────────────────────────────────────────────
 
 function escapeTwiml(text) {
   return String(text)
@@ -44,45 +66,46 @@ function escapeTwiml(text) {
     .replace(/>/g, '&gt;');
 }
 
-function parseNdjsonTail(filePath, maxLines) {
-  try {
-    const raw = fs.readFileSync(filePath, 'utf8');
-    const lines = raw.split('\n').map((l) => l.trim()).filter(Boolean);
-    const tail = lines.slice(-maxLines);
-    const rows = [];
-    for (const line of tail) {
-      try {
-        rows.push(JSON.parse(line));
-      } catch {
-        /* skip bad line */
-      }
-    }
-    return rows;
-  } catch (e) {
-    logger.warn(`[financeWhatsAppCommands] read ${filePath}: ${e.message}`);
-    return null;
-  }
-}
+// ─── Watchlist v2 (10 instruments) ────────────────────────────────────────────
+
+const WATCHLIST_V2 = [
+  'ZION  (bank equity,    Bf-s)',
+  'CMA   (bank equity,    Bf-s)',
+  'KRE   (regional banks, Bf-s)',
+  '^TNX  (rates 10Y US,   Bf-m)',
+  'BUND  (rates 10Y DE,   Bf-m)',
+  '^VIX  (stress index,   Bf-m)',
+  'MOVE  (stress index,   Bf-m)',
+  'HYG   (credit spread,  Bf-m)',
+  'DXY   (USD liquidity,  Bf-m)',
+  'GLD   (flight-safety,  Bf-m)',
+];
+
+// ─── Command reply builder (async) ────────────────────────────────────────────
 
 /**
- * @param {string} body trimmed inbound Body
- * @returns {string} plain text (will be wrapped in TwiML Message)
+ * Build reply text for a finance command.
+ * @param {string} cmd — inner command after F prefix, e.g. "STATUS"
+ * @returns {Promise<string>}
  */
-export function buildFinanceCommandReply(body) {
-  const cmd = String(body || '').trim().toUpperCase();
-  const logPath = resolveShadowSignalsLogPath();
+export async function buildFinanceCommandReply(cmd) {
+  const command = String(cmd || '').trim().toUpperCase();
 
-  if (cmd === 'STATUS') {
-    const lines = parseNdjsonTail(logPath, 5);
-    if (lines === null) {
-      return 'Log not readable. Set FINANCE_SHADOW_SIGNALS_PATH on the server (see server logs for path).';
+  if (command === 'STATUS') {
+    const signals = await fetchSignalsFromApi();
+    if (signals === null) {
+      const base = financeApiUrl();
+      return base
+        ? `Cannot reach finance service (${base}). Check Railway deployment.`
+        : 'FINANCE_API_URL is not set on this server. Add it to Railway env vars.';
     }
-    if (lines.length === 0) return 'No signals yet.';
-    return lines
+    if (signals.length === 0) return 'No signals yet.';
+    const tail = signals.slice(-5);
+    return tail
       .map((s) => {
         const dot = s?.decision === 'Act' ? '🔴' : '🟢';
         const inst = s?.instrument ?? '?';
-        const a = s?.A ?? '?';
+        const a = s?.a_value ?? s?.A ?? '?';
         const dec = s?.decision ?? '?';
         const ts = (s?.signal_timestamp || '').slice(0, 10);
         return `${dot} ${inst} | A=${a} | ${dec} | ${ts}`;
@@ -90,37 +113,23 @@ export function buildFinanceCommandReply(body) {
       .join('\n');
   }
 
-  if (cmd === 'WATCHLIST') {
-    return [
-      '📋 WATCHLIST',
-      'ZION (bank, Bf-s)',
-      'CMA (bank, Bf-s)',
-      '^TNX (rates, Bf-m)',
-      'BUND (rates, Bf-m)',
-      '^VIX (stress, Bf-m)',
-      'MOVE (stress, Bf-m)'
-    ].join('\n');
+  if (command === 'WATCHLIST') {
+    return ['📋 WATCHLIST (v2 — 10 sensors)', ...WATCHLIST_V2].join('\n');
   }
 
-  if (cmd === 'HELP') {
-    return [
-      'Finance commands (use F + space so lab does not intercept):',
-      'F STATUS — last 5 signals (legacy: STATUS)',
-      'F WATCHLIST — list (legacy: WATCHLIST)',
-      'F LOG — last 10 entries (legacy: LOG)',
-      'F HELP — this list (legacy: HELP)'
-    ].join('\n');
-  }
-
-  if (cmd === 'LOG') {
-    const lines = parseNdjsonTail(logPath, 10);
-    if (lines === null) {
-      return 'Log not readable. Set FINANCE_SHADOW_SIGNALS_PATH on the server (see server logs for path).';
+  if (command === 'LOG') {
+    const signals = await fetchSignalsFromApi();
+    if (signals === null) {
+      const base = financeApiUrl();
+      return base
+        ? `Cannot reach finance service (${base}). Check Railway deployment.`
+        : 'FINANCE_API_URL is not set on this server. Add it to Railway env vars.';
     }
-    if (lines.length === 0) return 'No signals yet.';
-    return lines
+    if (signals.length === 0) return 'No signals yet.';
+    const tail = signals.slice(-10);
+    return tail
       .map((s) => {
-        const id = s?.signal_id ?? '?';
+        const id = (s?.signal_id ?? '?').slice(0, 8);
         const inst = s?.instrument ?? '?';
         const dec = s?.decision ?? '?';
         const ts = (s?.signal_timestamp || '').slice(0, 10);
@@ -129,15 +138,27 @@ export function buildFinanceCommandReply(body) {
       .join('\n');
   }
 
-  return 'Unknown command. Send HELP for list.';
+  if (command === 'HELP') {
+    return [
+      'Finance commands (prefix F + space):',
+      'F STATUS    — last 5 signals',
+      'F WATCHLIST — 10 monitored instruments',
+      'F LOG       — last 10 log entries',
+      'F HELP      — this list',
+    ].join('\n');
+  }
+
+  return 'Unknown finance command. Send F HELP for list.';
 }
 
-/** Finance commands that return TwiML (not the lab pipeline), without F prefix. */
+// ─── Public API ───────────────────────────────────────────────────────────────
+
+/** Finance commands (inner, after F prefix stripped). */
 export const FINANCE_WHATSAPP_COMMANDS = ['STATUS', 'WATCHLIST', 'LOG', 'HELP'];
 
 /**
- * Inbound body after trim → uppercase inner command for buildFinanceCommandReply.
- * "F STATUS" → "STATUS"; legacy "status" → "STATUS".
+ * Normalise inbound body to inner command.
+ * "F STATUS" → "STATUS";  "f status" → "STATUS";  legacy "STATUS" → "STATUS".
  */
 export function normalizeFinanceCommandBody(trimmedBody) {
   const upper = String(trimmedBody || '').trim().toUpperCase();
@@ -145,7 +166,7 @@ export function normalizeFinanceCommandBody(trimmedBody) {
   return upper;
 }
 
-/** True if message should be handled as finance (not lab / RAG pipeline). */
+/** True if the message should be handled as a finance command (not the lab pipeline). */
 export function isFinanceWhatsappCommand(trimmedBody) {
   const upper = String(trimmedBody || '').trim().toUpperCase();
   if (upper.startsWith('F ')) return true;
@@ -153,12 +174,15 @@ export function isFinanceWhatsappCommand(trimmedBody) {
 }
 
 /**
+ * Sends TwiML response for a finance command.
+ * Async because signal fetch is HTTP.
+ *
  * @param {import('express').Response} res
  * @param {string} incomingBody trimmed
  */
-export function sendFinanceCommandTwiml(res, incomingBody) {
+export async function sendFinanceCommandTwiml(res, incomingBody) {
   const inner = normalizeFinanceCommandBody(incomingBody);
-  const reply = buildFinanceCommandReply(inner);
+  const reply = await buildFinanceCommandReply(inner);
   const xml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeTwiml(reply)}</Message></Response>`;
   res.set('Content-Type', 'text/xml');
   return res.status(200).send(xml);
