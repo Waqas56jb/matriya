@@ -339,6 +339,112 @@ CREATE TABLE IF NOT EXISTS public.finance_signals (
 );
 
 -- ─────────────────────────────────────────────
+-- COLUMN GUARDS
+-- Add any columns that may be missing if tables were created
+-- previously with an incomplete schema (ALTER ADD COLUMN IF NOT EXISTS
+-- is a no-op when the column already exists — always safe to run).
+-- ─────────────────────────────────────────────
+
+-- projects
+ALTER TABLE public.projects ADD COLUMN IF NOT EXISTS description text;
+ALTER TABLE public.projects ADD COLUMN IF NOT EXISTS updated_at  timestamptz NOT NULL DEFAULT now();
+
+-- project_members
+ALTER TABLE public.project_members ADD COLUMN IF NOT EXISTS role       text NOT NULL DEFAULT 'member';
+ALTER TABLE public.project_members ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now();
+
+-- project_files
+ALTER TABLE public.project_files ADD COLUMN IF NOT EXISTS file_size    integer;
+ALTER TABLE public.project_files ADD COLUMN IF NOT EXISTS storage_path text;
+ALTER TABLE public.project_files ADD COLUMN IF NOT EXISTS uploaded_by  text;
+
+-- project_emails
+ALTER TABLE public.project_emails ADD COLUMN IF NOT EXISTS provider_message_id text;
+ALTER TABLE public.project_emails ADD COLUMN IF NOT EXISTS error_message       text;
+ALTER TABLE public.project_emails ADD COLUMN IF NOT EXISTS sent_at             timestamptz;
+
+-- tasks
+ALTER TABLE public.tasks ADD COLUMN IF NOT EXISTS priority    text NOT NULL DEFAULT 'בינוני';
+ALTER TABLE public.tasks ADD COLUMN IF NOT EXISTS assigned_to text;
+ALTER TABLE public.tasks ADD COLUMN IF NOT EXISTS due_date    date;
+ALTER TABLE public.tasks ADD COLUMN IF NOT EXISTS updated_at  timestamptz NOT NULL DEFAULT now();
+
+-- milestones
+ALTER TABLE public.milestones ADD COLUMN IF NOT EXISTS project_id     text NOT NULL DEFAULT '';
+ALTER TABLE public.milestones ADD COLUMN IF NOT EXISTS description    text;
+ALTER TABLE public.milestones ADD COLUMN IF NOT EXISTS due_date       date;
+ALTER TABLE public.milestones ADD COLUMN IF NOT EXISTS completed_date date;
+ALTER TABLE public.milestones ADD COLUMN IF NOT EXISTS updated_at     timestamptz NOT NULL DEFAULT now();
+
+-- documents  ← THIS IS WHAT CAUSED THE ERROR
+ALTER TABLE public.documents ADD COLUMN IF NOT EXISTS project_id text;
+ALTER TABLE public.documents ADD COLUMN IF NOT EXISTS content    text;
+ALTER TABLE public.documents ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
+
+-- notes
+ALTER TABLE public.notes ADD COLUMN IF NOT EXISTS project_id text;
+ALTER TABLE public.notes ADD COLUMN IF NOT EXISTS title      text;
+ALTER TABLE public.notes ADD COLUMN IF NOT EXISTS created_by text;
+ALTER TABLE public.notes ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
+
+-- audit_log
+ALTER TABLE public.audit_log ADD COLUMN IF NOT EXISTS project_id  text;
+ALTER TABLE public.audit_log ADD COLUMN IF NOT EXISTS user_id     text;
+ALTER TABLE public.audit_log ADD COLUMN IF NOT EXISTS username    text;
+ALTER TABLE public.audit_log ADD COLUMN IF NOT EXISTS entity_type text;
+ALTER TABLE public.audit_log ADD COLUMN IF NOT EXISTS entity_id   text;
+ALTER TABLE public.audit_log ADD COLUMN IF NOT EXISTS details     jsonb;
+ALTER TABLE public.audit_log ADD COLUMN IF NOT EXISTS request_id  text;
+
+-- materials
+ALTER TABLE public.materials ADD COLUMN IF NOT EXISTS aliases           text[]  NOT NULL DEFAULT '{}';
+ALTER TABLE public.materials ADD COLUMN IF NOT EXISTS material_family   text;
+ALTER TABLE public.materials ADD COLUMN IF NOT EXISTS material_role     text;
+ALTER TABLE public.materials ADD COLUMN IF NOT EXISTS technology_domain text;
+
+-- material_library
+ALTER TABLE public.material_library ADD COLUMN IF NOT EXISTS project_id       text NOT NULL DEFAULT '';
+ALTER TABLE public.material_library ADD COLUMN IF NOT EXISTS role_or_function text;
+
+-- lab_experiments
+ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS experiment_version    integer     NOT NULL DEFAULT 1;
+ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS technology_domain     text        NOT NULL DEFAULT '';
+ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS formula               text;
+ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS materials             jsonb       NOT NULL DEFAULT '[]';
+ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS percentages           jsonb       NOT NULL DEFAULT '{}';
+ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS results               text;
+ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS experiment_outcome    text        NOT NULL DEFAULT 'success';
+ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS is_production_formula boolean     NOT NULL DEFAULT false;
+ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS source_file_reference text;
+ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS research_session_id   text;
+ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS updated_at            timestamptz NOT NULL DEFAULT now();
+
+-- runs
+ALTER TABLE public.runs ADD COLUMN IF NOT EXISTS features_core     text[] NOT NULL DEFAULT '{}';
+ALTER TABLE public.runs ADD COLUMN IF NOT EXISTS features_extended text[] NOT NULL DEFAULT '{}';
+ALTER TABLE public.runs ADD COLUMN IF NOT EXISTS updated_at        timestamptz NOT NULL DEFAULT now();
+
+-- run_fsm_trace
+ALTER TABLE public.run_fsm_trace ADD COLUMN IF NOT EXISTS run_id     uuid;
+ALTER TABLE public.run_fsm_trace ADD COLUMN IF NOT EXISTS from_state text;
+ALTER TABLE public.run_fsm_trace ADD COLUMN IF NOT EXISTS to_state   text;
+ALTER TABLE public.run_fsm_trace ADD COLUMN IF NOT EXISTS rule_id    text;
+
+-- import_log
+ALTER TABLE public.import_log ADD COLUMN IF NOT EXISTS source_file_reference text;
+ALTER TABLE public.import_log ADD COLUMN IF NOT EXISTS source_type           text;
+ALTER TABLE public.import_log ADD COLUMN IF NOT EXISTS created_count         integer NOT NULL DEFAULT 0;
+ALTER TABLE public.import_log ADD COLUMN IF NOT EXISTS updated_count         integer NOT NULL DEFAULT 0;
+ALTER TABLE public.import_log ADD COLUMN IF NOT EXISTS error_count           integer NOT NULL DEFAULT 0;
+ALTER TABLE public.import_log ADD COLUMN IF NOT EXISTS details               jsonb;
+
+-- finance_signals
+ALTER TABLE public.finance_signals ADD COLUMN IF NOT EXISTS trigger_type    text;
+ALTER TABLE public.finance_signals ADD COLUMN IF NOT EXISTS source          text;
+ALTER TABLE public.finance_signals ADD COLUMN IF NOT EXISTS class_label     text;
+ALTER TABLE public.finance_signals ADD COLUMN IF NOT EXISTS composite_alert boolean NOT NULL DEFAULT false;
+
+-- ─────────────────────────────────────────────
 -- INDEXES
 -- ─────────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS idx_projects_updated        ON public.projects(updated_at DESC);
