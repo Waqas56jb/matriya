@@ -1586,7 +1586,7 @@ label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 0.9r
   margin-top: 0;
   margin-bottom: 14px;
   padding: 10px 14px;
-  background: rgba(15, 23, 42, 0.04);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   flex-shrink: 0;
