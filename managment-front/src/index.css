@@ -1460,11 +1460,9 @@ label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 0.9r
   align-items: center;
   justify-content: space-between;
   padding: 16px 24px;
-  background: rgba(255, 255, 255, 0.92);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  background: var(--surface);
   border-bottom: 1px solid var(--border);
-  box-shadow: 0 4px 20px -8px rgba(15, 23, 42, 0.08);
+  box-shadow: 0 4px 20px -8px rgba(0, 0, 0, 0.4);
 }
 .fullscreen-title { margin: 0; font-size: 1.35rem; font-weight: 600; }
 .fullscreen-close {
