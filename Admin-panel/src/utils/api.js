@@ -5,14 +5,18 @@ function getToken() {
 }
 
 async function req(method, path, body) {
-  const headers = { 'Content-Type': 'application/json' };
   const token = getToken();
+  const hasBody = body !== undefined && body !== null && method !== 'GET' && method !== 'DELETE';
+
+  // Railway/Fastly CDN mangles application/json POST bodies — use form-urlencoded for all write requests
+  const headers = {};
   if (token) headers.Authorization = `Bearer ${token}`;
+  if (hasBody) headers['Content-Type'] = 'application/x-www-form-urlencoded';
 
   const res = await fetch(`${ADMIN_API_BASE}${path}`, {
     method,
     headers,
-    body: body ? JSON.stringify(body) : undefined,
+    body: hasBody ? new URLSearchParams(body).toString() : undefined,
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);

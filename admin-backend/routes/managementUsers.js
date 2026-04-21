@@ -45,12 +45,20 @@ router.post('/', async (req, res) => {
   }
 
   try {
+    // Use form-urlencoded to avoid Railway/Fastly CDN JSON body mangling on server-to-server calls
+    const formBody = new URLSearchParams({
+      username: String(username).trim(),
+      email: String(email).trim(),
+      password: String(password),
+      ...(full_name ? { full_name: String(full_name) } : {}),
+    }).toString();
+
     const r = await axios.post(
       `${base}/auth/management/provision`,
-      { username: String(username).trim(), email: String(email).trim(), password: String(password), full_name: full_name || null },
+      formBody,
       {
         headers: {
-          'Content-Type': 'application/json',
+          'Content-Type': 'application/x-www-form-urlencoded',
           'X-Matriya-Provision-Key': secret
         },
         timeout: 30000,
