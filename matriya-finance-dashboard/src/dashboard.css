@@ -1,0 +1,479 @@
+/* ─── Finance Dashboard Layout ─────────────────────────────────────────────── */
+.fd-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ─── Topbar ───────────────────────────────────────────────────────────────── */
+.fd-topbar {
+  background: var(--bg-sidebar);
+  border-bottom: 1px solid var(--border);
+  padding: 0 1.5rem;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.4);
+}
+
+.fd-topbar-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+}
+
+.fd-logo {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-grad);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 15px;
+  color: #fff;
+  letter-spacing: -0.5px;
+  flex-shrink: 0;
+}
+
+.fd-brand-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.fd-brand-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.fd-brand-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1;
+}
+
+.fd-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.fd-live-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 20px;
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  color: var(--success);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.fd-live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  animation: pulse-dot 2s infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.fd-api-url {
+  font-size: 11px;
+  color: var(--text-muted);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ─── Buttons ──────────────────────────────────────────────────────────────── */
+.fd-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 18px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: var(--transition);
+  white-space: nowrap;
+  line-height: 1;
+}
+
+.fd-btn-primary {
+  background: var(--accent-grad);
+  color: #fff;
+  box-shadow: 0 4px 15px rgba(0, 212, 255, 0.25);
+}
+
+.fd-btn-primary:hover:not(:disabled) {
+  background: var(--accent-grad-h);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(0, 212, 255, 0.35);
+}
+
+.fd-btn-secondary {
+  background: var(--bg-card2);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+}
+
+.fd-btn-secondary:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-light);
+}
+
+.fd-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none !important;
+}
+
+.fd-btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-card2);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.fd-btn-icon:hover {
+  background: var(--bg-hover);
+  color: var(--accent-cyan);
+  border-color: var(--border-light);
+}
+
+/* ─── Main content area ────────────────────────────────────────────────────── */
+.fd-main {
+  flex: 1;
+  padding: 1.75rem 1.5rem;
+  max-width: 1300px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+/* ─── Section header ───────────────────────────────────────────────────────── */
+.fd-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.fd-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+/* ─── Alert ────────────────────────────────────────────────────────────────── */
+.fd-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 0.85rem 1.1rem;
+  margin-bottom: 1.25rem;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+}
+
+.fd-alert-error {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
+}
+
+/* ─── Stat cards grid ──────────────────────────────────────────────────────── */
+.fd-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.fd-stat-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.1rem 1.25rem;
+  box-shadow: var(--shadow-card);
+  transition: var(--transition);
+  position: relative;
+  overflow: hidden;
+}
+
+.fd-stat-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+}
+
+.fd-stat-card.fd-accent-cyan::before { background: var(--accent-cyan); }
+.fd-stat-card.fd-accent-purple::before { background: var(--accent-purple); }
+.fd-stat-card.fd-accent-success::before { background: var(--success); }
+.fd-stat-card.fd-accent-warning::before { background: var(--warning); }
+.fd-stat-card.fd-accent-danger::before { background: var(--danger); }
+
+.fd-stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card), var(--shadow-glow);
+  border-color: var(--border-light);
+}
+
+.fd-stat-icon {
+  font-size: 1.5rem;
+  margin-bottom: 0.6rem;
+  display: block;
+}
+
+.fd-stat-value {
+  font-size: 1.9rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1;
+  margin-bottom: 0.3rem;
+}
+
+.fd-stat-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.fd-stat-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+/* ─── Card (generic panel) ─────────────────────────────────────────────────── */
+.fd-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  margin-bottom: 1.25rem;
+  overflow: hidden;
+}
+
+.fd-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.fd-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.fd-card-body {
+  padding: 1.25rem;
+}
+
+.fd-card-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 0 1.25rem 0.75rem;
+}
+
+/* ─── Status grid (dl) ─────────────────────────────────────────────────────── */
+.fd-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 0.75rem 1.5rem;
+}
+
+.fd-status-item dt {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 500;
+  margin-bottom: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.fd-status-item dd {
+  font-size: 13px;
+  color: var(--text-primary);
+  font-weight: 500;
+  word-break: break-all;
+}
+
+.fd-status-ok { color: var(--success) !important; }
+.fd-status-warn { color: var(--warning) !important; }
+.fd-status-err { color: var(--danger) !important; }
+
+/* ─── Table ────────────────────────────────────────────────────────────────── */
+.fd-table-wrap {
+  overflow-x: auto;
+}
+
+.fd-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.fd-table thead tr {
+  border-bottom: 1px solid var(--border);
+}
+
+.fd-table th {
+  padding: 10px 14px;
+  text-align: left;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  white-space: nowrap;
+}
+
+.fd-table tbody tr {
+  border-bottom: 1px solid rgba(30, 58, 95, 0.5);
+  transition: background 0.15s;
+}
+
+.fd-table tbody tr:hover {
+  background: var(--bg-hover);
+}
+
+.fd-table tbody tr:last-child {
+  border-bottom: none;
+}
+
+.fd-table td {
+  padding: 10px 14px;
+  color: var(--text-primary);
+  vertical-align: middle;
+}
+
+.fd-table td.muted {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.fd-table .mono {
+  font-family: 'Fira Code', 'Courier New', monospace;
+  font-size: 12px;
+  color: var(--accent-cyan);
+}
+
+/* ─── Badges ───────────────────────────────────────────────────────────────── */
+.fd-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
+.fd-badge-act     { background: rgba(239, 68, 68, 0.15); color: var(--danger); border: 1px solid rgba(239, 68, 68, 0.3); }
+.fd-badge-hold    { background: rgba(59, 130, 246, 0.15); color: var(--info); border: 1px solid rgba(59, 130, 246, 0.3); }
+.fd-badge-observe { background: rgba(245, 158, 11, 0.15); color: var(--warning); border: 1px solid rgba(245, 158, 11, 0.3); }
+.fd-badge-default { background: rgba(77, 106, 136, 0.2); color: var(--text-secondary); border: 1px solid var(--border); }
+
+/* ─── Loading skeleton ─────────────────────────────────────────────────────── */
+.fd-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem 1rem;
+  gap: 1rem;
+}
+
+.fd-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent-cyan);
+  border-radius: 50%;
+  animation: fd-spin 0.7s linear infinite;
+}
+
+@keyframes fd-spin {
+  to { transform: rotate(360deg); }
+}
+
+.fd-loading-text {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.fd-empty {
+  padding: 2.5rem 1.25rem;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* ─── Responsive ───────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .fd-main {
+    padding: 1.25rem 1rem;
+  }
+
+  .fd-stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .fd-api-url {
+    display: none;
+  }
+
+  .fd-topbar {
+    padding: 0 1rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .fd-stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .fd-brand-sub {
+    display: none;
+  }
+
+  .fd-live-pill {
+    display: none;
+  }
+}
