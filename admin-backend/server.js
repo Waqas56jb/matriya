@@ -58,6 +58,7 @@ const app = express();
 
 // CORS: comma-separated origins in ADMIN_FRONTEND_URL. Always includes localhost ports for dev.
 // If ADMIN_FRONTEND_URL is empty or *, all origins are reflected (dev-only).
+// Also allows any Vercel preview URL matching the same project name pattern.
 const DEV_ORIGINS = [
   'http://localhost:3000',
   'http://localhost:3001',
@@ -66,12 +67,35 @@ const DEV_ORIGINS = [
   'http://localhost:5173',
 ];
 
+// Vercel generates multiple URLs per deployment: the main domain and preview/branch URLs.
+// Extract the base project name from ADMIN_FRONTEND_URL to allow all Vercel preview variants.
+function getVercelProjectPattern() {
+  const raw = (process.env.ADMIN_FRONTEND_URL || '').trim();
+  const urls = raw.split(',').map(s => s.trim()).filter(s => s.includes('.vercel.app'));
+  if (!urls.length) return null;
+  // e.g. "https://matriya-system-project-azxf.vercel.app" → "matriya-system-project"
+  const match = urls[0].match(/https?:\/\/([\w-]+?)(?:-[a-z0-9]{4,})?\.vercel\.app/);
+  return match ? match[1] : null;
+}
+
 function corsOrigin() {
   const raw = (process.env.ADMIN_FRONTEND_URL || '').trim();
   if (!raw || raw === '*') return true;
   const explicit = raw.split(',').map(s => s.trim()).filter(Boolean);
   const all = [...new Set([...explicit, ...DEV_ORIGINS])];
-  return all;
+
+  const projectBase = getVercelProjectPattern();
+  // Return a function so we can dynamically allow any Vercel preview URL for this project
+  return (origin, callback) => {
+    if (!origin) return callback(null, true); // non-browser requests (curl, mobile apps)
+    if (all.includes(origin)) return callback(null, true);
+    // Allow any *.vercel.app URL that starts with the same project base name
+    if (projectBase && /^https:\/\//.test(origin) && origin.includes('.vercel.app')) {
+      const subMatch = origin.match(/^https:\/\/([\w-]+)\.vercel\.app$/);
+      if (subMatch && subMatch[1].startsWith(projectBase)) return callback(null, true);
+    }
+    callback(new Error(`CORS: origin ${origin} not allowed`));
+  };
 }
 
 app.use(cors({
