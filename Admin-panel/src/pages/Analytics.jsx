@@ -37,9 +37,10 @@ export default function Analytics() {
     <div>
       <div className="page-header" style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
         <div><h1>{t('pages.analytics')}</h1><p>{t('analytics.subtitle')}</p></div>
-        <div style={{ display: 'flex', gap: 6 }}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          {loading && <div className="spinner" style={{ width: 16, height: 16, marginInlineEnd: 4 }} />}
           {[7, 14, 30].map(d => (
-            <button key={d} className={`btn btn-sm ${days === d ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setDays(d)}>
+            <button key={d} className={`btn btn-sm ${days === d ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setDays(d)} disabled={loading}>
               {d}d
             </button>
           ))}
@@ -65,7 +66,7 @@ export default function Analytics() {
         ))}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, marginBottom: 24 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 24, marginBottom: 24 }}>
         <div className="section-card">
           <div className="section-title">📈 {t('analytics.msgVolume')}</div>
           <ResponsiveContainer width="100%" height={200}>

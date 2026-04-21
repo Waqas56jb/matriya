@@ -111,7 +111,7 @@ export default function WhatsApp() {
         <p>{t('whatsapp.subtitle')}</p>
       </div>
 
-      <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(4,1fr)', marginBottom: 24 }}>
+      <div className="stats-grid" style={{ marginBottom: 24 }}>
         {[
           { icon: '🔔', color: 'orange', label: t('whatsapp.requests'), value: requests.filter(r => r.status === 'pending').length },
           { icon: '📨', color: 'cyan',   label: t('whatsapp.queueTasks'),     value: queue.length     },
