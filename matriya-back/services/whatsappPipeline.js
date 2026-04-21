@@ -132,16 +132,24 @@ function formatReply(pipelineResult) {
 export async function processPendingTasks() {
   const sb = getSupabase();
 
-  // Fetch PENDING rows
-  const { data: tasks, error: fetchError } = await sb
-    .from(TABLE)
-    .select('id, from_number, message')
-    .eq('status', 'PENDING')
-    .order('received_at', { ascending: true })
-    .limit(20); // process at most 20 per cycle to avoid timeout
+  // Fetch PENDING rows — retry once on transient network failure
+  let tasks, fetchError;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    ({ data: tasks, error: fetchError } = await sb
+      .from(TABLE)
+      .select('id, from_number, message')
+      .eq('status', 'PENDING')
+      .order('received_at', { ascending: true })
+      .limit(20));
+    if (!fetchError) break;
+    if (attempt < 2) {
+      logger.warn(`[whatsappPipeline] fetch attempt ${attempt} failed (${fetchError.message}), retrying in 3s…`);
+      await new Promise(r => setTimeout(r, 3000));
+    }
+  }
 
   if (fetchError) {
-    logger.error(`[whatsappPipeline] fetch error: ${fetchError.message}`);
+    logger.error(`[whatsappPipeline] fetch error after retries: ${fetchError.message}`);
     return { processed: 0, errors: 1 };
   }
 

@@ -1330,7 +1330,7 @@ async function handleMatriyaSearch(req, res) {
   // ─── SOURCE GUARD: runs at absolute entry, before ANY retrieval, DB call, or user lookup ───
   // David requirement: log "[ENTRY] guard check starting" at the very top.
   const flowRawEarly = String(req.body?.flow ?? req.query.flow ?? '').toLowerCase().trim();
-  logger.warn(`[ENTRY] guard check starting — flow=${flowRawEarly || 'none'} query="${query}"`);
+  logger.info(`[ENTRY] guard check starting — flow=${flowRawEarly || 'none'} query="${query}"`);
 
   // flow=lab set explicitly by caller → bypass guard entirely; the caller already knows the intent.
   if (flowRawEarly === 'lab') {
