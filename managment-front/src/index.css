@@ -1751,6 +1751,7 @@ label.emails-compose-attach-item:hover:not(.emails-compose-attach-item-disabled)
   padding: 0;
   margin: -1px;
   overflow: hidden;
+  
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
