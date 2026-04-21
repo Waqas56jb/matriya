@@ -364,7 +364,12 @@ ALTER TABLE public.project_files ADD COLUMN IF NOT EXISTS storage_path text;
 ALTER TABLE public.project_files ADD COLUMN IF NOT EXISTS uploaded_by  text;
 
 -- project_emails — patch old incomplete schema
+ALTER TABLE public.project_emails ADD COLUMN IF NOT EXISTS direction        text        NOT NULL DEFAULT 'sent';
+ALTER TABLE public.project_emails ADD COLUMN IF NOT EXISTS status           text        NOT NULL DEFAULT 'sent';
+ALTER TABLE public.project_emails ADD COLUMN IF NOT EXISTS from_email       text;
 ALTER TABLE public.project_emails ADD COLUMN IF NOT EXISTS to_emails        text[];
+ALTER TABLE public.project_emails ADD COLUMN IF NOT EXISTS subject          text;
+ALTER TABLE public.project_emails ADD COLUMN IF NOT EXISTS body_text        text;
 ALTER TABLE public.project_emails ADD COLUMN IF NOT EXISTS body_html        text;
 ALTER TABLE public.project_emails ADD COLUMN IF NOT EXISTS resend_email_id  text;
 ALTER TABLE public.project_emails ADD COLUMN IF NOT EXISTS sent_by_user_id  text;

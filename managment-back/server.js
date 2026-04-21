@@ -1095,12 +1095,28 @@ app.post('/api/projects/:projectId/emails/send', limiterEmail, async (req, res) 
     const data = await r.json().catch(() => ({}));
     if (!r.ok) {
       const msg = data.message || data.error || (typeof data === 'string' ? data : 'Resend error');
-      return res.status(r.status >= 500 ? 502 : 400).json({ error: typeof msg === 'string' ? msg : 'Resend error', details: data });
+      const errMsg = typeof msg === 'string' ? msg : 'Resend error';
+      await supabase.from('project_emails').insert({
+        project_id: projectId,
+        direction: 'sent',
+        status: 'failed',
+        from_email: RESEND_FROM_EMAIL,
+        to_emails: toArr,
+        subject,
+        body_text: text || null,
+        body_html: html || null,
+        sent_by_user_id: ctx.user.id,
+        sent_by_username: ctx.user.username || null,
+        attachments: [],
+        error_message: errMsg
+      }).select().single().catch(e => console.error('project_emails failed-insert error:', e.message));
+      return res.status(r.status >= 500 ? 502 : 400).json({ error: errMsg, details: data });
     }
     const resendId = data.id || null;
     const { data: row, error: insErr } = await supabase.from('project_emails').insert({
       project_id: projectId,
       direction: 'sent',
+      status: 'sent',
       from_email: RESEND_FROM_EMAIL,
       to_emails: toArr,
       subject,
@@ -1109,12 +1125,11 @@ app.post('/api/projects/:projectId/emails/send', limiterEmail, async (req, res) 
       resend_email_id: resendId,
       sent_by_user_id: ctx.user.id,
       sent_by_username: ctx.user.username || null,
-      attachments: attachmentMeta.length ? attachmentMeta : []
+      attachments: attachmentMeta.length ? attachmentMeta : [],
+      sent_at: new Date().toISOString()
     }).select().single();
     if (insErr) {
-      if (!String(insErr.message || '').includes('does not exist') && !String(insErr.message || '').includes('relation')) {
-        console.error('project_emails insert failed:', insErr);
-      }
+      console.error('project_emails insert failed:', insErr.message);
     }
     auditLog(projectId, ctx.user.id, ctx.user.username, 'create', 'email_send', resendId, { to: toArr, subject }, req.requestId);
     res.json({ success: true, id: resendId, email: row || null });
