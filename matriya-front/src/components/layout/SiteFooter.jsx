@@ -9,32 +9,32 @@ export default function SiteFooter() {
       <div className="site-footer__inner">
         <div className="site-footer__grid">
           <div className="site-footer__col">
-            <h3 className="site-footer__heading">מטריה</h3>
+            <h3 className="site-footer__heading">Matriya</h3>
             <p className="site-footer__text">
-              מערכת לניתוח מסמכים, נתוני מעבדה מובנים והצגת החלטות בשקיפות — מותאמת לצוותי מחקר.
+              Document analysis, structured lab data, and transparent decision workflows — built for research teams.
             </p>
           </div>
           <div className="site-footer__col">
-            <h3 className="site-footer__heading">שימוש</h3>
+            <h3 className="site-footer__heading">Features</h3>
             <ul className="site-footer__list">
-              <li>העלאה ואינדקס של קבצים</li>
-              <li>שאילתות מבוססות מסמכים</li>
-              <li>מסלול מחקר והשוואות מעבדה</li>
+              <li>File upload &amp; indexing</li>
+              <li>Evidence-based queries</li>
+              <li>Lab research &amp; comparison workflows</li>
             </ul>
           </div>
           <div className="site-footer__col">
-            <h3 className="site-footer__heading">הערות</h3>
+            <h3 className="site-footer__heading">Notes</h3>
             <p className="site-footer__text">
-              התצוגה מסכמת תוצאות שהוגדרו במערכת. לשאלות מתודולוגיות פנו למנהל הפרויקט.
+              Outputs summarise results defined within the system. For methodological questions contact the project administrator.
             </p>
           </div>
         </div>
         <div className="site-footer__bottom">
           <span className="site-footer__copy">
-            © {year} מטריה · כל הזכויות שמורות
+            © {year} Matriya · All rights reserved
           </span>
           <span className="site-footer__made">
-            נבנה עם <HiOutlineHeart className="site-footer__heart" aria-hidden /> דיוק מחקרי
+            Built with <HiOutlineHeart className="site-footer__heart" aria-hidden /> research precision
           </span>
         </div>
       </div>

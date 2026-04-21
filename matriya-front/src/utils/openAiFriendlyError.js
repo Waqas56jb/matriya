@@ -1,34 +1,28 @@
 /**
- * Short, user-facing copy for OpenAI / billing errors (Hebrew).
- * Avoids dumping long English API messages into the UI.
+ * Short, user-facing messages for OpenAI / billing errors.
+ * Avoids dumping raw API error strings into the UI.
  */
 
 function normalizeErrorText(raw) {
   if (raw == null) return '';
   if (typeof raw === 'string') return raw;
   if (typeof raw === 'object' && raw.message) return String(raw.message);
-  try {
-    return JSON.stringify(raw);
-  } catch {
-    return String(raw);
-  }
+  try { return JSON.stringify(raw); } catch { return String(raw); }
 }
 
 /**
  * @param {string} text — error body or message
- * @returns {string|null} Hebrew short message, or null to keep caller’s default
+ * @returns {string|null} friendly message, or null to use caller's default
  */
 export function getOpenAiFriendlyMessage(text) {
   const s = normalizeErrorText(text).toLowerCase();
 
   if (/incorrect api key|invalid api key|wrong api key|api key provided/i.test(s)) {
-    return 'מפתח OpenAI לא תקין. נא להגדיר מפתח תקין בשרת — Please use a valid API key.';
+    return 'OpenAI API key is invalid. Please configure a valid key on the server.';
   }
 
-  if (
-    /insufficient_quota|quota|rate limit|billing|exceeded your current quota|too many requests|429/.test(s)
-  ) {
-    return 'מכסת OpenAI או תשלום: בדקו חשבון OpenAI או נסו מאוחר יותר.';
+  if (/insufficient_quota|quota|rate limit|billing|exceeded your current quota|too many requests|429/.test(s)) {
+    return 'OpenAI quota or billing issue. Check your OpenAI account or try again later.';
   }
 
   return null;
@@ -36,9 +30,9 @@ export function getOpenAiFriendlyMessage(text) {
 
 /**
  * @param {unknown} err — axios error or Error
- * @param {string} fallbackHebrew — if no OpenAI-specific friendly text
+ * @param {string} fallback — shown if no OpenAI-specific message found
  */
-export function formatApiErrorForUser(err, fallbackHebrew) {
+export function formatApiErrorForUser(err, fallback) {
   const raw =
     err?.response?.data?.error ||
     err?.response?.data?.detail ||
@@ -48,5 +42,5 @@ export function formatApiErrorForUser(err, fallbackHebrew) {
   const friendly = getOpenAiFriendlyMessage(raw);
   if (friendly) return friendly;
   const s = normalizeErrorText(raw).trim();
-  return s || fallbackHebrew;
+  return s || fallback || 'An unexpected error occurred.';
 }

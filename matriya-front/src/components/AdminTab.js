@@ -73,7 +73,7 @@ function AdminTab({ isAdmin }) {
             });
             setFiles(response.data.files || []);
         } catch (err) {
-            setError(err.response?.data?.detail || err.message || 'שגיאה בטעינת קבצים');
+            setError(err.response?.data?.detail || err.message || 'Error loading files');
         } finally {
             setLoading(false);
         }
@@ -100,14 +100,14 @@ function AdminTab({ isAdmin }) {
             });
             setSearchHistory(response.data.history || []);
         } catch (err) {
-            setError(err.response?.data?.error || err.message || 'שגיאה בטעינת היסטוריית חיפושים');
+            setError(err.response?.data?.error || err.message || 'Error loading search history');
         } finally {
             setHistoryLoading(false);
         }
     };
 
     const handleDeleteFile = async (filename) => {
-        if (!window.confirm(`האם אתה בטוח שברצונך למחוק את הקובץ "${filename}"?`)) {
+        if (!window.confirm(`Are you sure you want to delete the file "${filename}"?`)) {
             return;
         }
 
@@ -117,9 +117,9 @@ function AdminTab({ isAdmin }) {
                 timeout: 5000
             });
             setFiles(files.filter(f => f !== filename));
-            alert('הקובץ נמחק בהצלחה');
+            alert('File deleted successfully');
         } catch (err) {
-            alert(err.response?.data?.detail || err.message || 'שגיאה במחיקת קובץ');
+            alert(err.response?.data?.detail || err.message || 'Error deleting file');
         } finally {
             setDeletingFile(null);
         }
@@ -133,7 +133,7 @@ function AdminTab({ isAdmin }) {
             });
             setUserPermissions(response.data);
         } catch (err) {
-            alert(err.response?.data?.detail || err.message || 'שגיאה בטעינת הרשאות');
+            alert(err.response?.data?.detail || err.message || 'Error loading permissions');
         }
     };
 
@@ -148,9 +148,9 @@ function AdminTab({ isAdmin }) {
             }, {
                 timeout: 5000
             });
-            alert('הרשאות עודכנו בהצלחה');
+            alert('Permissions updated successfully');
         } catch (err) {
-            alert(err.response?.data?.detail || err.message || 'שגיאה בשמירת הרשאות');
+            alert(err.response?.data?.detail || err.message || 'Error saving permissions');
         } finally {
             setSavingPermissions(false);
         }
@@ -193,7 +193,7 @@ function AdminTab({ isAdmin }) {
             const response = await api.get('/admin/recovery/dashboard', { params, timeout: 10000 });
             setDashboard(response.data);
         } catch (err) {
-            setError(err.response?.data?.error || err.message || 'שגיאה בטעינת דשבורד B-Integrity');
+            setError(err.response?.data?.error || err.message || 'Error loading B-Integrity dashboard');
         } finally {
             setDashboardLoading(false);
         }
@@ -246,14 +246,14 @@ function AdminTab({ isAdmin }) {
             setResolveNote('');
             loadIntegrityDashboard();
         } catch (err) {
-            alert(err.response?.data?.error || err.message || 'שגיאה בשחרור נעילה');
+            alert(err.response?.data?.error || err.message || 'Error releasing lock');
         } finally {
             setResolvingId(null);
         }
     };
 
     const formatGateStatus = (s) => {
-        const map = { HEALTHY: 'תקין', HALTED: 'נעול', RECOVERY: 'החלמה' };
+        const map = { HEALTHY: 'Healthy', HALTED: 'Locked', RECOVERY: 'Recovery' };
         return map[s] || s;
     };
 
@@ -264,7 +264,7 @@ function AdminTab({ isAdmin }) {
             const response = await api.get('/admin/metrics/global', { timeout: 10000 });
             setGlobalMetrics(response.data);
         } catch (err) {
-            setError(err.response?.data?.error || err.message || 'שגיאה בטעינת מדדי גלובל');
+            setError(err.response?.data?.error || err.message || 'Error loading global metrics');
         } finally {
             setGlobalMetricsLoading(false);
         }
@@ -312,7 +312,7 @@ function AdminTab({ isAdmin }) {
             a.click();
             URL.revokeObjectURL(a.href);
         } catch (err) {
-            alert(err.response?.data?.error || err.message || 'שגיאה בייצוא');
+            alert(err.response?.data?.error || err.message || 'Export error');
         }
     };
 
@@ -332,7 +332,7 @@ function AdminTab({ isAdmin }) {
         return (
             <div className="admin-tab">
                 <div className="card">
-                    <div className="empty-state">אין הרשאות ניהול</div>
+                    <div className="empty-state">No admin permissions</div>
                 </div>
             </div>
         );
@@ -342,7 +342,7 @@ function AdminTab({ isAdmin }) {
         return (
             <div className="admin-tab">
                 <div className="card">
-                    <div className="loading">טוען...</div>
+                    <div className="loading">Loading…</div>
                 </div>
             </div>
         );
@@ -351,38 +351,38 @@ function AdminTab({ isAdmin }) {
     return (
         <div className="admin-tab">
             <div className="card">
-                <h2>ניהול מערכת - Admin</h2>
+                <h2>System Administration</h2>
                 
                 <div className="admin-sections">
                     <button
                         className={`section-button ${activeSection === 'files' ? 'active' : ''}`}
                         onClick={() => setActiveSection('files')}
                     >
-                        ניהול קבצים
+                        File Management
                     </button>
                     <button
                         className={`section-button ${activeSection === 'users' ? 'active' : ''}`}
                         onClick={() => setActiveSection('users')}
                     >
-                        ניהול הרשאות משתמשים
+                        User Permissions
                     </button>
                     <button
                         className={`section-button ${activeSection === 'history' ? 'active' : ''}`}
                         onClick={() => setActiveSection('history')}
                     >
-                        הסטורית חיפושים
+                        Search History
                     </button>
                     <button
                         className={`section-button ${activeSection === 'integrity' ? 'active' : ''}`}
                         onClick={() => setActiveSection('integrity')}
                     >
-                        דשבורד B-Integrity
+                        B-Integrity Dashboard
                     </button>
                     <button
                         className={`section-button ${activeSection === 'global' ? 'active' : ''}`}
                         onClick={() => setActiveSection('global')}
                     >
-                        מדדי גלובל
+                        Global Metrics
                     </button>
                 </div>
 
@@ -392,9 +392,9 @@ function AdminTab({ isAdmin }) {
 
                 {activeSection === 'files' && (
                     <div className="files-section">
-                        <h3>כל הקבצים במאגר ({files.length})</h3>
+                        <h3>All files in store ({files.length})</h3>
                         {files.length === 0 ? (
-                            <div className="empty-state">אין קבצים במאגר</div>
+                            <div className="empty-state">No files in store</div>
                         ) : (
                             <div className="files-list">
                                 {files.map((filename, index) => (
@@ -408,11 +408,11 @@ function AdminTab({ isAdmin }) {
                                         {deletingFile === filename ? (
                                             <span key="loading" className="btn-inner">
                                                 <span className="spinner"></span>
-                                                <span>מוחק...</span>
+                                                <span>Deleting…</span>
                                             </span>
                                         ) : (
                                             <span key="idle" className="btn-inner">
-                                                <span>מחק</span>
+                                                <span>Delete</span>
                                             </span>
                                         )}
                                     </button>
@@ -426,7 +426,7 @@ function AdminTab({ isAdmin }) {
                 {activeSection === 'users' && (
                     <div className="users-section">
                         <div className="users-list-container">
-                            <h3>משתמשים ({users.length})</h3>
+                            <h3>Users ({users.length})</h3>
                             <div className="users-list">
                                 {users.map((user) => (
                                     <div
@@ -447,7 +447,7 @@ function AdminTab({ isAdmin }) {
 
                         {selectedUser && userPermissions && (
                             <div className="permissions-panel">
-                                <h3>הרשאות עבור: {selectedUser.username}</h3>
+                                <h3>Permissions for: {selectedUser.username}</h3>
                                 
                                 <div className="permission-option">
                                     <label className="checkbox-label">
@@ -456,13 +456,13 @@ function AdminTab({ isAdmin }) {
                                             checked={userPermissions.access_all_files}
                                             onChange={handleToggleAccessAll}
                                         />
-                                        <span>גישה לכל הקבצים</span>
+                                        <span>Access to all files</span>
                                     </label>
                                 </div>
 
                                 {!userPermissions.access_all_files && (
                                     <div className="files-permissions">
-                                        <h4>בחר קבצים מותרים:</h4>
+                                        <h4>Select allowed files:</h4>
                                         <div className="files-checkbox-list">
                                             {files.map((filename, index) => (
                                                 <label key={index} className="checkbox-label">
@@ -486,11 +486,11 @@ function AdminTab({ isAdmin }) {
                                     {savingPermissions ? (
                                         <span key="loading" className="btn-inner">
                                             <span className="spinner"></span>
-                                            <span>שומר...</span>
+                                            <span>Saving…</span>
                                         </span>
                                     ) : (
                                         <span key="idle" className="btn-inner">
-                                            <span>שמור הרשאות</span>
+                                            <span>Save Permissions</span>
                                         </span>
                                     )}
                                 </button>
@@ -501,11 +501,11 @@ function AdminTab({ isAdmin }) {
 
                 {activeSection === 'history' && (
                     <div className="history-section">
-                        <h3>הסטורית חיפושים – שאלות ותשובות משתמשים</h3>
+                        <h3>Search History — User Questions & Answers</h3>
                         {historyLoading ? (
-                            <div className="loading">טוען...</div>
+                            <div className="loading">Loading…</div>
                         ) : searchHistory.length === 0 ? (
-                            <div className="empty-state">אין עדיין היסטוריית חיפושים</div>
+                            <div className="empty-state">No search history yet</div>
                         ) : (
                             <div className="search-history-list">
                                 {searchHistory.map((item) => (
@@ -513,11 +513,11 @@ function AdminTab({ isAdmin }) {
                                         <div className="history-meta">
                                             <span className="history-username">{item.username}</span>
                                             <span className="history-date">
-                                                {item.created_at ? new Date(item.created_at).toLocaleString('he-IL') : ''}
+                                                {item.created_at ? new Date(item.created_at).toLocaleString('en-US') : ''}
                                             </span>
                                         </div>
-                                        <div className="history-question"><strong>שאלה:</strong> {item.question}</div>
-                                        <div className="history-answer"><strong>תשובה:</strong> {item.answer || '—'}</div>
+                                        <div className="history-question"><strong>Question:</strong> {item.question}</div>
+                                        <div className="history-answer"><strong>Answer:</strong> {item.answer || '—'}</div>
                                     </div>
                                 ))}
                             </div>
@@ -527,135 +527,135 @@ function AdminTab({ isAdmin }) {
 
                 {activeSection === 'integrity' && (
                     <div className="integrity-section">
-                        <h3>דשבורד B-Integrity</h3>
+                        <h3>B-Integrity Dashboard</h3>
                         <div className="dashboard-toolbar">
                             <div className="dashboard-filters">
                                 <div className="filter-group">
-                                    <label>מתאריך</label>
+                                    <label>From date</label>
                                     <input type="date" value={filterFromDate} onChange={e => setFilterFromDate(e.target.value)} className="filter-input" />
                                 </div>
                                 <div className="filter-group">
-                                    <label>עד תאריך</label>
+                                    <label>To date</label>
                                     <input type="date" value={filterToDate} onChange={e => setFilterToDate(e.target.value)} className="filter-input" />
                                 </div>
                                 <div className="filter-group">
-                                    <label>סטטוס הפרות</label>
+                                    <label>Violation status</label>
                                     <select value={filterViolationStatus} onChange={e => setFilterViolationStatus(e.target.value)} className="filter-select">
-                                        <option value="all">הכל</option>
-                                        <option value="active">פעיל בלבד</option>
-                                        <option value="resolved">מטופל בלבד</option>
+                                        <option value="all">All</option>
+                                        <option value="active">Active only</option>
+                                        <option value="resolved">Resolved only</option>
                                     </select>
                                 </div>
                                 <div className="filter-group">
-                                    <label>סוג הפרה</label>
-                                    <input type="text" value={filterViolationType} onChange={e => setFilterViolationType(e.target.value)} placeholder="סינון לפי סוג" className="filter-input filter-input-text" />
+                                    <label>Violation type</label>
+                                    <input type="text" value={filterViolationType} onChange={e => setFilterViolationType(e.target.value)} placeholder="Filter by type" className="filter-input filter-input-text" />
                                 </div>
-                                <button type="button" className="filter-apply-btn" onClick={applyDashboardFilters}>החל סינון</button>
+                                <button type="button" className="filter-apply-btn" onClick={applyDashboardFilters}>Apply filter</button>
                             </div>
                             <div className="dashboard-export">
-                                <button type="button" className="export-csv-btn" onClick={() => exportDashboardCsv('violations')} disabled={!dashboard || !(dashboard.violations || []).length}>ייצוא CSV הפרות</button>
-                                <button type="button" className="export-csv-btn" onClick={() => exportDashboardCsv('chart')} disabled={!dashboard || !(dashboard.chart?.points || []).length}>ייצוא CSV גרף</button>
+                                <button type="button" className="export-csv-btn" onClick={() => exportDashboardCsv('violations')} disabled={!dashboard || !(dashboard.violations || []).length}>Export violations CSV</button>
+                                <button type="button" className="export-csv-btn" onClick={() => exportDashboardCsv('chart')} disabled={!dashboard || !(dashboard.chart?.points || []).length}>Export chart CSV</button>
                             </div>
                         </div>
                         {dashboardLoading ? (
-                            <div className="loading">טוען...</div>
+                            <div className="loading">Loading…</div>
                         ) : !dashboard ? (
-                            <div className="empty-state">לא נטען דשבורד</div>
+                            <div className="empty-state">Dashboard not loaded</div>
                         ) : (
                             <>
                                 <div className="integrity-status-panel">
                                     <div className="status-row">
-                                        <span className="status-label">מצב גייט:</span>
+                                        <span className="status-label">Gate state:</span>
                                         <span className={`status-badge status-${(dashboard.gate_status || '').toLowerCase()}`}>
                                             {formatGateStatus(dashboard.gate_status)}
                                         </span>
                                     </div>
                                     <div className="status-row">
-                                        <span className="status-label">מחזור נוכחי:</span>
+                                        <span className="status-label">Current cycle:</span>
                                         <span className="status-value">{dashboard.current_cycle ?? 0}</span>
                                     </div>
                                     <div className="status-row">
-                                        <span className="status-label">|𝓜| נוכחי:</span>
+                                        <span className="status-label">Current |𝓜|:</span>
                                         <span className="status-value">{dashboard.current_m ?? 0}</span>
                                     </div>
                                     <div className="status-row">
-                                        <span className="status-label">מחזורים מאז סגירה אחרונה:</span>
+                                        <span className="status-label">Cycles since last close:</span>
                                         <span className="status-value">{dashboard.cycles_since_last_closure ?? 0}</span>
                                     </div>
                                 </div>
 
                                 <div className="integrity-oracle-block">
-                                    <h4>חיזוי סיכונים (Risk Oracle – אזהרות בלבד, לא חוסם)</h4>
+                                    <h4>Risk Forecast (Risk Oracle — warnings only, non-blocking)</h4>
                                     {oracleLoading ? (
-                                        <div className="loading small">טוען...</div>
+                                        <div className="loading small">Loading…</div>
                                     ) : oracle && (oracle.risks || []).length > 0 ? (
                                         <ul className="oracle-risks-list">
                                             {(oracle.risks || []).map((r, i) => (
                                                 <li key={r.id || i} className={`oracle-risk severity-${r.severity || 'low'}`}>
-                                                    <span className="oracle-risk-badge">{r.severity === 'high' ? 'גבוה' : r.severity === 'medium' ? 'בינוני' : 'נמוך'}</span>
+                                                    <span className="oracle-risk-badge">{r.severity === 'high' ? 'High' : r.severity === 'medium' ? 'Medium' : 'Low'}</span>
                                                     <span className="oracle-risk-message">{r.message}</span>
                                                 </li>
                                             ))}
                                         </ul>
                                     ) : (
-                                        <div className="oracle-no-risks">אין סיכונים מזוהים כרגע</div>
+                                        <div className="oracle-no-risks">No risks identified at this time</div>
                                     )}
                                 </div>
 
                                 <div className="integrity-fil-block">
-                                    <h4>FIL-01 – התראות מניתוח הפרות</h4>
+                                    <h4>FIL-01 — Alerts from Violation Analysis</h4>
                                     {filWarningsLoading ? (
-                                        <div className="loading small">טוען...</div>
+                                        <div className="loading small">Loading…</div>
                                     ) : filWarnings && (filWarnings.warnings || []).length > 0 ? (
                                         <ul className="oracle-risks-list">
                                             {(filWarnings.warnings || []).map((w, i) => (
                                                 <li key={w.id || i} className="oracle-risk severity-medium">
-                                                    <span className="oracle-risk-badge">{w.type === 'recurring_reason' ? 'חוזר' : w.type === 'session_repeated_violations' ? 'סשן' : 'פעיל'}</span>
+                                                    <span className="oracle-risk-badge">{w.type === 'recurring_reason' ? 'Recurring' : w.type === 'session_repeated_violations' ? 'Session' : 'Active'}</span>
                                                     <span className="oracle-risk-message">{w.message}</span>
                                                 </li>
                                             ))}
                                         </ul>
                                     ) : (
-                                        <div className="oracle-no-risks">אין אזהרות FIL</div>
+                                        <div className="oracle-no-risks">No FIL alerts</div>
                                     )}
                                 </div>
 
                                 <div className="integrity-value-summary-block">
-                                    <h4>דוח ערך (Value Summary)</h4>
+                                    <h4>Value Report (Value Summary)</h4>
                                     <div className="dashboard-filters">
                                         <div className="filter-group">
-                                            <label>מתאריך</label>
+                                            <label>From date</label>
                                             <input type="date" value={valueSummaryDateFrom} onChange={e => setValueSummaryDateFrom(e.target.value)} className="filter-input" />
                                         </div>
                                         <div className="filter-group">
-                                            <label>עד תאריך</label>
+                                            <label>To date</label>
                                             <input type="date" value={valueSummaryDateTo} onChange={e => setValueSummaryDateTo(e.target.value)} className="filter-input" />
                                         </div>
                                         <div className="filter-group">
-                                            <label>מזהה סשן</label>
-                                            <input type="text" value={valueSummarySessionId} onChange={e => setValueSummarySessionId(e.target.value)} placeholder="אופציונלי" className="filter-input filter-input-text" />
+                                            <label>Session ID</label>
+                                            <input type="text" value={valueSummarySessionId} onChange={e => setValueSummarySessionId(e.target.value)} placeholder="Optional" className="filter-input filter-input-text" />
                                         </div>
-                                        <button type="button" className="filter-apply-btn" onClick={loadValueSummary}>טען דוח</button>
-                                        <button type="button" className="export-csv-btn" onClick={exportValueSummaryCsv} disabled={!valueSummary}>ייצוא CSV</button>
+                                        <button type="button" className="filter-apply-btn" onClick={loadValueSummary}>Load report</button>
+                                        <button type="button" className="export-csv-btn" onClick={exportValueSummaryCsv} disabled={!valueSummary}>Export CSV</button>
                                     </div>
                                     {valueSummaryLoading ? (
-                                        <div className="loading small">טוען...</div>
+                                        <div className="loading small">Loading…</div>
                                     ) : valueSummary ? (
                                         <div className="value-summary-content">
-                                            <div className="status-row"><span className="status-label">סה"כ ריצות:</span> <span>{valueSummary.runs?.total ?? 0}</span></div>
-                                            <div className="status-row"><span className="status-label">הצלחות:</span> <span>{valueSummary.runs?.successful ?? 0}</span></div>
-                                            <div className="status-row"><span className="status-label">נעצרו (הפרה):</span> <span>{valueSummary.runs?.stopped_by_violation ?? 0}</span></div>
+                                            <div className="status-row"><span className="status-label">Total runs:</span> <span>{valueSummary.runs?.total ?? 0}</span></div>
+                                            <div className="status-row"><span className="status-label">Successful:</span> <span>{valueSummary.runs?.successful ?? 0}</span></div>
+                                            <div className="status-row"><span className="status-label">Stopped (violation):</span> <span>{valueSummary.runs?.stopped_by_violation ?? 0}</span></div>
                                             {valueSummary.duration_ms && (
-                                                <div className="status-row"><span className="status-label">זמן ריצה (ממוצע/מינ/מקס ms):</span> <span>{valueSummary.duration_ms.avg_ms} / {valueSummary.duration_ms.min_ms} / {valueSummary.duration_ms.max_ms}</span></div>
+                                                <div className="status-row"><span className="status-label">Runtime (avg/min/max ms):</span> <span>{valueSummary.duration_ms.avg_ms} / {valueSummary.duration_ms.min_ms} / {valueSummary.duration_ms.max_ms}</span></div>
                                             )}
-                                            <div className="status-row"><span className="status-label">הפרות לפי סיבה:</span> <span>{JSON.stringify(valueSummary.violations_by_reason || {})}</span></div>
+                                            <div className="status-row"><span className="status-label">Violations by reason:</span> <span>{JSON.stringify(valueSummary.violations_by_reason || {})}</span></div>
                                             {(valueSummary.violations || []).length > 0 && (
                                                 <div className="value-summary-violations">
-                                                    <strong>הפרות (reason + details):</strong>
+                                                    <strong>Violations (reason + details):</strong>
                                                     <ul className="violations-detail-list">
                                                         {(valueSummary.violations || []).slice(0, 20).map(v => (
                                                             <li key={v.id}>
-                                                                {v.reason} {v.details ? ` – ${JSON.stringify(v.details)}` : ''} (סשן: {v.session_id})
+                                                                {v.reason} {v.details ? ` – ${JSON.stringify(v.details)}` : ''} (session: {v.session_id})
                                                             </li>
                                                         ))}
                                                     </ul>
@@ -666,7 +666,7 @@ function AdminTab({ isAdmin }) {
                                 </div>
 
                                 <div className="integrity-chart-block">
-                                    <h4>|𝓜| לאורך זמן</h4>
+                                    <h4>|𝓜| Over Time</h4>
                                     <IntegrityChart
                                         points={dashboard.chart?.points || []}
                                         violations={dashboard.chart?.violations || []}
@@ -678,33 +678,33 @@ function AdminTab({ isAdmin }) {
 
                                 <div className="integrity-charts-row">
                                     <div className="integrity-chart-block chart-half">
-                                        <h4>הפרות לפי סוג</h4>
+                                        <h4>Violations by Type</h4>
                                         <ViolationsByTypeChart violations={dashboard.violations || []} />
                                     </div>
                                     <div className="integrity-chart-block chart-half">
-                                        <h4>הפרות לאורך זמן</h4>
+                                        <h4>Violations Over Time</h4>
                                         <ViolationsOverTimeChart violations={dashboard.violations || []} />
                                     </div>
                                 </div>
 
                                 <div className="integrity-violations-block">
-                                    <h4>הפרות אחרונות</h4>
+                                    <h4>Recent Violations</h4>
                                     <div className="violations-table-wrap">
                                         <table className="violations-table">
                                             <thead>
                                                 <tr>
-                                                    <th>תאריך</th>
-                                                    <th>סוג</th>
-                                                    <th>סיבה</th>
-                                                    <th>סשן</th>
-                                                    <th>סטטוס</th>
-                                                    <th>פעולה</th>
+                                                    <th>Date</th>
+                                                    <th>Type</th>
+                                                    <th>Reason</th>
+                                                    <th>Session</th>
+                                                    <th>Status</th>
+                                                    <th>Action</th>
                                                 </tr>
                                             </thead>
                                             <tbody>
                                                 {(dashboard.violations || []).map((v) => (
                                                     <tr key={v.id}>
-                                                        <td>{v.created_at ? new Date(v.created_at).toLocaleString('he-IL') : '—'}</td>
+                                                        <td>{v.created_at ? new Date(v.created_at).toLocaleString('en-US') : '—'}</td>
                                                         <td>{v.type || '—'}</td>
                                                         <td>
                                                             <button
@@ -716,7 +716,7 @@ function AdminTab({ isAdmin }) {
                                                             </button>
                                                         </td>
                                                         <td className="session-cell">{v.session_id ? String(v.session_id).slice(0, 8) + '…' : '—'}</td>
-                                                        <td>{v.resolved_at ? 'מטופל' : 'פעיל'}</td>
+                                                        <td>{v.resolved_at ? 'Resolved' : 'Active'}</td>
                                                         <td>
                                                             {!v.resolved_at && (
                                                                 <button
@@ -724,7 +724,7 @@ function AdminTab({ isAdmin }) {
                                                                     className="unlock-button"
                                                                     onClick={() => setViolationModal({ ...v, _action: 'resolve' })}
                                                                 >
-                                                                    שחרר נעילה
+                                                                    Resolve
                                                                 </button>
                                                             )}
                                                         </td>
@@ -733,7 +733,7 @@ function AdminTab({ isAdmin }) {
                                             </tbody>
                                         </table>
                                         {(!dashboard.violations || dashboard.violations.length === 0) && (
-                                            <div className="empty-state small">אין הפרות</div>
+                                            <div className="empty-state small">No violations</div>
                                         )}
                                     </div>
                                 </div>
@@ -755,51 +755,51 @@ function AdminTab({ isAdmin }) {
 
                 {activeSection === 'global' && (
                     <div className="global-metrics-section">
-                        <h3>מדדי גלובל</h3>
+                        <h3>Global Metrics</h3>
                         {globalMetricsLoading ? (
-                            <div className="loading">טוען...</div>
+                            <div className="loading">Loading…</div>
                         ) : !globalMetrics ? (
-                            <div className="empty-state">לא נטענו מדדים</div>
+                            <div className="empty-state">Metrics not loaded</div>
                         ) : (
                             <div className="global-metrics-grid">
                                 <div className="global-metric-card">
-                                    <span className="global-metric-label">משתמשים</span>
+                                    <span className="global-metric-label">Users</span>
                                     <span className="global-metric-value">{globalMetrics.users ?? 0}</span>
                                 </div>
                                 <div className="global-metric-card">
-                                    <span className="global-metric-label">סשנים (מחקר)</span>
+                                    <span className="global-metric-label">Sessions (research)</span>
                                     <span className="global-metric-value">{globalMetrics.research_sessions ?? 0}</span>
                                 </div>
                                 <div className="global-metric-card">
-                                    <span className="global-metric-label">היסטוריית חיפושים</span>
+                                    <span className="global-metric-label">Search history entries</span>
                                     <span className="global-metric-value">{globalMetrics.search_history_entries ?? 0}</span>
                                 </div>
                                 <div className="global-metric-card">
-                                    <span className="global-metric-label">|𝓜| (מסמכים)</span>
+                                    <span className="global-metric-label">|𝓜| (documents)</span>
                                     <span className="global-metric-value">{globalMetrics.document_count ?? 0}</span>
                                 </div>
                                 <div className="global-metric-card">
-                                    <span className="global-metric-label">נקודות מחזור (B-Integrity)</span>
+                                    <span className="global-metric-label">Cycle points (B-Integrity)</span>
                                     <span className="global-metric-value">{globalMetrics.integrity_cycle_snapshots ?? 0}</span>
                                 </div>
                                 <div className="global-metric-card">
-                                    <span className="global-metric-label">הפרות (סה״כ)</span>
+                                    <span className="global-metric-label">Violations (total)</span>
                                     <span className="global-metric-value">{globalMetrics.violations_total ?? 0}</span>
                                 </div>
                                 <div className="global-metric-card highlight">
-                                    <span className="global-metric-label">הפרות פעילות</span>
+                                    <span className="global-metric-label">Active violations</span>
                                     <span className="global-metric-value">{globalMetrics.violations_active ?? 0}</span>
                                 </div>
                                 <div className="global-metric-card">
-                                    <span className="global-metric-label">הפרות מטופלות</span>
+                                    <span className="global-metric-label">Resolved violations</span>
                                     <span className="global-metric-value">{globalMetrics.violations_resolved ?? 0}</span>
                                 </div>
                                 <div className="global-metric-card">
-                                    <span className="global-metric-label">תמונות מצב (Snapshots)</span>
+                                    <span className="global-metric-label">System snapshots</span>
                                     <span className="global-metric-value">{globalMetrics.system_snapshots ?? 0}</span>
                                 </div>
                                 <div className="global-metric-card">
-                                    <span className="global-metric-label">ריצות Research Loop</span>
+                                    <span className="global-metric-label">Research Loop runs</span>
                                     <span className="global-metric-value">{globalMetrics.research_loop_runs ?? 0}</span>
                                 </div>
                             </div>
@@ -815,7 +815,7 @@ function IntegrityChart({ points, violations, fullViolations, onPointClick, onVi
     const [hoveredIndex, setHoveredIndex] = React.useState(null);
 
     if (!points.length) {
-        return <div className="chart-empty">אין עדיין נתוני מחזורים</div>;
+        return <div className="chart-empty">No cycle data yet</div>;
     }
     const values = points.map(p => p.value);
     let minV = Math.min(...values);
@@ -873,10 +873,10 @@ function IntegrityChart({ points, violations, fullViolations, onPointClick, onVi
                     top: `${tooltipTopPct}%`,
                     transform: showTooltipBelow ? 'translate(-50%, 0) translateY(12px)' : 'translate(-50%, -100%) translateY(-12px)'
                 }}>
-                    <div className="chart-tooltip-row"><strong>מחזור:</strong> {hoveredIndex + 1}</div>
+                    <div className="chart-tooltip-row"><strong>Cycle:</strong> {hoveredIndex + 1}</div>
                     <div className="chart-tooltip-row"><strong>|𝓜|:</strong> {hoveredPoint.value}</div>
-                    <div className="chart-tooltip-row"><strong>תאריך:</strong> {hoveredPoint.t ? new Date(hoveredPoint.t).toLocaleString('he-IL') : '—'}</div>
-                    {violationByIndex[hoveredIndex] && <div className="chart-tooltip-badge">הפרה</div>}
+                    <div className="chart-tooltip-row"><strong>Date:</strong> {hoveredPoint.t ? new Date(hoveredPoint.t).toLocaleString('en-US') : '—'}</div>
+                    {violationByIndex[hoveredIndex] && <div className="chart-tooltip-badge">Violation</div>}
                 </div>
             )}
             <svg className="integrity-chart" width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
@@ -896,7 +896,7 @@ function IntegrityChart({ points, violations, fullViolations, onPointClick, onVi
                 {xTickIndices.map((i) => (
                     <text key={`xt-${i}`} className="chart-axis-label" x={xScale(i)} y={height - 14} textAnchor="middle">{i + 1}</text>
                 ))}
-                <text x={padding.left + chartW / 2} y={height - 4} className="chart-axis-title" textAnchor="middle">מחזור</text>
+                <text x={padding.left + chartW / 2} y={height - 4} className="chart-axis-title" textAnchor="middle">Cycle</text>
                 {/* Line and points */}
                 <path className="chart-line" d={pathD} fill="none" strokeWidth="2" />
                 {points.map((p, i) => {
@@ -921,12 +921,12 @@ function IntegrityChart({ points, violations, fullViolations, onPointClick, onVi
 
 function ViolationsByTypeChart({ violations }) {
     const byType = (violations || []).reduce((acc, v) => {
-        const t = v.type || 'אחר';
+        const t = v.type || 'Other';
         acc[t] = (acc[t] || 0) + 1;
         return acc;
     }, {});
     const entries = Object.entries(byType).sort((a, b) => b[1] - a[1]);
-    if (!entries.length) return <div className="chart-empty">אין הפרות להצגה</div>;
+    if (!entries.length) return <div className="chart-empty">No violations to display</div>;
     const maxCount = Math.max(...entries.map(([, c]) => c));
     const height = 220;
     const barHeight = 28;
@@ -963,7 +963,7 @@ function ViolationsOverTimeChart({ violations }) {
         return acc;
     }, {});
     const sortedDates = Object.keys(byDate).sort();
-    if (!sortedDates.length) return <div className="chart-empty">אין הפרות להצגה</div>;
+    if (!sortedDates.length) return <div className="chart-empty">No violations to display</div>;
     const counts = sortedDates.map(d => byDate[d]);
     const maxCount = Math.max(...counts);
     const height = 220;
@@ -982,7 +982,7 @@ function ViolationsOverTimeChart({ violations }) {
                 {[0, 0.25, 0.5, 0.75, 1].map((pct, i) => (
                     <text key={i} className="chart-axis-label" x={padding.left - 6} y={yScale(maxCount * pct)} textAnchor="end" dominantBaseline="middle">{Math.round(maxCount * pct)}</text>
                 ))}
-                <text x={14} y={padding.top + chartH / 2} className="chart-axis-title" textAnchor="middle" transform={`rotate(-90, 14, ${padding.top + chartH / 2})`}>מס׳ הפרות</text>
+                <text x={14} y={padding.top + chartH / 2} className="chart-axis-title" textAnchor="middle" transform={`rotate(-90, 14, ${padding.top + chartH / 2})`}>Violations</text>
                 {sortedDates.map((d, i) => (
                     <text key={d} className="chart-axis-label" x={padding.left + (i + 0.5) * (chartW / sortedDates.length)} y={height - 12} textAnchor="middle">{d.slice(5)}</text>
                 ))}
@@ -1009,34 +1009,34 @@ function ViolationModal({ item, onClose, onResolve, resolvingId, resolveNote, se
         <div className="modal-overlay" onClick={onClose}>
             <div className="modal-content integrity-modal" onClick={e => e.stopPropagation()}>
                 <div className="modal-header">
-                    <h4>{v ? 'פרטי הפרה' : 'נקודת מחזור'}</h4>
-                    <button type="button" className="modal-close" onClick={onClose} aria-label="סגור">×</button>
+                    <h4>{v ? 'Violation Details' : 'Cycle Point'}</h4>
+                    <button type="button" className="modal-close" onClick={onClose} aria-label="Close">×</button>
                 </div>
                 <div className="modal-body">
                     {v && (
                         <>
-                            <p><strong>מזהה:</strong> {v.id}</p>
-                            <p><strong>סשן:</strong> {v.session_id}</p>
-                            <p><strong>סוג:</strong> {v.type}</p>
-                            <p><strong>סיבה:</strong> {v.reason}</p>
-                            {v.details && <p><strong>פרטים:</strong> <pre>{JSON.stringify(v.details, null, 2)}</pre></p>}
-                            <p><strong>נוצר:</strong> {v.created_at ? new Date(v.created_at).toLocaleString('he-IL') : '—'}</p>
+                            <p><strong>ID:</strong> {v.id}</p>
+                            <p><strong>Session:</strong> {v.session_id}</p>
+                            <p><strong>Type:</strong> {v.type}</p>
+                            <p><strong>Reason:</strong> {v.reason}</p>
+                            {v.details && <p><strong>Details:</strong> <pre>{JSON.stringify(v.details, null, 2)}</pre></p>}
+                            <p><strong>Created:</strong> {v.created_at ? new Date(v.created_at).toLocaleString('en-US') : '—'}</p>
                             {v.resolved_at && (
-                                <p><strong>טופל:</strong> {v.resolved_at ? new Date(v.resolved_at).toLocaleString('he-IL') : '—'} {v.resolve_note && ` – ${v.resolve_note}`}</p>
+                                <p><strong>Resolved:</strong> {v.resolved_at ? new Date(v.resolved_at).toLocaleString('en-US') : '—'} {v.resolve_note && ` – ${v.resolve_note}`}</p>
                             )}
                             {!v.resolved_at && (
                                 <div className="resolve-form">
-                                    <label>הערה לשחרור (אופציונלי):</label>
-                                    <input type="text" value={resolveNote} onChange={e => setResolveNote(e.target.value)} placeholder="הערה..." />
+                                    <label>Resolution note (optional):</label>
+                                    <input type="text" value={resolveNote} onChange={e => setResolveNote(e.target.value)} placeholder="Note…" />
                                     <button type="button" className="unlock-button" disabled={resolvingId === v.id} onClick={() => onResolve(v.id)}>
-                                        {resolvingId === v.id ? 'משחרר...' : 'אישור שחרור / Unlock'}
+                                        {resolvingId === v.id ? 'Releasing…' : 'Confirm Unlock'}
                                     </button>
                                 </div>
                             )}
                         </>
                     )}
                     {!v && item && (
-                        <p>מחזור: {item.cycle_index != null ? item.cycle_index : '—'} | ערך: {item.value} | תאריך: {item.t ? new Date(item.t).toLocaleString('he-IL') : '—'}</p>
+                        <p>Cycle: {item.cycle_index != null ? item.cycle_index : '—'} | Value: {item.value} | Date: {item.t ? new Date(item.t).toLocaleString('en-US') : '—'}</p>
                     )}
                 </div>
             </div>

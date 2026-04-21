@@ -7,9 +7,6 @@ function formatPct(v) {
   return String(v);
 }
 
-/**
- * Evidence — human-readable Hebrew; optional collapsed technical JSON.
- */
 export default function EvidenceBlock({ evidence }) {
   const e = evidence && typeof evidence === 'object' ? evidence : {};
   const runIds = Array.isArray(e.run_ids) ? e.run_ids : [];
@@ -23,43 +20,35 @@ export default function EvidenceBlock({ evidence }) {
 
   return (
     <section className="ac-evidence-block" aria-labelledby="ac-evidence-heading">
-      <h3 id="ac-evidence-heading" className="ac-block-title">
-        ראיות ומדדים
-      </h3>
+      <h3 id="ac-evidence-heading" className="ac-block-title">Evidence &amp; Metrics</h3>
       <dl className="ac-evidence-dl">
-        <dt>מזהי ריצות</dt>
+        <dt>Run IDs</dt>
         <dd>
           {runIds.length ? (
             <ul className="ac-id-list">
               {runIds.map((id) => (
-                <li key={id}>
-                  <span className="ac-pill ac-pill--id">{String(id)}</span>
-                </li>
+                <li key={id}><span className="ac-pill ac-pill--id">{String(id)}</span></li>
               ))}
             </ul>
           ) : (
-            <span className="ac-muted">אין</span>
+            <span className="ac-muted">None</span>
           )}
         </dd>
-        <dt>ריצת בסיס</dt>
+        <dt>Baseline Run</dt>
         <dd>
-          {baseline != null ? (
-            <span className="ac-pill ac-pill--id">{String(baseline)}</span>
-          ) : (
-            <span className="ac-muted">—</span>
-          )}
+          {baseline != null
+            ? <span className="ac-pill ac-pill--id">{String(baseline)}</span>
+            : <span className="ac-muted">—</span>}
         </dd>
-        <dt>דירוג נתונים</dt>
-        <dd>
-          <span className="ac-badge ac-badge--grade">{String(grade || '—')}</span>
-        </dd>
-        <dt>שינוי מקסימלי (Δ)</dt>
+        <dt>Data Grade</dt>
+        <dd><span className="ac-badge ac-badge--grade">{String(grade || '—')}</span></dd>
+        <dt>Max Delta (Δ)</dt>
         <dd className="ac-em">{formatPct(maxDelta)}</dd>
-        <dt>סף</dt>
+        <dt>Threshold</dt>
         <dd className="ac-em">{threshold != null ? `${threshold}%` : '—'}</dd>
         {(phRun != null || phBase != null) && (
           <>
-            <dt>pH (ריצה / בסיס)</dt>
+            <dt>pH (run / baseline)</dt>
             <dd>
               {phRun != null ? String(phRun) : '—'} / {phBase != null ? String(phBase) : '—'}
             </dd>
@@ -69,16 +58,16 @@ export default function EvidenceBlock({ evidence }) {
 
       {channels.length > 0 && (
         <div className="ac-channels-wrap">
-          <h4 className="ac-subtitle">פירוט ערוצים</h4>
+          <h4 className="ac-subtitle">Channel Breakdown</h4>
           <div className="ac-table-scroll">
             <table className="ac-channel-table">
               <thead>
                 <tr>
-                  <th scope="col">ערוץ</th>
-                  <th scope="col">ערך ריצה</th>
-                  <th scope="col">בסיס</th>
+                  <th scope="col">Channel</th>
+                  <th scope="col">Run Value</th>
+                  <th scope="col">Baseline</th>
                   <th scope="col">Δ%</th>
-                  <th scope="col">מצב</th>
+                  <th scope="col">Status</th>
                 </tr>
               </thead>
               <tbody>
@@ -88,9 +77,7 @@ export default function EvidenceBlock({ evidence }) {
                     <td>{ch.run_value != null ? String(ch.run_value) : '—'}</td>
                     <td>{ch.baseline_value != null ? String(ch.baseline_value) : '—'}</td>
                     <td>{formatPct(ch.delta_pct)}</td>
-                    <td>
-                      <span className="ac-badge ac-badge--muted">{ch.status != null ? String(ch.status) : '—'}</span>
-                    </td>
+                    <td><span className="ac-badge ac-badge--muted">{ch.status != null ? String(ch.status) : '—'}</span></td>
                   </tr>
                 ))}
               </tbody>
@@ -100,10 +87,10 @@ export default function EvidenceBlock({ evidence }) {
       )}
 
       <details className="ac-tech-details">
-        <summary className="ac-tech-summary">פרטים טכניים (למפתחים)</summary>
+        <summary className="ac-tech-summary">Technical Details (developers)</summary>
         <pre className="ac-json-pre">{JSON.stringify(e.delta_summary ?? {}, null, 2)}</pre>
         <p className="ac-evidence-footnote">
-          מנוע האילוצים (ISM וכו׳) מוצג בנפרד למטה כשקיים — לא חלק ממבנה ה-JSON הזה.
+          The constraint engine (ISM, etc.) is shown separately below when present — it is not part of this JSON structure.
         </p>
       </details>
     </section>

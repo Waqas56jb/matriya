@@ -1,93 +1,152 @@
+/* ─── Ask Matriya Tab ────────────────────────────────────────────────────────── */
 .ask-matriya-tab {
     width: 100%;
-    min-width: 0;
-    max-width: 100%;
 }
 
-.ask-matriya-single {
-    max-width: 900px;
-    width: 100%;
+.ask-matriya-single.card {
+    max-width: 860px;
     margin: 0 auto;
-    box-sizing: border-box;
+    padding: 0;
+    overflow: hidden;
 }
 
-.ask-matriya-single h2 {
-    margin-top: 0;
+/* ─── Header ─────────────────────────────────────────────────────────────────── */
+.ask-matriya-header {
+    padding: 1.5rem 1.75rem 1rem;
+    border-bottom: 1px solid var(--matriya-border, #1e3a5f);
+}
+
+.ask-matriya-title {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--matriya-text, #f0f6ff);
+    margin: 0 0 8px 0;
 }
 
 .ask-matriya-hint {
-    color: var(--matriya-muted);
-    font-size: 0.95em;
-    margin: 0 0 20px 0;
+    font-size: 13px;
+    color: var(--matriya-muted, #8baac8);
+    line-height: 1.6;
+    margin: 0;
 }
 
 .ask-matriya-gpt-sync {
-    margin-bottom: 16px;
+    padding: 0.75rem 1.75rem;
+    border-bottom: 1px solid var(--matriya-border, #1e3a5f);
 }
 
-/* Stack above .ask-matriya-messages so the open dropdown is not painted underneath the chat area. */
+/* ─── File section ───────────────────────────────────────────────────────────── */
 .ask-matriya-file-section {
+    padding: 1rem 1.75rem;
+    border-bottom: 1px solid var(--matriya-border, #1e3a5f);
     position: relative;
-    z-index: 5;
-    margin-bottom: 20px;
-    padding: 14px 18px;
-    background: rgba(22, 101, 52, 0.06);
-    border: 1px solid var(--matriya-border);
-    border-radius: 12px;
+    z-index: 10;
 }
 
 .ask-matriya-file-section-label {
-    display: block;
-    font-size: 0.9em;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
     font-weight: 600;
-    color: var(--matriya-text);
-    margin-bottom: 10px;
+    color: var(--matriya-muted, #8baac8);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    margin-bottom: 0.6rem;
 }
 
-.ask-matriya-loading-files,
+.ask-matriya-file-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: 10px;
+    background: rgba(0, 212, 255, 0.12);
+    border: 1px solid rgba(0, 212, 255, 0.25);
+    color: #00d4ff;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.ask-matriya-loading-files {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--matriya-muted, #8baac8);
+    padding: 6px 0;
+}
+
+.ask-matriya-spinner {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--matriya-border, #1e3a5f);
+    border-top-color: #00d4ff;
+    border-radius: 50%;
+    animation: ask-spin 0.7s linear infinite;
+    flex-shrink: 0;
+}
+
+@keyframes ask-spin { to { transform: rotate(360deg); } }
+
 .ask-matriya-no-files {
-    color: var(--matriya-muted);
-    font-size: 0.95em;
+    font-size: 13px;
+    color: var(--matriya-muted, #8baac8);
+    padding: 6px 0;
 }
 
+/* ─── Dropdown ───────────────────────────────────────────────────────────────── */
 .ask-matriya-dropdown {
     position: relative;
 }
 
 .ask-matriya-dropdown-trigger {
-    width: 100%;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 10px;
-    padding: 12px 16px;
-    border: 1px solid var(--matriya-border);
+    width: 100%;
+    padding: 10px 14px;
+    background: var(--matriya-input, #111f3d);
+    border: 1px solid var(--matriya-border, #1e3a5f);
     border-radius: 10px;
-    background: var(--matriya-surface);
-    color: var(--matriya-text);
-    font-size: 1em;
-    text-align: left;
+    color: var(--matriya-text, #f0f6ff);
+    font-size: 14px;
+    font-family: inherit;
     cursor: pointer;
     transition: border-color 0.2s, box-shadow 0.2s;
+    text-align: left;
+    box-shadow: none;
 }
 
-.ask-matriya-dropdown-trigger:hover,
+.ask-matriya-dropdown-trigger:hover {
+    border-color: var(--matriya-border-light, #243d60);
+    background: var(--matriya-hover, #162447);
+    transform: none;
+    box-shadow: none;
+}
+
 .ask-matriya-dropdown-trigger[aria-expanded="true"] {
-    border-color: var(--matriya-accent);
-    outline: none;
-    box-shadow: 0 0 0 2px rgba(22, 101, 52, 0.15);
+    border-color: #00d4ff;
+    box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.12);
 }
 
 .ask-matriya-dropdown-trigger-text {
+    flex: 1;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    text-align: left;
 }
 
 .ask-matriya-dropdown-arrow {
+    display: flex;
+    align-items: center;
+    color: var(--matriya-muted, #8baac8);
     flex-shrink: 0;
-    color: var(--matriya-muted);
-    font-size: 0.75em;
+    margin-left: 8px;
 }
 
 .ask-matriya-dropdown-panel {
@@ -95,265 +154,307 @@
     top: calc(100% + 6px);
     left: 0;
     right: 0;
-    z-index: 50;
-    background: var(--matriya-surface);
-    border: 1px solid var(--matriya-border);
+    background: var(--matriya-surface, #0b1630);
+    border: 1px solid var(--matriya-border, #1e3a5f);
     border-radius: 12px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
     overflow: hidden;
+    z-index: 100;
 }
 
 .ask-matriya-dropdown-search {
     width: 100%;
     padding: 10px 14px;
+    background: var(--matriya-input, #111f3d);
     border: none;
-    border-bottom: 1px solid var(--matriya-border);
-    background: rgba(0, 0, 0, 0.03);
-    color: var(--matriya-text);
-    font-size: 0.95em;
+    border-bottom: 1px solid var(--matriya-border, #1e3a5f);
+    color: var(--matriya-text, #f0f6ff);
+    font-size: 13px;
+    font-family: inherit;
+    border-radius: 0;
 }
 
 .ask-matriya-dropdown-search::placeholder {
-    color: var(--matriya-muted);
+    color: var(--matriya-text-muted, #4d6a88);
 }
 
 .ask-matriya-dropdown-search:focus {
     outline: none;
-    background: rgba(22, 101, 52, 0.05);
+    border-bottom-color: #00d4ff;
 }
 
 .ask-matriya-dropdown-list {
-    max-height: min(50vh, 420px);
+    max-height: 220px;
     overflow-y: auto;
-}
-
-.ask-matriya-dropdown-empty {
-    padding: 16px;
-    color: var(--matriya-muted);
-    font-size: 0.95em;
-    text-align: center;
+    padding: 4px;
 }
 
 .ask-matriya-dropdown-option {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
     width: 100%;
-    padding: 10px 14px;
+    padding: 9px 12px;
     border: none;
+    border-radius: 8px;
     background: transparent;
-    color: var(--matriya-text);
-    font-size: 0.95em;
+    color: var(--matriya-text, #f0f6ff);
+    font-size: 13px;
+    font-family: inherit;
     text-align: left;
     cursor: pointer;
     transition: background 0.15s;
+    box-shadow: none;
 }
 
 .ask-matriya-dropdown-option:hover {
-    background: rgba(22, 101, 52, 0.08);
+    background: var(--matriya-hover, #162447);
+    transform: none;
+    box-shadow: none;
 }
 
 .ask-matriya-dropdown-option.selected {
-    background: rgba(22, 101, 52, 0.12);
+    background: rgba(0, 212, 255, 0.08);
+    color: #00d4ff;
 }
 
 .ask-matriya-dropdown-option-check {
-    flex-shrink: 0;
     width: 18px;
-    color: var(--matriya-accent);
-    font-weight: bold;
+    color: #00d4ff;
+    font-weight: 700;
+    flex-shrink: 0;
+    font-size: 14px;
 }
 
 .ask-matriya-dropdown-option-label {
     flex: 1;
-    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
 .ask-matriya-file-kind {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(16, 185, 129, 0.15);
+    color: #10b981;
     flex-shrink: 0;
-    font-size: 0.72em;
-    font-weight: 600;
-    padding: 2px 8px;
-    border-radius: 6px;
-    background: rgba(22, 101, 52, 0.14);
-    color: var(--matriya-accent, #166534);
 }
 
+.ask-matriya-dropdown-empty {
+    padding: 12px;
+    text-align: center;
+    color: var(--matriya-muted, #8baac8);
+    font-size: 13px;
+}
+
+/* ─── Messages ───────────────────────────────────────────────────────────────── */
 .ask-matriya-messages {
-    position: relative;
-    z-index: 1;
-    min-height: 260px;
-    max-height: 45vh;
+    min-height: 220px;
+    max-height: 480px;
     overflow-y: auto;
-    padding: 16px 0;
-    margin-bottom: 16px;
-    border: 1px solid var(--matriya-border);
-    border-radius: 12px;
-    background: rgba(0, 0, 0, 0.02);
+    padding: 1rem 1.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
 }
 
 .ask-matriya-placeholder {
-    color: var(--matriya-muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 160px;
+    color: var(--matriya-muted, #8baac8);
+    font-size: 14px;
     text-align: center;
-    padding: 40px 20px;
+    padding: 1rem;
+}
+
+.ask-matriya-messages-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
 }
 
 .ask-matriya-msg {
-    margin: 0 16px 12px;
-    max-width: 85%;
+    max-width: 82%;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
 }
 
 .ask-matriya-msg-user {
-    margin-left: auto;
-    margin-right: 16px;
+    align-self: flex-end;
+}
+
+.ask-matriya-msg-assistant {
+    align-self: flex-start;
 }
 
 .ask-matriya-msg-content {
-    padding: 12px 16px;
+    padding: 10px 14px;
     border-radius: 14px;
-    white-space: pre-wrap;
-    word-break: break-word;
+    font-size: 14px;
+    line-height: 1.6;
 }
 
 .ask-matriya-msg-user .ask-matriya-msg-content {
-    background: var(--matriya-accent);
-    color: white;
+    background: linear-gradient(135deg, rgba(0, 212, 255, 0.15) 0%, rgba(124, 58, 237, 0.15) 100%);
+    border: 1px solid rgba(0, 212, 255, 0.2);
+    color: var(--matriya-text, #f0f6ff);
     border-bottom-right-radius: 4px;
 }
 
 .ask-matriya-msg-assistant .ask-matriya-msg-content {
-    background: var(--matriya-surface);
-    border: 1px solid var(--matriya-border);
+    background: var(--matriya-surface2, #0f1e3a);
+    border: 1px solid var(--matriya-border, #1e3a5f);
+    color: var(--matriya-text, #f0f6ff);
     border-bottom-left-radius: 4px;
 }
 
+/* Typing animation */
 .ask-matriya-typing {
-    color: var(--matriya-muted);
-    font-style: italic;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 12px 16px;
 }
 
+.ask-matriya-typing-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #00d4ff;
+    animation: typing-bounce 1.2s infinite;
+}
+
+.ask-matriya-typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.ask-matriya-typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes typing-bounce {
+    0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+    30% { transform: translateY(-5px); opacity: 1; }
+}
+
+.ask-matriya-typing-container {
+    min-height: 0;
+}
+
+/* ─── Error ──────────────────────────────────────────────────────────────────── */
 .ask-matriya-error {
-    padding: 12px 14px;
-    margin-bottom: 12px;
-    background: rgba(220, 38, 38, 0.08);
-    border: 1px solid rgba(220, 38, 38, 0.28);
-    border-radius: 12px;
-    color: var(--matriya-danger, #b91c1c);
-    font-size: 0.9em;
-    line-height: 1.45;
-    word-break: break-word;
-    overflow-wrap: anywhere;
-    max-width: 100%;
-    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 1.75rem 1rem;
+    padding: 10px 14px;
+    border-radius: 10px;
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: #fca5a5;
+    font-size: 13px;
 }
 
+/* ─── Input row ──────────────────────────────────────────────────────────────── */
 .ask-matriya-input-row {
     display: flex;
-    gap: 12px;
+    gap: 10px;
     align-items: flex-end;
+    padding: 1rem 1.75rem 1.25rem;
+    border-top: 1px solid var(--matriya-border, #1e3a5f);
 }
 
 .ask-matriya-input {
     flex: 1;
-    padding: 14px 18px;
-    border: 1px solid var(--matriya-border);
-    border-radius: 12px;
-    font-size: 1em;
+    padding: 11px 14px;
+    background: var(--matriya-input, #111f3d);
+    border: 1px solid var(--matriya-border, #1e3a5f);
+    border-radius: 10px;
+    color: var(--matriya-text, #f0f6ff);
+    font-size: 14px;
     font-family: inherit;
-    resize: vertical;
-    min-height: 52px;
-    background: var(--matriya-surface);
-    color: var(--matriya-text);
+    resize: none;
+    line-height: 1.5;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    direction: ltr;
+}
+
+.ask-matriya-input::placeholder {
+    color: var(--matriya-text-muted, #4d6a88);
 }
 
 .ask-matriya-input:focus {
     outline: none;
-    border-color: var(--matriya-accent);
-    box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.25);
+    border-color: #00d4ff;
+    box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.12);
 }
 
-.ask-matriya-input::placeholder {
-    color: var(--matriya-muted);
-}
-
-.ask-matriya-send {
-    padding: 14px 24px;
-    background: var(--matriya-accent);
-    color: white;
-    border: none;
-    border-radius: 12px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s;
-    flex-shrink: 0;
-}
-
-.ask-matriya-send:hover:not(:disabled) {
-    filter: brightness(1.1);
-    transform: translateY(-1px);
-}
-
-.ask-matriya-send:disabled {
-    opacity: 0.6;
+.ask-matriya-input:disabled {
+    opacity: 0.5;
     cursor: not-allowed;
 }
 
-@media (max-width: 600px) {
-    .ask-matriya-input-row {
-        flex-direction: column;
-        align-items: stretch;
-    }
-
-    .ask-matriya-send {
-        width: 100%;
-        min-height: 48px;
-    }
-
-    .ask-matriya-msg {
-        max-width: 92%;
-    }
-
-    .ask-matriya-messages {
-        max-height: min(52vh, 420px);
-    }
-
-    .ask-matriya-input {
-        font-size: 16px;
-    }
+.ask-matriya-send {
+    flex-shrink: 0;
+    width: 46px;
+    height: 46px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #00d4ff 0%, #7c3aed 100%);
+    border: none;
+    border-radius: 10px;
+    color: #fff;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    box-shadow: 0 4px 14px rgba(0, 212, 255, 0.25);
+    padding: 0;
 }
 
-@media (max-width: 480px) {
-    .ask-matriya-single {
-        padding-inline: 2px;
+.ask-matriya-send:hover:not(:disabled) {
+    background: linear-gradient(135deg, #22e5ff 0%, #9f5ff3 100%);
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px rgba(0, 212, 255, 0.35);
+}
+
+.ask-matriya-send:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.ask-matriya-send-spinner {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    border: 2px solid rgba(255, 255, 255, 0.35);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: ask-spin 0.7s linear infinite;
+}
+
+/* ─── Responsive ─────────────────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+    .ask-matriya-header,
+    .ask-matriya-file-section,
+    .ask-matriya-messages,
+    .ask-matriya-input-row {
+        padding-left: 1rem;
+        padding-right: 1rem;
     }
 
-    .ask-matriya-file-section {
-        padding: 12px 14px;
+    .ask-matriya-gpt-sync {
+        padding-left: 1rem;
+        padding-right: 1rem;
     }
 
-    .ask-matriya-dropdown-option {
-        align-items: flex-start;
-        gap: 8px;
-    }
-
-    .ask-matriya-dropdown-option-label {
-        white-space: normal;
-        line-height: 1.35;
+    .ask-matriya-error {
+        margin-left: 1rem;
+        margin-right: 1rem;
     }
 
     .ask-matriya-msg {
-        margin-inline: 10px;
-        max-width: 96%;
-    }
-
-    .ask-matriya-msg-user {
-        margin-right: 10px;
-    }
-
-    .ask-matriya-input {
-        padding: 12px 14px;
+        max-width: 95%;
     }
 }

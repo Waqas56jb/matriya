@@ -18,8 +18,7 @@ import axios from 'axios';
 import { toast } from 'react-toastify';
 import { API_BASE_URL, isMatriyaSessionInvalid401 } from './utils/api';
 
-const TAB_SWITCH_BLOCKED_WHILE_GPT_SYNC_TITLE =
-    'לא ניתן לעבור לשונית אחרת בזמן סנכרון המסמכים (מסנכרן…)';
+const TAB_SWITCH_BLOCKED_TITLE = 'Cannot switch tabs while documents are syncing…';
 
 const MOBILE_NAV_MQ = '(max-width: 900px)';
 
@@ -38,10 +37,10 @@ function useMatchMedia(query) {
 }
 
 const TAB_DEFS = [
-    { id: 'upload', label: 'העלאת מסמכים', shortLabel: 'עלאה', Icon: HiArrowUpTray },
-    { id: 'ask', label: 'שאל את מטריה', shortLabel: 'שאלה', Icon: HiChatBubbleLeftRight },
-    { id: 'search', label: 'מחקר והחלטות', shortLabel: 'מחקר', Icon: HiMagnifyingGlass },
-    { id: 'admin', label: 'ניהול', shortLabel: 'ניהול', Icon: HiCog6Tooth }
+    { id: 'upload', label: 'Documents',  shortLabel: 'Docs',    Icon: HiArrowUpTray },
+    { id: 'ask',    label: 'Ask Matriya',shortLabel: 'Ask',     Icon: HiChatBubbleLeftRight },
+    { id: 'search', label: 'Research',   shortLabel: 'Research',Icon: HiMagnifyingGlass },
+    { id: 'admin',  label: 'Admin',      shortLabel: 'Admin',   Icon: HiCog6Tooth }
 ];
 
 function noop() {}
@@ -102,7 +101,7 @@ function App() {
         localStorage.removeItem('token');
         localStorage.removeItem('user');
         delete axios.defaults.headers.common['Authorization'];
-        toast.info('התנתקת מהמערכת');
+        toast.info('You have been signed out.');
     };
 
     const isAdmin = user && (user.is_admin || user.username === 'admin');
@@ -129,7 +128,7 @@ function App() {
                 type="button"
                 className={`tab-button ${activeTab === tab.id ? 'active' : ''} ${isMobile ? 'tab-button--mobile' : ''}`}
                 disabled={switchBlocked}
-                title={switchBlocked ? TAB_SWITCH_BLOCKED_WHILE_GPT_SYNC_TITLE : tab.label}
+                title={switchBlocked ? TAB_SWITCH_BLOCKED_TITLE : tab.label}
                 onClick={() => setActiveTab(tab.id)}
             >
                 {isMobile && Icon ? <Icon className="tab-button__icon" aria-hidden /> : null}
@@ -143,7 +142,7 @@ function App() {
     const tabNavDesktop = (
         <nav
             className="tabs matriya-tabs matriya-tabs--desktop"
-            aria-label="ניווט ראשי"
+            aria-label="Main navigation"
             aria-hidden={isMobileNav}
         >
             {renderTabNav('desktop')}
@@ -153,7 +152,7 @@ function App() {
     const tabNavMobile = (
         <nav
             className="matriya-mobile-tabbar"
-            aria-label="ניווט ראשי"
+            aria-label="Main navigation"
             aria-hidden={!isMobileNav}
         >
             {renderTabNav('mobile')}
@@ -168,7 +167,7 @@ function App() {
                     <div className="container">
                         <div className="loading loading-screen">
                             <span className="loading-spinner" aria-hidden />
-                            טוען את המערכת…
+                            Loading…
                         </div>
                     </div>
                 </main>
@@ -184,7 +183,7 @@ function App() {
                 <main className="app-main app-main--auth">
                     <div className="container auth-hero">
                         <p className="auth-lead">
-                            חיפוש במסמכים, שאילתות מבוססות ראיות, ומסלול מעבדה עם הצגת החלטות — הכל בעברית ובשקיפות.
+                            Document search, evidence-based queries, and lab decision workflows — built for research teams.
                         </p>
                         <LoginTab onLogin={handleLogin} />
                     </div>

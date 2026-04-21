@@ -36,41 +36,45 @@ class ErrorBoundary extends React.Component {
         <div style={{
           padding: '40px',
           textAlign: 'center',
-          background: '#f8d7da',
-          color: '#721c24',
-          borderRadius: '8px',
+          background: 'rgba(239, 68, 68, 0.08)',
+          color: '#fca5a5',
+          borderRadius: '12px',
           margin: '20px',
-          border: '1px solid #f5c6cb',
-          fontFamily: 'sans-serif'
+          border: '1px solid rgba(239, 68, 68, 0.3)',
+          fontFamily: 'Inter, sans-serif'
         }}>
-          <h2>אופס! משהו השתבש בתצוגה.</h2>
-          <p>
-            נראה כי תוסף דפדפן (כמו Google Translate) ביצע שינוי בדף שגרם לקריסת המערכת.
+          <h2 style={{ marginBottom: '12px', color: '#f0f6ff' }}>Something went wrong</h2>
+          <p style={{ marginBottom: '16px', color: '#8baac8' }}>
+            A browser extension (such as Google Translate) may have modified the page and caused a render error.
           </p>
           <pre style={{ 
             textAlign: 'left', 
-            background: '#fff', 
-            padding: '10px', 
+            background: '#0b1630', 
+            padding: '12px', 
             fontSize: '12px',
             overflow: 'auto',
-            maxHeight: '200px'
+            maxHeight: '200px',
+            borderRadius: '8px',
+            color: '#8baac8',
+            border: '1px solid #1e3a5f'
           }}>
             {this.state.error && this.state.error.toString()}
           </pre>
           <button 
             onClick={this.handleReset}
             style={{
-              padding: '10px 20px',
-              fontSize: '16px',
+              padding: '10px 24px',
+              fontSize: '14px',
+              fontWeight: '600',
               cursor: 'pointer',
-              background: '#721c24',
+              background: 'linear-gradient(135deg, #00d4ff 0%, #7c3aed 100%)',
               color: '#fff',
               border: 'none',
-              borderRadius: '4px',
-              marginTop: '10px'
+              borderRadius: '8px',
+              marginTop: '16px'
             }}
           >
-            רענן את הדף לתיקון
+            Reload Page
           </button>
         </div>
       );

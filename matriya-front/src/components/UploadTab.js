@@ -8,8 +8,8 @@ import AnswerEvidenceSection from './AnswerEvidenceSection';
 import RachelUpload from './RachelUpload';
 import './UploadTab.css';
 
-const ASK_EVIDENCE_TITLE = 'מקורות מהמסמכים (ציטוטים)';
-const ASK_EVIDENCE_HINT = 'קטעים ששימשו כבסיס לתשובה — לשקיפות וביקורת.';
+const ASK_EVIDENCE_TITLE = 'Document Sources (Citations)';
+const ASK_EVIDENCE_HINT = 'Passages used as the basis for this answer — for transparency and review.';
 
 const ACCEPT = '.pdf,.docx,.txt,.doc,.xlsx,.xls,.jpg,.jpeg,.png,.webp';
 const ACCEPT_LIST = ['pdf', 'docx', 'txt', 'doc', 'xlsx', 'xls', 'jpg', 'jpeg', 'png', 'webp'];
@@ -69,7 +69,7 @@ function buildFileTree(files) {
         node.files.push({ ...f, _basename: fileSegment });
     }
     if (root.files.length > 0) {
-        root.children.push({ type: 'folder', pathFull: '\0', pathSegment: 'ללא תיקייה', children: [], files: root.files });
+        root.children.push({ type: 'folder', pathFull: '\0', pathSegment: 'Uncategorized', children: [], files: root.files });
         root.files = [];
     }
     root.children.sort((a, b) => (a.pathFull === '\0' ? -1 : b.pathFull === '\0' ? 1 : (a.pathSegment || '').localeCompare(b.pathSegment || '')));
@@ -191,7 +191,7 @@ function UploadTab({ onGptSyncingChange, gptRagSyncing = false }) {
     }, []);
 
     /**
-     * Fire-and-forget incremental cloud sync (no UI «מסנכרן» — avoids stuck state; server auto-sync skipped via ingest header).
+     * Fire-and-forget incremental cloud sync (no UI "syncing" label — avoids stuck state; server auto-sync skipped via ingest header).
      */
     const runGptCloudSyncAfterUpload = useCallback(
         (onlyLogicalNames) => {
@@ -316,7 +316,7 @@ function UploadTab({ onGptSyncingChange, gptRagSyncing = false }) {
                 return ACCEPT_LIST.includes(ext);
             });
             if (supported.length > 0) uploadFiles(supported);
-            else setUploadResult({ type: 'error', message: 'לא נמצאו קבצים נתמכים בתיקייה (PDF, DOCX, TXT, DOC, XLSX, XLS)' });
+            else setUploadResult({ type: 'error', message: 'No supported files found in the folder (PDF, DOCX, TXT, DOC, XLSX, XLS)' });
         }
         e.target.value = '';
     };
@@ -329,17 +329,17 @@ function UploadTab({ onGptSyncingChange, gptRagSyncing = false }) {
         try {
             const response = await api.post('/ingest/file', formData, { headers: INGEST_OPT_OUT_AUTO_GPT_SYNC });
             if (response.data.success) {
-                setUploadResult({ type: 'success', message: 'העלאה הושלמה בהצלחה!', data: response.data.data });
+                setUploadResult({ type: 'success', message: 'Upload completed successfully!', data: response.data.data });
                 const logicalName = response.data?.data?.filename;
                 const hints = logicalName ? [logicalName] : [];
                 queueGptResyncAfterUpload(hints, logicalName ? [logicalName] : []);
                 loadFileList();
                 loadCollectionInfo();
             } else {
-                setUploadResult({ type: 'error', message: response.data?.error || response.data?.detail || 'שגיאה בהעלאה' });
+                setUploadResult({ type: 'error', message: response.data?.error || response.data?.detail || 'Upload failed' });
             }
         } catch (error) {
-            setUploadResult({ type: 'error', message: error.response?.data?.error || error.response?.data?.detail || error.message || 'שגיאה בהעלאה' });
+            setUploadResult({ type: 'error', message: error.response?.data?.error || error.response?.data?.detail || error.message || 'Upload failed' });
         } finally {
             setIsUploading(false);
         }
@@ -372,7 +372,7 @@ function UploadTab({ onGptSyncingChange, gptRagSyncing = false }) {
         setIsUploading(false);
         setUploadResult({
             type: err === 0 ? 'success' : (ok === 0 ? 'error' : 'success'),
-            message: err === 0 ? `${ok} קבצים הועלו בהצלחה` : ok === 0 ? `${err} העלאות נכשלו` : `הועלו ${ok} קבצים, ${err} נכשלו`
+            message: err === 0 ? `${ok} file(s) uploaded successfully` : ok === 0 ? `${err} upload(s) failed` : `${ok} file(s) uploaded, ${err} failed`
         });
         loadFileList();
         loadCollectionInfo();
@@ -387,7 +387,7 @@ function UploadTab({ onGptSyncingChange, gptRagSyncing = false }) {
             const res = await api.get('/files/preview', { params: { filename } });
             setPreviewDoc({ filename, text: res.data?.text || '', metadata: res.data?.metadata });
         } catch (_) {
-            setPreviewDoc(prev => ({ ...prev, text: '(לא ניתן לטעון תצוגה מקדימה)' }));
+            setPreviewDoc(prev => ({ ...prev, text: '(Preview unavailable)' }));
         } finally {
             setPreviewLoading(false);
         }
@@ -396,14 +396,14 @@ function UploadTab({ onGptSyncingChange, gptRagSyncing = false }) {
     const closePreview = () => setPreviewDoc(null);
 
     const handleDeleteFile = async (filename) => {
-        if (!filename || !window.confirm(`למחוק את "${filename}" מהמאגר? לא ניתן יהיה לשאול על הקובץ לאחר המחיקה.`)) {
+        if (!filename || !window.confirm(`Delete "${filename}" from the repository? You will no longer be able to query this file.`)) {
             return;
         }
         setDeletingFilename(filename);
         setUploadResult(null);
         try {
             await api.delete('/files', { data: { filename }, timeout: 60000 });
-            setUploadResult({ type: 'success', message: `הקובץ נמחק מהמאגר: ${filename}` });
+            setUploadResult({ type: 'success', message: `File deleted from repository: ${filename}` });
             if (askSelectedFile === filename) setAskSelectedFile('');
             setAskResult(null);
             setAskSources(null);
@@ -413,7 +413,7 @@ function UploadTab({ onGptSyncingChange, gptRagSyncing = false }) {
         } catch (error) {
             setUploadResult({
                 type: 'error',
-                message: formatApiErrorForUser(error, 'שגיאה במחיקה')
+                message: formatApiErrorForUser(error, 'Delete failed')
             });
         } finally {
             setDeletingFilename(null);
@@ -426,7 +426,7 @@ function UploadTab({ onGptSyncingChange, gptRagSyncing = false }) {
         if (isUploading || gptRagSyncing) return;
         const tableFilenames = fileList.map((f) => f.filename).filter(Boolean);
         if (tableFilenames.length === 0) {
-            setAskError('אין מסמכים בטבלה — העלו מסמכים כדי לשאול.');
+            setAskError('No documents in the table — upload documents first.');
             return;
         }
         const filenames = askSelectedFile
@@ -435,7 +435,7 @@ function UploadTab({ onGptSyncingChange, gptRagSyncing = false }) {
                 : []
             : tableFilenames;
         if (askSelectedFile && filenames.length === 0) {
-            setAskError('המסמך שנבחר אינו ברשימה — רעננו את הדף או בחרו מחדש.');
+            setAskError('Selected document not in the list — refresh the page or re-select.');
             return;
         }
         setAskError(null);
@@ -447,7 +447,7 @@ function UploadTab({ onGptSyncingChange, gptRagSyncing = false }) {
             setAskResult(reply);
             setAskSources(sources);
         } catch (err) {
-            setAskError(formatApiErrorForUser(err, 'שגיאה בשאילתה'));
+            setAskError(formatApiErrorForUser(err, 'Query failed'));
         } finally {
             setAskLoading(false);
         }
@@ -458,14 +458,14 @@ function UploadTab({ onGptSyncingChange, gptRagSyncing = false }) {
 
     const renderFileRow = (f, displayName) => (
         <tr key={f.filename} className="documents-table__data-row">
-            <td className="doc-name" data-label="שם מסמך">{displayName || f.filename}</td>
-            <td data-label="סוג קובץ">{getFileType(displayName || f.filename)}</td>
-            <td data-label="תאריך העלאה">{formatDate(f.uploaded_at)}</td>
-            <td data-label="חלקים">{f.chunks_count ?? '—'}</td>
-            <td data-label="תצוגה מקדימה">
-                <button type="button" className="preview-btn" onClick={() => openPreview(f.filename)}>תצוגה מקדימה</button>
+            <td className="doc-name" data-label="Document">{displayName || f.filename}</td>
+            <td data-label="Type">{getFileType(displayName || f.filename)}</td>
+            <td data-label="Uploaded">{formatDate(f.uploaded_at)}</td>
+            <td data-label="Chunks">{f.chunks_count ?? '—'}</td>
+            <td data-label="Preview">
+                <button type="button" className="preview-btn" onClick={() => openPreview(f.filename)}>Preview</button>
             </td>
-            <td data-label="מחיקה">
+            <td data-label="Delete">
                 <button
                     type="button"
                     className="preview-btn doc-delete-btn"
@@ -473,9 +473,9 @@ function UploadTab({ onGptSyncingChange, gptRagSyncing = false }) {
                     onClick={() => handleDeleteFile(f.filename)}
                 >
                     {deletingFilename === f.filename ? (
-                        <span key="loading" className="btn-inner">מוחק…</span>
+                        <span key="loading" className="btn-inner">Deleting…</span>
                     ) : (
-                        <span key="idle" className="btn-inner">מחק</span>
+                        <span key="idle" className="btn-inner">Delete</span>
                     )}
                 </button>
             </td>
@@ -514,9 +514,9 @@ function UploadTab({ onGptSyncingChange, gptRagSyncing = false }) {
                 <div className="upload-main">
                     <div className="card">
                         <div className="upload-card-header">
-                            <h2>העלאת מסמך חדש</h2>
+                            <h2>Upload Documents</h2>
                             <button type="button" className="folder-upload-btn" onClick={() => folderInputRef.current?.click()}>
-                                📁 ייבוא תיקייה
+                                📁 Import Folder
                             </button>
                             <input ref={folderInputRef} type="file" webkitdirectory="true" directory="true" multiple style={{ display: 'none' }} onChange={handleFolderSelect} accept={ACCEPT} />
                         </div>
@@ -535,7 +535,7 @@ function UploadTab({ onGptSyncingChange, gptRagSyncing = false }) {
                                         <polyline points="17 8 12 3 7 8" />
                                         <line x1="12" y1="3" x2="12" y2="15" />
                                     </svg>
-                                    <p>לחץ כאן או גרור קובץ להעלאה</p>
+                                    <p>Click here or drag &amp; drop a file to upload</p>
                                     <p className="file-types">PDF, DOCX, TXT, DOC, XLSX, XLS</p>
                                 </div>
                             </div>
@@ -552,8 +552,8 @@ function UploadTab({ onGptSyncingChange, gptRagSyncing = false }) {
                                 <strong>{uploadResult.type === 'success' ? '✓' : '✗'} {uploadResult.message}</strong>
                                 {uploadResult.data && (
                                     <div style={{ marginTop: '10px' }}>
-                                        <p>קובץ: {uploadResult.data.filename}</p>
-                                        <p>מספר חלקים שנוצרו: {uploadResult.data.chunks_count}</p>
+                                        <p>File: {uploadResult.data.filename}</p>
+                                        <p>Chunks created: {uploadResult.data.chunks_count}</p>
                                     </div>
                                 )}
                             </div>
@@ -565,22 +565,22 @@ function UploadTab({ onGptSyncingChange, gptRagSyncing = false }) {
                     </div>
 
                     <div className="card documents-table-card">
-                        <h2>מסמכים במערכת</h2>
+                        <h2>Documents in System</h2>
                         {fileListLoading ? (
-                            <div className="loading">טוען רשימה...</div>
+                            <div className="loading">Loading documents…</div>
                         ) : fileList.length === 0 ? (
-                            <p className="empty-docs">אין עדיין מסמכים. העלה קבצים למעלה.</p>
+                            <p className="empty-docs">No documents yet. Upload files above.</p>
                         ) : (
-                            <div className="table-wrap" role="region" aria-label="טבלת מסמכים — גלילה אופקית במסכים רחבים">
+                            <div className="table-wrap" role="region" aria-label="Documents table — horizontal scroll on wide screens">
                                 <table className="documents-table">
                                     <thead>
                                         <tr>
-                                            <th>שם מסמך</th>
-                                            <th>סוג קובץ</th>
-                                            <th>תאריך העלאה</th>
-                                            <th>חלקים</th>
-                                            <th>תצוגה מקדימה</th>
-                                            <th>מחיקה</th>
+                                            <th>Document</th>
+                                            <th>Type</th>
+                                            <th>Uploaded</th>
+                                            <th>Chunks</th>
+                                            <th>Preview</th>
+                                            <th>Delete</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -592,7 +592,7 @@ function UploadTab({ onGptSyncingChange, gptRagSyncing = false }) {
                     </div>
 
                     <div className="card upload-ask-card">
-                        <h2>שאל על המסמכים</h2>
+                        <h2>Ask About Documents</h2>
                         <GptSyncStatusRow
                             ref={gptSyncRowRef}
                             filenames={fileList.map((f) => f.filename)}
@@ -605,14 +605,14 @@ function UploadTab({ onGptSyncingChange, gptRagSyncing = false }) {
                         {fileList.length > 0 && (
                             <>
                                 <div className="form-group">
-                                    <label htmlFor="upload-ask-scope">חיפוש בתוך</label>
+                                    <label htmlFor="upload-ask-scope">Search within</label>
                                     <select
                                         id="upload-ask-scope"
                                         value={askSelectedFile}
                                         onChange={e => setAskSelectedFile(e.target.value)}
                                         aria-describedby="upload-ask-scope-hint"
                                     >
-                                        <option value="">כל הקבצים המופיעים בטבלה למעלה</option>
+                                        <option value="">All files in the table above</option>
                                         {fileList.map(f => (
                                             <option key={f.filename} value={f.filename} title={f.filename}>
                                                 {f.filename}
@@ -620,18 +620,18 @@ function UploadTab({ onGptSyncingChange, gptRagSyncing = false }) {
                                         ))}
                                     </select>
                                     <p id="upload-ask-scope-hint" className="upload-ask-hint muted">
-                                        השרת בודק תחילה אם השאלה באופן ברור עוסקת ברשימת החומרים/הניסויים כפי שרשומים במערכת הניהול (כשיש חיבור לשרת הניהול); שאלות מקט, מפרט טכני או תוכן מסמכים — בדרך כלל נענות מטקסט הקבצים בטבלה. אם כן לניהול — התשובה מסתמכת על הנתונים משם; אחרת על טקסט המסמכים. ציטוטים מהמסמכים — רק לקבצים המופיעים ברשימה; אחרי מחיקה יש לרענן; סנכרון OpenAI למעלה מעדכן את החיפוש בענן.
+                                        The server checks whether the question clearly concerns materials or experiments from the management system (when connected). SKU, technical spec, or document content questions are answered from the indexed file text. Citations are limited to files in the list; re-sync after deleting files.
                                     </p>
                                     <p className="upload-ask-hint muted">
-                                        לאותה שאלה ואותה בחירת קבצים (טווח החיפוש למעלה), המערכת מכוונת לתשובה יציבה ועקבית יותר.
+                                        For the same question and scope, the system is designed to return stable, consistent answers across rounds.
                                     </p>
                                 </div>
-                                <label htmlFor="upload-ask-query">שאל שאלה</label>
+                                <label htmlFor="upload-ask-query">Ask a question</label>
                                 <textarea
                                     id="upload-ask-query"
                                     value={askQuery}
                                     onChange={e => setAskQuery(e.target.value)}
-                                    placeholder="הזן שאלה..."
+                                    placeholder="Enter your question…"
                                     rows={4}
                                     disabled={askLoading || isUploading || gptRagSyncing}
                                 />
@@ -642,9 +642,9 @@ function UploadTab({ onGptSyncingChange, gptRagSyncing = false }) {
                                     disabled={askLoading || !askQuery.trim() || isUploading || gptRagSyncing}
                                 >
                                     {askLoading ? (
-                                        <span key="asking" className="btn-inner">מריץ...</span>
+                                        <span key="asking" className="btn-inner">Running…</span>
                                     ) : (
-                                        <span key="idle" className="btn-inner">הרץ</span>
+                                        <span key="idle" className="btn-inner">Run</span>
                                     )}
                                 </button>
                                 {askError && <p className="upload-ask-error">{askError}</p>}
@@ -663,27 +663,27 @@ function UploadTab({ onGptSyncingChange, gptRagSyncing = false }) {
                             </>
                         )}
                         {fileList.length === 0 && !fileListLoading && (
-                            <p className="muted">העלה מסמכים למעלה כדי לשאול עליהם שאלות.</p>
+                            <p className="muted">Upload documents above to ask questions about them.</p>
                         )}
                     </div>
                 </div>
 
                 <aside className="upload-sidebar">
                     <div className="card sidebar-card">
-                        <h3>סטטיסטיקה</h3>
+                        <h3>Statistics</h3>
                         {collectionInfo ? (
                             <ul className="stats-list">
-                                <li>מסמכים במאגר: <strong>{collectionInfo.document_count ?? 0}</strong></li>
-                                <li>קבצים ייחודיים: <strong>{fileList.length}</strong></li>
+                                <li>Documents in store: <strong>{collectionInfo.document_count ?? 0}</strong></li>
+                                <li>Unique files: <strong>{fileList.length}</strong></li>
                             </ul>
                         ) : (
-                            <p className="muted">טוען...</p>
+                            <p className="muted">Loading…</p>
                         )}
                     </div>
                     <div className="card sidebar-card">
-                        <h3>מסמכים אחרונים</h3>
+                        <h3>Recent Documents</h3>
                         {recentFiles.length === 0 ? (
-                            <p className="muted">אין מסמכים</p>
+                            <p className="muted">No documents</p>
                         ) : (
                             <ul className="recent-list">
                                 {recentFiles.map((f) => (
@@ -693,11 +693,11 @@ function UploadTab({ onGptSyncingChange, gptRagSyncing = false }) {
                         )}
                     </div>
                     <div className="card sidebar-card">
-                        <h3>פעילות אינדוקס</h3>
+                        <h3>Index Activity</h3>
                         {uploadResult ? (
                             <p className={uploadResult.type}>{uploadResult.message}</p>
                         ) : (
-                            <p className="muted">העלה קובץ או תיקייה כדי לראות פעילות</p>
+                            <p className="muted">Upload a file or folder to see activity</p>
                         )}
                     </div>
                 </aside>
@@ -708,14 +708,14 @@ function UploadTab({ onGptSyncingChange, gptRagSyncing = false }) {
                     <div className="preview-modal" onClick={e => e.stopPropagation()}>
                         <div className="preview-header">
                             <h3>{previewDoc.filename}</h3>
-                            <button type="button" className="preview-close" onClick={closePreview} aria-label="סגור">×</button>
+                            <button type="button" className="preview-close" onClick={closePreview} aria-label="Close">×</button>
                         </div>
                         <div className="preview-body">
                             {previewLoading ? (
-                                <div className="loading">טוען...</div>
+                                <div className="loading">Loading…</div>
                             ) : (
                                 <div className="preview-text">
-                                    {formatBoldSegments(previewDoc.text || 'אין תוכן').map((part, j) => (
+                                    {formatBoldSegments(previewDoc.text || '(No content)').map((part, j) => (
                                         part.type === 'bold' ? (
                                             <strong key={`preview-part-${j}`}>{part.value}</strong>
                                         ) : (

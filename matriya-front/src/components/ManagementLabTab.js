@@ -42,7 +42,7 @@ function ManagementLabTab() {
           err.response?.data?.error ||
           err.response?.data?.detail ||
           err.message ||
-          'שגיאת חיבור';
+          'Connection error';
         setDetail({ error: msg, status: err.response?.status });
         setStatus('error');
       }
@@ -62,24 +62,23 @@ function ManagementLabTab() {
     return (
       <div className="management-lab-tab">
         <div className="management-lab-card">
-          <h2>מעבדה (ניהול)</h2>
+          <h2>Lab (Management)</h2>
           <p className="management-lab-lead">
-            כדי לשלב את המעבדה, הגדר משתני סביבה בזמן הבנייה (לוקאלי: קובץ <code>.env</code>, Vercel: Environment
-            Variables):
+            To integrate the lab, set these environment variables at build time (local: <code>.env</code> file, Vercel: Environment Variables):
           </p>
           <ul className="management-lab-env-list">
             <li>
-              <code>REACT_APP_MANAGEMENT_API_URL</code> — כתובת שרת הניהול (למשל{' '}
-              <code>https://manegment-back.vercel.app</code>)
+              <code>REACT_APP_MANAGEMENT_API_URL</code> — Management server URL (e.g.{' '}
+              <code>https://management-back.vercel.app</code>)
             </li>
             <li>
-              <code>REACT_APP_MANAGEMENT_FRONT_URL</code> — כתובת ממשק הניהול (למשל{' '}
-              <code>https://manegment-front.vercel.app</code>)
+              <code>REACT_APP_MANAGEMENT_FRONT_URL</code> — Management UI URL (e.g.{' '}
+              <code>https://management-front.vercel.app</code>)
             </li>
           </ul>
           <p className="management-lab-note">
-            <strong>התחברות:</strong> אותו משתמש וסיסמה כמו ב־Matriya — שרת הניהול מאמת מול Matriya באמצעות אותו JWT.
-            בממשק הניהול (לשונית נפרדת) יש להתחבר עם אותם פרטים.
+            <strong>Login:</strong> Use the same username and password as Matriya — the management server authenticates against Matriya using the same JWT.
+            In the management interface (separate tab), sign in with the same credentials.
           </p>
         </div>
       </div>
@@ -89,10 +88,9 @@ function ManagementLabTab() {
   return (
     <div className="management-lab-tab">
       <div className="management-lab-card">
-        <h2>מעבדה (ניהול)</h2>
+        <h2>Lab (Management)</h2>
         <p className="management-lab-lead">
-          חיבור למערכת הפרויקטים והמעבדה. <strong>אותו שם משתמש וסיסמה כמו ב־Matriya</strong> — האימות עובר לשרת
-          Matriya דרך שרת הניהול.
+          Connected to the projects and lab system. <strong>Same username and password as Matriya</strong> — authentication passes through the management server to Matriya.
         </p>
 
         <div className="management-lab-urls">
@@ -101,18 +99,18 @@ function ManagementLabTab() {
             <code className="management-lab-code">{MANAGEMENT_API_URL}</code>
           </div>
           <div>
-            <span className="management-lab-label">ממשק</span>
+            <span className="management-lab-label">Interface</span>
             <code className="management-lab-code">{MANAGEMENT_FRONT_URL}</code>
           </div>
         </div>
 
-        {status === 'checking' && <p className="management-lab-status checking">בודק חיבור לשרת הניהול…</p>}
+        {status === 'checking' && <p className="management-lab-status checking">Checking connection to management server…</p>}
 
         {status === 'ok' && detail?.user && (
           <p className="management-lab-status ok">
             <span key="status-ok">
-              מחובר לשרת הניהול כ־<strong>{detail.user.username || detail.user.full_name || 'משתמש'}</strong>
-              {projectTotal != null ? ` · ${projectTotal} פרויקטים במערכת` : ''}.
+              Connected to management server as <strong>{detail.user.username || detail.user.full_name || 'user'}</strong>
+              {projectTotal != null ? ` · ${projectTotal} projects in system` : ''}.
             </span>
           </p>
         )}
@@ -120,9 +118,9 @@ function ManagementLabTab() {
         {status === 'error' && (
           <p className="management-lab-status error">
             <span key="status-error">
-              לא ניתן לאמת מול שרת הניהול: {detail?.error}
+              Cannot authenticate with management server: {detail?.error}
               {detail?.status === 503
-                ? ' — ודא ש־MATRIYA_BACK_URL מוגדר אצל שרת הניהול וש־Matriya זמין.'
+                ? ' — ensure MATRIYA_BACK_URL is set on the management server and Matriya is available.'
                 : ''}
             </span>
           </p>
@@ -130,17 +128,15 @@ function ManagementLabTab() {
 
         <div className="management-lab-actions">
           <button type="button" className="management-lab-primary" onClick={openManagementUi}>
-            פתח את מערכת הניהול בלשונית חדשה
+            Open Management Interface in New Tab
           </button>
         </div>
 
         <p className="management-lab-hint">
-          במעבדת הפרויקט (בממשק הניהול): קבצי Excel מוצגים כטבלאות והטקסט ל־AI נשמר במבנה טבלה (Markdown) — עדכון
-          גיליון: העלה מחדש את הקובץ.
+          In the project lab (management interface): Excel files are displayed as tables and AI text is stored in table structure (Markdown) — to update a sheet: re-upload the file.
         </p>
         <p className="management-lab-hint">
-          אם נפתחת מסך התחברות במערכת הניהול, התחבר עם אותם פרטים שב־Matriya. הטוקן כאן משמש רק לבדיקת API מתוך
-          Matriya; הדפדפן בממשק הניהול שומר התחברות נפרדת.
+          If a login screen appears in the management interface, sign in with the same Matriya credentials. The token here is only used for API checks from within Matriya; the browser in the management interface maintains a separate session.
         </p>
       </div>
     </div>

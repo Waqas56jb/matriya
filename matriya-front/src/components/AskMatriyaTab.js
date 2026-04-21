@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { HiPaperAirplane, HiChevronDown, HiChevronUp } from 'react-icons/hi2';
 import api from '../utils/api';
 import { formatApiErrorForUser } from '../utils/openAiFriendlyError';
 import { runAskMatriyaDocumentsQuery, sortFilenamesForAskMatriyaDisplay } from '../utils/askMatriyaDocumentsClient';
@@ -7,12 +8,11 @@ import AnswerEvidenceSection from './AnswerEvidenceSection';
 import GptSyncStatusRow from './GptSyncStatusRow';
 import './AskMatriyaTab.css';
 
-const ASK_CHAT_EVIDENCE_TITLE = 'מקורות מהמסמכים (ציטוטים)';
-const ASK_CHAT_EVIDENCE_HINT = 'קטעים ששימשו כבסיס לתשובה — לשקיפות וביקורת.';
+const ASK_CHAT_EVIDENCE_TITLE = 'Document Sources (Citations)';
+const ASK_CHAT_EVIDENCE_HINT = 'Passages used as the basis for this answer — for transparency and review.';
 const ASK_ALL_FILES_VALUE = '__ALL_FILES__';
 
 function AskMatriyaTab({ onGptSyncingChange, gptRagSyncing = false }) {
-    /** Same order as Upload file table (GET /files/detail) — used for /ask-matriya filenames. */
     const [filesInApiOrder, setFilesInApiOrder] = useState([]);
     const [selectedFilenames, setSelectedFilenames] = useState([ASK_ALL_FILES_VALUE]);
     const [messages, setMessages] = useState([]);
@@ -52,9 +52,7 @@ function AskMatriyaTab({ onGptSyncingChange, gptRagSyncing = false }) {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     };
 
-    useEffect(() => {
-        scrollToBottom();
-    }, [messages]);
+    useEffect(() => { scrollToBottom(); }, [messages]);
 
     const loadSystemFiles = useCallback((opts = {}) => {
         const silent = Boolean(opts.silent);
@@ -66,17 +64,11 @@ function AskMatriyaTab({ onGptSyncingChange, gptRagSyncing = false }) {
                 const names = list.map((f) => f.filename).filter((n) => typeof n === 'string' && n.trim());
                 setFilesInApiOrder(names);
             })
-            .catch(() => {
-                /* Keep existing list on refresh errors; only initial load stays empty. */
-            })
-            .finally(() => {
-                if (!silent) setFilesLoading(false);
-            });
+            .catch(() => {})
+            .finally(() => { if (!silent) setFilesLoading(false); });
     }, []);
 
-    useEffect(() => {
-        loadSystemFiles();
-    }, [loadSystemFiles]);
+    useEffect(() => { loadSystemFiles(); }, [loadSystemFiles]);
 
     useEffect(() => {
         setSelectedFilenames((prev) => {
@@ -115,12 +107,12 @@ function AskMatriyaTab({ onGptSyncingChange, gptRagSyncing = false }) {
 
         try {
             if (selectedFilenames.length === 0) {
-                setError('בחרו לפחות מסמך אחד מהרשימה לפני שליחת השאלה.');
+                setError('Select at least one document before sending a question.');
                 setMessages((prev) => prev.slice(0, -1));
                 return;
             }
             if (filesInApiOrder.length === 0) {
-                setError('אין מסמכים במערכת — העלו מסמכים בלשונית העלאה.');
+                setError('No documents in the system — upload documents in the Documents tab first.');
                 setMessages((prev) => prev.slice(0, -1));
                 return;
             }
@@ -128,14 +120,14 @@ function AskMatriyaTab({ onGptSyncingChange, gptRagSyncing = false }) {
                 ? [...filesInApiOrder]
                 : filesInApiOrder.filter((f) => selectedFilenames.includes(f));
             if (filenames.length === 0) {
-                setError('אין מסמכים זמינים לשאילתה. רעננו את הרשימה ונסו שוב.');
+                setError('No documents available for query. Refresh the list and try again.');
                 setMessages((prev) => prev.slice(0, -1));
                 return;
             }
             const { reply: replyText, sources } = await runAskMatriyaDocumentsQuery(text, filenames);
             setMessages((prev) => [...prev, { role: 'assistant', content: replyText, sources }]);
         } catch (err) {
-            setError(formatApiErrorForUser(err, 'שגיאה בשליחה'));
+            setError(formatApiErrorForUser(err, 'Error sending message'));
             setMessages((prev) => prev.slice(0, -1));
         } finally {
             setSending(false);
@@ -149,19 +141,23 @@ function AskMatriyaTab({ onGptSyncingChange, gptRagSyncing = false }) {
         }
     };
 
+    const dropdownLabel = isAllFilesSelected
+        ? 'All documents'
+        : selectedFilenames.length === 1
+            ? selectedFilenames[0]
+            : `${selectedFilenames.length} documents selected`;
+
     return (
         <div className="ask-matriya-tab">
             <div className="ask-matriya-single card">
-                <h2>שאל את מטריה</h2>
-                <p className="ask-matriya-hint">
-                    חובה לבחור לפחות מסמך אחד מהרשימה. התשובה מותרת רק לפי מה שמופיע בטקסט המאונדקס של המסמכים שבחרתם — בלי השלמות מידע כללי מהמודל; אם אין במסמכים מספיק נתונים, התשובה תאמר זאת במפורש.
-                </p>
-                <p className="ask-matriya-hint">
-                    השרת בודק תחילה אם השאלה באופן ברור עוסקת ברשימת החומרים/הניסויים כפי שרשומים במערכת הניהול (כשיש חיבור לשרת הניהול); שאלות מקט, מפרט טכני או תוכן מסמכים — בדרך כלל נענות מטקסט הקבצים שבחרתם. אם כן לניהול — התשובה מסתמכת על הנתונים משם; אחרת על טקסט המסמכים. ציטוטים מהמסמכים — רק לקבצים המופיעים ברשימה; אחרי מחיקה יש לרענן; סנכרון OpenAI למעלה מעדכן את החיפוש בענן.
-                </p>
-                <p className="ask-matriya-hint">
-                    לאותה שאלה ואותה בחירת מסמכים, המערכת מכוונת לתשובה יציבה ועקבית יותר; היסטוריית השיחה בשדה למטה עשויה לשנות מעט את ניסוח התשובה בין סיבובים.
-                </p>
+                <div className="ask-matriya-header">
+                    <h2 className="ask-matriya-title">Ask Matriya</h2>
+                    <p className="ask-matriya-hint">
+                        Ask questions grounded in your indexed documents. Answers are limited to
+                        content found in the selected files — no general knowledge fill-in.
+                        If the documents don't have sufficient data, the answer will say so explicitly.
+                    </p>
+                </div>
 
                 <GptSyncStatusRow
                     filenames={filesInApiOrder}
@@ -170,18 +166,23 @@ function AskMatriyaTab({ onGptSyncingChange, gptRagSyncing = false }) {
                     className="ask-matriya-gpt-sync"
                 />
 
+                {/* Document selector */}
                 <div className="ask-matriya-file-section" ref={dropdownRef}>
                     <span className="ask-matriya-file-section-label">
-                        <span key="label-prefix">מסמכים במערכת</span>
-                        {!filesLoading && filesInApiOrder.length > 0 ? (
-                            <span key="label-count">{` (${filesInApiOrder.length})`}</span>
-                        ) : null}
-                        <span key="label-suffix">:</span>
+                        Documents in system
+                        {!filesLoading && filesInApiOrder.length > 0 && (
+                            <span className="ask-matriya-file-count">{filesInApiOrder.length}</span>
+                        )}
                     </span>
                     {filesLoading ? (
-                        <div className="ask-matriya-loading-files">טוען...</div>
+                        <div className="ask-matriya-loading-files">
+                            <span className="ask-matriya-spinner" aria-hidden />
+                            Loading documents…
+                        </div>
                     ) : filesInApiOrder.length === 0 ? (
-                        <div className="ask-matriya-no-files">אין מסמכים במערכת. העלו מסמכים בלשונית העלאת מסמכים קודם.</div>
+                        <div className="ask-matriya-no-files">
+                            No documents in the system. Upload documents in the Documents tab first.
+                        </div>
                     ) : (
                         <div className="ask-matriya-dropdown">
                             <button
@@ -190,24 +191,17 @@ function AskMatriyaTab({ onGptSyncingChange, gptRagSyncing = false }) {
                                 onClick={() =>
                                     setDropdownOpen((o) => {
                                         const next = !o;
-                                        if (next) {
-                                            setSearchQuery('');
-                                            void loadSystemFiles({ silent: true });
-                                        }
+                                        if (next) { setSearchQuery(''); void loadSystemFiles({ silent: true }); }
                                         return next;
                                     })
                                 }
                                 aria-expanded={dropdownOpen}
                                 aria-haspopup="listbox"
                             >
-                                <span className="ask-matriya-dropdown-trigger-text">
-                                    {isAllFilesSelected
-                                        ? 'כל המסמכים במערכת'
-                                        : selectedFilenames.length === 1
-                                            ? selectedFilenames[0]
-                                            : `${selectedFilenames.length} מסמכים נבחרו`}
+                                <span className="ask-matriya-dropdown-trigger-text">{dropdownLabel}</span>
+                                <span className="ask-matriya-dropdown-arrow" aria-hidden>
+                                    {dropdownOpen ? <HiChevronUp size={16} /> : <HiChevronDown size={16} />}
                                 </span>
-                                <span className="ask-matriya-dropdown-arrow">{dropdownOpen ? '▲' : '▼'}</span>
                             </button>
                             {dropdownOpen && (
                                 <div className="ask-matriya-dropdown-panel" role="listbox">
@@ -215,7 +209,7 @@ function AskMatriyaTab({ onGptSyncingChange, gptRagSyncing = false }) {
                                         ref={searchInputRef}
                                         type="text"
                                         className="ask-matriya-dropdown-search"
-                                        placeholder="חיפוש לפי שם קובץ (כל הסוגים: Word, PDF, Excel…)"
+                                        placeholder="Search by filename (PDF, Word, Excel…)"
                                         value={searchQuery}
                                         onChange={(e) => setSearchQuery(e.target.value)}
                                         onKeyDown={(e) => e.stopPropagation()}
@@ -231,12 +225,10 @@ function AskMatriyaTab({ onGptSyncingChange, gptRagSyncing = false }) {
                                             <span className="ask-matriya-dropdown-option-check">
                                                 {isAllFilesSelected ? '✓' : ''}
                                             </span>
-                                            <span className="ask-matriya-dropdown-option-label" title="כל המסמכים במערכת">
-                                                <span key="val-all">כל המסמכים במערכת</span>
-                                            </span>
+                                            <span className="ask-matriya-dropdown-option-label">All documents</span>
                                         </button>
                                         {filteredFiles.length === 0 ? (
-                                            <div className="ask-matriya-dropdown-empty">אין התאמות</div>
+                                            <div className="ask-matriya-dropdown-empty">No matches found</div>
                                         ) : (
                                             filteredFiles.map((filename) => (
                                                 <button
@@ -248,16 +240,14 @@ function AskMatriyaTab({ onGptSyncingChange, gptRagSyncing = false }) {
                                                     onClick={() => toggleFile(filename)}
                                                 >
                                                     <span className="ask-matriya-dropdown-option-check">
-                                                        {selectedFilenames.includes(filename) ? <span key="check">✓</span> : null}
+                                                        {selectedFilenames.includes(filename) ? '✓' : ''}
                                                     </span>
                                                     <span className="ask-matriya-dropdown-option-label" title={filename}>
-                                                        <span key={filename}>{filename}</span>
+                                                        {filename}
                                                     </span>
-                                                    {isSpreadsheetFilename(filename) ? (
-                                                        <span className="ask-matriya-file-kind" aria-hidden>
-                                                            <span key="excel">גיליון</span>
-                                                        </span>
-                                                    ) : null}
+                                                    {isSpreadsheetFilename(filename) && (
+                                                        <span className="ask-matriya-file-kind" aria-hidden>XLS</span>
+                                                    )}
                                                 </button>
                                             ))
                                         )}
@@ -268,10 +258,11 @@ function AskMatriyaTab({ onGptSyncingChange, gptRagSyncing = false }) {
                     )}
                 </div>
 
+                {/* Messages */}
                 <div className="ask-matriya-messages">
                     {messages.length === 0 && (
                         <div className="ask-matriya-placeholder">
-                            <span key="placeholder-text">בחרו מסמך אחד או יותר למעלה, ואז כתבו שאלה למטה.</span>
+                            Select one or more documents above, then type your question below.
                         </div>
                     )}
                     <div className="ask-matriya-messages-list">
@@ -279,50 +270,53 @@ function AskMatriyaTab({ onGptSyncingChange, gptRagSyncing = false }) {
                             <div key={i} className={`ask-matriya-msg ask-matriya-msg-${msg.role}`}>
                                 <div className="ask-matriya-msg-content">
                                     {formatBoldSegments(msg.content || '').map((part, j) => (
-                                        part.type === 'bold' ? (
-                                            <strong key={`msg-${i}-part-${j}`}>{part.value}</strong>
-                                        ) : (
-                                            <span key={`msg-${i}-part-${j}`}>{part.value}</span>
-                                        )
+                                        part.type === 'bold'
+                                            ? <strong key={`p-${i}-${j}`}>{part.value}</strong>
+                                            : <span key={`p-${i}-${j}`}>{part.value}</span>
                                     ))}
                                 </div>
-                                {msg.role === 'assistant' ? (
+                                {msg.role === 'assistant' && (
                                     <AnswerEvidenceSection
                                         sources={msg.sources || []}
                                         title={ASK_CHAT_EVIDENCE_TITLE}
                                         hint={ASK_CHAT_EVIDENCE_HINT}
                                     />
-                                ) : null}
+                                )}
                             </div>
                         ))}
                     </div>
                     <div className="ask-matriya-typing-container">
-                        {sending ? (
-                            <div key="typing" className="ask-matriya-msg ask-matriya-msg-assistant">
+                        {sending && (
+                            <div className="ask-matriya-msg ask-matriya-msg-assistant">
                                 <div className="ask-matriya-msg-content ask-matriya-typing">
-                                    <span key="typing-indicator">מחפש תשובה...</span>
+                                    <span className="ask-matriya-typing-dot" />
+                                    <span className="ask-matriya-typing-dot" />
+                                    <span className="ask-matriya-typing-dot" />
                                 </div>
                             </div>
-                        ) : null}
+                        )}
                     </div>
                     <div ref={messagesEndRef} />
                 </div>
 
-                {error && <div className="ask-matriya-error">{error}</div>}
+                {error && (
+                    <div className="ask-matriya-error" role="alert">
+                        <span>⚠</span> {error}
+                    </div>
+                )}
 
+                {/* Input row */}
                 <div className="ask-matriya-input-row">
                     <textarea
                         className="ask-matriya-input"
-                        placeholder="כתבו את השאלה..."
+                        placeholder="Type your question… (Enter to send, Shift+Enter for new line)"
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
                         onKeyDown={handleKeyDown}
                         rows={2}
                         disabled={
-                            sending ||
-                            gptRagSyncing ||
-                            filesInApiOrder.length === 0 ||
-                            selectedFilenames.length === 0
+                            sending || gptRagSyncing ||
+                            filesInApiOrder.length === 0 || selectedFilenames.length === 0
                         }
                     />
                     <button
@@ -330,18 +324,15 @@ function AskMatriyaTab({ onGptSyncingChange, gptRagSyncing = false }) {
                         className="ask-matriya-send"
                         onClick={handleSend}
                         disabled={
-                            sending ||
-                            gptRagSyncing ||
-                            !input.trim() ||
-                            selectedFilenames.length === 0 ||
-                            filesInApiOrder.length === 0
+                            sending || gptRagSyncing || !input.trim() ||
+                            selectedFilenames.length === 0 || filesInApiOrder.length === 0
                         }
+                        aria-label="Send message"
                     >
-                        {sending || gptRagSyncing ? (
-                            <span key="sending" className="btn-inner">שולח...</span>
-                        ) : (
-                            <span key="idle" className="btn-inner">שלח</span>
-                        )}
+                        {sending || gptRagSyncing
+                            ? <span className="ask-matriya-send-spinner" aria-hidden />
+                            : <HiPaperAirplane size={20} aria-hidden />
+                        }
                     </button>
                 </div>
             </div>

@@ -5,8 +5,8 @@ import { formatApiErrorForUser } from '../utils/openAiFriendlyError';
 import './RachelUpload.css';
 
 /**
- * טופס העלאת ניסוי (Rachel) — POST /api/experiments/upload
- * שדות: מזהה ניסוי, תאריך, נוסח, תוצאות
+ * Lab Experiment Upload form (Rachel) — POST /api/experiments/upload
+ * Fields: experiment ID, date, formulation, results
  */
 export default function RachelUpload() {
     const [experimentName, setExperimentName] = useState('');
@@ -26,43 +26,43 @@ export default function RachelUpload() {
                 results: results.trim()
             });
             if (res.data?.success && res.data?.experiment_id) {
-                toast.success(`הניסוי נשמר: ${res.data.experiment_id}`);
+                toast.success(`Experiment saved: ${res.data.experiment_id}`);
                 setExperimentName('');
                 setDate('');
                 setFormulation('');
                 setResults('');
             } else {
-                toast.error('תשובה לא צפויה מהשרת');
+                toast.error('Unexpected response from server');
             }
         } catch (err) {
-            toast.error(formatApiErrorForUser(err));
+            toast.error(formatApiErrorForUser(err, 'Submission failed'));
         } finally {
             setSubmitting(false);
         }
     };
 
     return (
-        <section className="rachel-upload" dir="rtl" lang="he">
-            <h2 className="rachel-upload__title">העלאת ניסוי מעבדה</h2>
+        <section className="rachel-upload">
+            <h2 className="rachel-upload__title">Upload Lab Experiment</h2>
             <p className="rachel-upload__hint">
-                מזהה הניסוי, תאריך, נוסח והתוצאות נשמרים בטבלת הניסויים (Supabase).
+                The experiment ID, date, formulation and results are saved to the experiments table (Supabase).
             </p>
             <form className="rachel-upload__form" onSubmit={handleSubmit}>
                 <label className="rachel-upload__label">
-                    <span className="rachel-upload__label-text">שם / מזהה ניסוי</span>
+                    <span className="rachel-upload__label-text">Experiment Name / ID</span>
                     <input
                         className="rachel-upload__input"
                         type="text"
                         name="experiment_id"
                         value={experimentName}
                         onChange={(ev) => setExperimentName(ev.target.value)}
-                        placeholder="למשל EXP-2026-042"
+                        placeholder="e.g. EXP-2026-042"
                         autoComplete="off"
                         required
                     />
                 </label>
                 <label className="rachel-upload__label">
-                    <span className="rachel-upload__label-text">תאריך</span>
+                    <span className="rachel-upload__label-text">Date</span>
                     <input
                         className="rachel-upload__input"
                         type="date"
@@ -73,31 +73,31 @@ export default function RachelUpload() {
                     />
                 </label>
                 <label className="rachel-upload__label">
-                    <span className="rachel-upload__label-text">נוסח (Formulation)</span>
+                    <span className="rachel-upload__label-text">Formulation</span>
                     <textarea
                         className="rachel-upload__textarea"
                         name="formulation"
                         rows={4}
                         value={formulation}
                         onChange={(ev) => setFormulation(ev.target.value)}
-                        placeholder="תיאור הנוסח או הרכיבים"
+                        placeholder="Describe the formulation or ingredients"
                         required
                     />
                 </label>
                 <label className="rachel-upload__label">
-                    <span className="rachel-upload__label-text">תוצאות</span>
+                    <span className="rachel-upload__label-text">Results</span>
                     <textarea
                         className="rachel-upload__textarea"
                         name="results"
                         rows={5}
                         value={results}
                         onChange={(ev) => setResults(ev.target.value)}
-                        placeholder="תוצאות המדידות או הסיכום"
+                        placeholder="Measurement results or summary"
                         required
                     />
                 </label>
                 <button type="submit" className="rachel-upload__submit" disabled={submitting}>
-                    {submitting ? 'שולח…' : 'שליחה'}
+                    {submitting ? 'Submitting…' : 'Submit'}
                 </button>
             </form>
         </section>

@@ -8,11 +8,11 @@ export default function ExternalContextBlock({ items }) {
     <section className="ac-external-block" aria-labelledby="ac-external-heading">
       <details className="ac-external-details">
         <summary className="ac-external-summary" id="ac-external-heading">
-          הקשר חיצוני (לא מאומת כראיה)
+          External Context (not verified as evidence)
           <span className="ac-external-count"> ({count})</span>
         </summary>
         {count === 0 ? (
-          <p className="ac-external-empty">אין רשומות הקשר נוספות.</p>
+          <p className="ac-external-empty">No additional context records.</p>
         ) : (
           <ul className="ac-external-list">
             {list.map((row, i) => (

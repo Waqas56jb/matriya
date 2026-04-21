@@ -1,14 +1,14 @@
-/** Hebrew display labels for composeAnswer decision_status (UI only). */
+/** English display labels for composeAnswer decision_status (UI only). */
 export function labelDecisionStatus(status) {
   const s = String(status || '');
   const map = {
-    VALID_CONCLUSION: 'מסקנה תקפה',
-    INCONCLUSIVE: 'לא חד-משמעי',
-    INSUFFICIENT_DATA: 'חוסר נתונים',
-    NO_CHANGE: 'אין שינוי',
-    REFERENCE_ONLY: 'הקשר בלבד (לא מסקנה)',
-    INVALID_EXPERIMENT: 'ניסוי לא תקין',
-    STRUCTURAL_INCOMPLETE: 'מבנה לא שלם',
+    VALID_CONCLUSION:       'Valid Conclusion',
+    INCONCLUSIVE:           'Inconclusive',
+    INSUFFICIENT_DATA:      'Insufficient Data',
+    NO_CHANGE:              'No Change',
+    REFERENCE_ONLY:         'Reference Only',
+    INVALID_EXPERIMENT:     'Invalid Experiment',
+    STRUCTURAL_INCOMPLETE:  'Structurally Incomplete',
   };
   return map[s] || s || '—';
 }

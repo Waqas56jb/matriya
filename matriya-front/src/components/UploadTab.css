@@ -103,7 +103,7 @@
 }
 
 .folder-upload-btn:hover {
-    background: rgba(22, 101, 52, 0.08);
+    background: var(--matriya-hover, #162447);
     border-color: var(--matriya-accent);
 }
 
@@ -142,7 +142,7 @@
 .documents-table th,
 .documents-table td {
     padding: 12px 14px;
-    text-align: right;
+    text-align: left;
     border-bottom: 1px solid var(--matriya-border);
 }
 
@@ -153,7 +153,7 @@
 }
 
 .documents-table tbody tr:hover {
-    background: rgba(22, 101, 52, 0.04);
+    background: var(--matriya-hover, #162447);
 }
 
 .documents-table .doc-name {
@@ -174,11 +174,11 @@
 }
 
 .preview-btn:hover {
-    background: rgba(22, 101, 52, 0.1);
+    background: var(--matriya-accent-soft, rgba(0, 212, 255, 0.1));
 }
 
 .documents-table .folder-row:hover {
-    background: rgba(22, 101, 52, 0.06);
+    background: var(--matriya-hover, #162447);
 }
 
 .documents-table .folder-cell {
@@ -198,7 +198,7 @@
     cursor: pointer;
     font: inherit;
     color: inherit;
-    text-align: right;
+    text-align: left;
 }
 
 .documents-table .folder-chevron {
@@ -245,7 +245,7 @@
         align-items: center;
         padding: 10px 0;
         border-bottom: 1px solid rgba(51, 65, 85, 0.1);
-        text-align: right;
+        text-align: left;
         font-size: 0.9rem;
     }
 
@@ -288,8 +288,8 @@
         display: block;
         padding: 12px;
         border-radius: 12px;
-        background: rgba(22, 101, 52, 0.07);
-        border: 1px solid rgba(22, 101, 52, 0.2);
+        background: rgba(0, 212, 255, 0.06);
+        border: 1px solid rgba(0, 212, 255, 0.2);
     }
 
     .table-wrap {
@@ -371,7 +371,7 @@
     border: 1px solid var(--matriya-border);
     border-radius: 8px;
     white-space: pre-wrap;
-    text-align: right;
+    text-align: left;
 }
 
 .upload-sidebar {
@@ -479,14 +479,13 @@
 }
 
 .upload-area {
-    border: 3px dashed rgba(22, 101, 52, 0.4);
+    border: 2px dashed rgba(0, 212, 255, 0.3);
     border-radius: 16px;
     padding: 60px 40px;
     text-align: center;
     cursor: pointer;
-    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-    background: rgba(240, 242, 245, 0.6);
-    backdrop-filter: blur(10px);
+    transition: all 0.3s ease;
+    background: rgba(0, 212, 255, 0.03);
     position: relative;
     overflow: hidden;
 }
@@ -498,7 +497,7 @@
     left: -50%;
     width: 200%;
     height: 200%;
-    background: radial-gradient(circle, rgba(22, 101, 52, 0.1) 0%, transparent 70%);
+    background: radial-gradient(circle, rgba(0, 212, 255, 0.06) 0%, transparent 70%);
     opacity: 0;
     transition: opacity 0.4s;
 }
@@ -508,17 +507,17 @@
 }
 
 .upload-area:hover {
-    border-color: rgba(22, 101, 52, 0.6);
-    background: rgba(240, 242, 245, 0.9);
-    transform: scale(1.02);
-    box-shadow: 0 8px 30px rgba(22, 101, 52, 0.2);
+    border-color: rgba(0, 212, 255, 0.6);
+    background: rgba(0, 212, 255, 0.06);
+    transform: scale(1.01);
+    box-shadow: 0 8px 30px rgba(0, 212, 255, 0.12);
 }
 
 .upload-area.dragover {
-    border-color: var(--matriya-accent);
-    background: rgba(22, 101, 52, 0.15);
-    transform: scale(1.05);
-    box-shadow: 0 12px 40px rgba(22, 101, 52, 0.3);
+    border-color: #00d4ff;
+    background: rgba(0, 212, 255, 0.1);
+    transform: scale(1.02);
+    box-shadow: 0 12px 40px rgba(0, 212, 255, 0.2);
 }
 
 .upload-area.dragover::before {
@@ -531,9 +530,9 @@
 }
 
 .upload-placeholder svg {
-    color: var(--matriya-accent);
+    color: var(--matriya-accent, #00d4ff);
     margin-bottom: 20px;
-    filter: drop-shadow(0 4px 8px rgba(22, 101, 52, 0.3));
+    filter: drop-shadow(0 4px 8px rgba(0, 212, 255, 0.25));
     transition: transform 0.3s;
 }
 
@@ -571,7 +570,7 @@
     width: 100%;
     animation: progress 2s linear infinite;
     border-radius: 10px;
-    box-shadow: 0 0 20px rgba(22, 101, 52, 0.5);
+    box-shadow: 0 0 20px rgba(0, 212, 255, 0.4);
 }
 
 @keyframes progress {

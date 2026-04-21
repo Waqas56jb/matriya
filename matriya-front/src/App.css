@@ -22,21 +22,15 @@
 }
 
 .auth-hero {
-    max-width: 480px;
+    max-width: 900px;
     width: 100%;
     margin: 0 auto;
-    padding-inline: clamp(4px, 2vw, 12px);
+    padding-inline: clamp(8px, 3vw, 20px);
     box-sizing: border-box;
 }
 
 .auth-lead {
-    text-align: center;
-    font-size: clamp(0.95rem, 2.8vw, 1.08rem);
-    line-height: 1.65;
-    color: var(--matriya-muted, #475569);
-    margin-bottom: clamp(20px, 4vw, 28px);
-    padding: 0 8px;
-    animation: fadeUp 0.5s ease-out;
+    display: none;
 }
 
 @keyframes fadeUp {
@@ -85,25 +79,26 @@
 }
 
 .site-header__slot .tab-button {
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.22);
-    color: #e0e7ff;
+    background: rgba(30, 58, 95, 0.4);
+    border: 1px solid var(--matriya-border, #1e3a5f);
+    color: var(--matriya-muted, #8baac8);
     min-height: 44px;
     padding-inline: clamp(10px, 3vw, 20px);
     flex: 0 0 auto;
 }
 
 .site-header__slot .tab-button:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.18);
-    border-color: rgba(255, 255, 255, 0.35);
+    background: var(--matriya-hover, #162447);
+    border-color: var(--matriya-border-light, #243d60);
+    color: var(--matriya-text, #f0f6ff);
     box-shadow: none;
 }
 
 .site-header__slot .tab-button.active {
-    background: #fff;
-    color: #312e81;
-    border-color: #fff;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+    background: var(--matriya-accent-grad, linear-gradient(135deg, #00d4ff 0%, #7c3aed 100%));
+    color: #fff;
+    border-color: transparent;
+    box-shadow: 0 4px 15px rgba(0, 212, 255, 0.25);
 }
 
 .site-header__slot .tab-button:disabled {
@@ -126,27 +121,31 @@
     flex: 0 0 auto;
     min-height: 48px;
     padding: 12px 20px;
-    background: var(--matriya-surface, #fff);
-    border: 1px solid var(--matriya-border, #e2e8f0);
+    background: var(--matriya-surface, #0b1630);
+    border: 1px solid var(--matriya-border, #1e3a5f);
     border-radius: 12px;
-    color: var(--matriya-text, #0f172a);
+    color: var(--matriya-muted, #8baac8);
     cursor: pointer;
     font-size: clamp(0.9rem, 2.5vw, 1rem);
     font-weight: 600;
     font-family: inherit;
-    transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+    transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, background 0.2s ease;
     white-space: nowrap;
 }
 
 .tab-button:hover:not(:disabled) {
     transform: translateY(-1px);
-    box-shadow: 0 8px 24px rgba(30, 27, 75, 0.12);
+    background: var(--matriya-hover, #162447);
+    border-color: var(--matriya-border-light, #243d60);
+    color: var(--matriya-text, #f0f6ff);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
 }
 
 .tab-button.active {
-    background: linear-gradient(135deg, #4338ca 0%, #6366f1 100%);
+    background: var(--matriya-accent-grad, linear-gradient(135deg, #00d4ff 0%, #7c3aed 100%));
     color: #fff;
     border-color: transparent;
+    box-shadow: 0 4px 15px rgba(0, 212, 255, 0.25);
 }
 
 .tab-content-wrapper {
@@ -165,24 +164,25 @@
 }
 
 .card {
-    background: var(--matriya-surface, #fff);
+    background: var(--matriya-surface, #0b1630);
     border-radius: 16px;
     padding: clamp(16px, 4vw, 36px);
     margin-bottom: 20px;
-    border: 1px solid var(--matriya-border, #e2e8f0);
-    box-shadow: 0 4px 24px rgba(15, 23, 42, 0.06);
-    transition: box-shadow 0.25s ease;
+    border: 1px solid var(--matriya-border, #1e3a5f);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+    transition: box-shadow 0.25s ease, transform 0.2s ease;
     min-width: 0;
     max-width: 100%;
 }
 
 .card:hover {
-    box-shadow: 0 8px 32px rgba(15, 23, 42, 0.08);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 0 20px rgba(0, 212, 255, 0.06);
+    border-color: var(--matriya-border-light, #243d60);
 }
 
 .card h2 {
     margin-bottom: clamp(16px, 3vw, 22px);
-    color: var(--matriya-text, #0f172a);
+    color: var(--matriya-text, #f0f6ff);
     font-size: clamp(1.15rem, 3.5vw, 1.55rem);
     font-weight: 700;
 }
@@ -204,8 +204,8 @@
 .loading-spinner {
     width: 40px;
     height: 40px;
-    border: 3px solid rgba(67, 56, 202, 0.2);
-    border-top-color: #4338ca;
+    border: 3px solid var(--matriya-border, #1e3a5f);
+    border-top-color: var(--matriya-accent, #00d4ff);
     border-radius: 50%;
     animation: spin 0.85s linear infinite;
 }
@@ -255,9 +255,9 @@
     padding: 8px 0 calc(10px + env(safe-area-inset-bottom, 0px));
     margin: 0;
     overflow: visible;
-    background: linear-gradient(180deg, #1e1b4b 0%, #312e81 55%, #3730a3 100%);
-    border-top: 1px solid rgba(255, 255, 255, 0.14);
-    box-shadow: 0 -8px 32px rgba(15, 23, 42, 0.35);
+    background: var(--matriya-sidebar, #080f25);
+    border-top: 1px solid var(--matriya-border, #1e3a5f);
+    box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.5), 0 -1px 0 rgba(0, 212, 255, 0.08);
     -webkit-tap-highlight-color: transparent;
 }
 
@@ -287,20 +287,21 @@
     border-radius: 12px !important;
     border: none !important;
     background: transparent !important;
-    color: rgba(224, 231, 255, 0.88) !important;
+    color: var(--matriya-muted, #8baac8) !important;
     box-shadow: none !important;
     overflow: visible !important;
 }
 
 .tab-button--mobile:hover:not(:disabled) {
     transform: none !important;
-    background: rgba(255, 255, 255, 0.08) !important;
+    background: var(--matriya-hover, rgba(22, 36, 71, 0.5)) !important;
+    color: var(--matriya-text, #f0f6ff) !important;
 }
 
 .tab-button--mobile.active {
-    background: rgba(255, 255, 255, 0.95) !important;
-    color: #312e81 !important;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2) !important;
+    background: rgba(0, 212, 255, 0.12) !important;
+    color: var(--matriya-accent, #00d4ff) !important;
+    box-shadow: none !important;
 }
 
 .tab-button--mobile:disabled {

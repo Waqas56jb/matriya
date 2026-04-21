@@ -5,9 +5,7 @@ export default function NextStepBlock({ nextStep }) {
   if (!t) return null;
   return (
     <section className="ac-next-block" aria-labelledby="ac-next-heading">
-      <h3 id="ac-next-heading" className="ac-block-title">
-        הצעד הבא
-      </h3>
+      <h3 id="ac-next-heading" className="ac-block-title">Next Step</h3>
       <div className="ac-next-text">{t}</div>
     </section>
   );

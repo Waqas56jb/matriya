@@ -467,7 +467,7 @@
 .violations-table th,
 .violations-table td {
     padding: 12px 14px;
-    text-align: right;
+    text-align: left;
     border-bottom: 1px solid rgba(22, 101, 52, 0.15);
 }
 

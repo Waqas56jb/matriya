@@ -1,6 +1,6 @@
 /**
  * Shared client for POST /ask-matriya (document text path).
- * Used by Upload «חיפוש במסמכים» and Ask Matriya so identical question + scope hits the same behavior.
+ * Used by Upload and Ask Matriya so identical question + scope hits the same behavior.
  * Cross-tab cache: repeat submit skips the network, waits 3s, returns the previous reply.
  */
 

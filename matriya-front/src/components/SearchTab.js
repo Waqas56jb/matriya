@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+﻿import React, { useState, useCallback, useEffect } from 'react';
 import api from '../utils/api';
 import { getOpenAiFriendlyMessage } from '../utils/openAiFriendlyError';
 import { formatBoldSegments } from '../utils/formatBold';
@@ -9,18 +9,18 @@ import { isAnswerComposerPayload } from '../utils/isAnswerComposerPayload';
 import JsonViewer from './JsonViewer';
 import './SearchTab.css';
 
-const SEARCH_EVIDENCE_TITLE = 'מקורות מהמסמכים (ציטוטים)';
-const SEARCH_EVIDENCE_HINT = 'קטעים ששימשו כבסיס לתשובה — לשקיפות וביקורת.';
+const SEARCH_EVIDENCE_TITLE = 'Document Sources (Citations)';
+const SEARCH_EVIDENCE_HINT = 'Passages used as the basis for this answer — for transparency and review.';
 /** Same scope label as UploadTab — search uses the same document list (`/files/detail`). */
 const ALL_DOCUMENTS_SCOPE_LABEL =
-    'כל הקבצים (מאגר מסונכרן — מקורות לפי קטעים שנמשכו)';
+    'All files (synced store — sources from retrieved chunks)';
 
 const RESEARCH_STAGES = [
-    { id: 'K', label: 'K', desc: 'מידע קיים בלבד (ללא פתרונות)' },
-    { id: 'C', label: 'C', desc: 'מידע מאומת (ללא פתרונות)' },
-    { id: 'B', label: 'B', desc: 'עצירה קשיחה בלבד' },
-    { id: 'N', label: 'N', desc: 'מותר רק אחרי B' },
-    { id: 'L', label: 'L', desc: 'מותר רק אחרי N' }
+    { id: 'K', label: 'K', desc: 'Existing data only (no solutions)' },
+    { id: 'C', label: 'C', desc: 'Verified data only (no solutions)' },
+    { id: 'B', label: 'B', desc: 'Hard stop only' },
+    { id: 'N', label: 'N', desc: 'Allowed only after B' },
+    { id: 'L', label: 'L', desc: 'Allowed only after N' }
 ];
 
 function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
@@ -65,7 +65,7 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                 const res = await api.post('/research/session', {}, { timeout: 10000 });
                 if (isMounted && res.data?.session_id) setSessionId(res.data.session_id);
             } catch (err) {
-                if (isMounted) setError('לא ניתן ליצור סשן מחקר. נא לרענן את הדף.');
+                if (isMounted) setError('Cannot create research session. Please refresh the page.');
             } finally {
                 if (isMounted) setSessionLoading(false);
             }
@@ -78,19 +78,19 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
         if (gptRagSyncing) return;
         const quickResearch = answerMode === 'quick' && searchFlowMode === 'research';
         if (answerMode === 'agents' && !sessionId) {
-            setError('סשן מחקר לא זמין. נא לרענן את הדף.');
+            setError('Research session unavailable. Please refresh the page.');
             return;
         }
         if (quickResearch && !sessionId) {
-            setError('סשן מחקר לא זמין. נא לרענן את הדף.');
+            setError('Research session unavailable. Please refresh the page.');
             return;
         }
         if (quickResearch && !researchStage) {
-            setError('נא לבחור שלב מחקר (K, C, B, N או L) לפני שליחת השאלה');
+            setError('Please select a research stage (K, C, B, N or L) before sending the question');
             return;
         }
         if (!query.trim()) {
-            setError('אנא הכנס שאילתת חיפוש');
+            setError('Please enter a search query');
             return;
         }
 
@@ -105,7 +105,7 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
             try {
                 return { ok: true, value: JSON.parse(t) };
             } catch {
-                return { ok: false, error: `${label}: JSON לא תקין` };
+                return { ok: false, error: `${label}: invalid JSON` };
             }
         };
 
@@ -160,9 +160,9 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                     setLastResultsFromLab(true);
                     setResults(queryResult);
                 } else {
-                const ks = parseJsonField('אותות קרנל (kernel_signals)', kernelSignalsJson);
-                const da = parseJsonField('עוגני נתונים', dataAnchorsJson);
-                const mf = parseJsonField('דגלי מתודולוגיה', methodologyFlagsJson);
+                const ks = parseJsonField('Kernel Signals (kernel_signals)', kernelSignalsJson);
+                const da = parseJsonField('Data Anchors', dataAnchorsJson);
+                const mf = parseJsonField('Methodology Flags', methodologyFlagsJson);
                 if (!ks.ok) {
                     setError(ks.error);
                     setIsSearching(false);
@@ -245,11 +245,11 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                     setError(null);
                 }
             } else if (err.response?.status === 409 && data?.research_gate_locked) {
-                setError(`שער נעול (Kernel Lock): ${msg} נדרש Recovery לפני המשך.`);
+                setError(`Gate locked (Kernel Lock): ${msg} Recovery required before continuing.`);
             } else if (err.response?.status === 409 && data?.possibility_shutdown) {
-                setError(`${msg || 'סגירת מרחב אפשרויות — מסלול 4 סוכנים חסום.'}`);
+                setError(`${msg || 'Possibility space closed — 4-agent route blocked.'}`);
             } else {
-                setError(data?.research_stage_error ? msg : (msg || 'שגיאה בחיפוש'));
+                setError(data?.research_stage_error ? msg : (msg || 'Search error'));
             }
         } finally {
             setIsSearching(false);
@@ -271,7 +271,7 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
         } catch (err) {
             console.error('Error loading files:', err);
             setDocumentFiles([]);
-            setError('שגיאה בטעינת רשימת הקבצים');
+            setError('Error loading file list');
         } finally {
             setIsLoadingFiles(false);
         }
@@ -290,18 +290,18 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
 
     const handleAgentCheck = async (agentType) => {
         if (isAnswerComposerPayload(results)) {
-            setError('מסלול Answer Composer (Lab) אינו תומך בבדיקת סוכן — אין שינוי החלטה ב-UI.');
+            setError('Answer Composer (Lab) route does not support agent checks — no decision change in UI.');
             return;
         }
         if (!results || !results.answer) {
-            setError('לא ניתן לבדוק ללא תשובה');
+            setError('Cannot check without an answer');
             return;
         }
         
         // Check if we have context or can build it from results
         const hasContext = results.context || (results.results && results.results.length > 0);
         if (!hasContext) {
-            setError('לא ניתן לבדוק ללא הקשר - אנא נסה שוב את החיפוש');
+            setError('Cannot check without context — please try the search again');
             return;
         }
 
@@ -323,7 +323,7 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                 // Reconstruct context from search results
                 contextToUse = results.results.map((result, index) => {
                     const docText = result.document || result.text || '';
-                    const filename = result.metadata?.filename || 'לא ידוע';
+                    const filename = result.metadata?.filename || 'Unknown';
                     return `[Source ${index + 1} from ${filename}]:\n${docText}\n`;
                 }).join('\n');
             }
@@ -341,7 +341,7 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                 ...response.data
             });
         } catch (err) {
-            setError(err.response?.data?.detail || err.message || `שגיאה בבדיקת ${agentType === 'contradiction' ? 'סתירות' : 'סיכונים'}`);
+            setError(err.response?.data?.detail || err.message || `Error checking for ${agentType === 'contradiction' ? 'contradictions' : 'risks'}`);
         } finally {
             setIsAnalyzing(false);
         }
@@ -354,7 +354,7 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
     return (
         <div className="search-tab">
                 <div className="card">
-                <h2>{searchFlowMode === 'lab' ? 'מעבדה — לוח החלטות (Answer Composer)' : 'חיפוש במסמכים'}</h2>
+                <h2>{searchFlowMode === 'lab' ? 'Lab — Decision Board (Answer Composer)' : 'Document Research'}</h2>
                 <GptSyncStatusRow
                     filenames={documentFiles.map((f) => f.filename)}
                     onSyncComplete={loadDocumentFiles}
@@ -363,74 +363,74 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                 />
 
                 <div className="answer-mode-section">
-                    <h3 className="stage-heading">אופן תשובה</h3>
+                    <h3 className="stage-heading">Answer Mode</h3>
                     <div className="mode-buttons">
                         <button
                             type="button"
                             className={`mode-button ${answerMode === 'quick' ? 'active' : ''}`}
                             onClick={() => setAnswerMode('quick')}
-                            title="תשובה אחת מהירה (שלב מחקר K→C→B→N→L)"
+                            title="Single fast answer (research stage K→C→B→N→L)"
                         >
-                            סוכני מחקר
+                            Research Agents
                         </button>
                         <button
                             type="button"
                             className={`mode-button ${answerMode === 'agents' ? 'active' : ''}`}
                             onClick={() => setAnswerMode('agents')}
-                            title="4 סוכנים: ניתוח → מחקר → ביקורת → סינתזה"
+                            title="4 agents: Analysis → Research → Review → Synthesis"
                         >
-                            4 סוכנים
+                            4 Agents
                         </button>
                     </div>
-                        <p className="stage-hint">
+                    <p className="stage-hint">
                         {answerMode === 'quick'
-                            ? 'תשובה אחת מהירה לפי שלב מחקר (K→C→B→N→L).'
-                            : 'שרשרת ארבעה סוכנים (ניתוח → מחקר → ביקורת → סינתזה) עם ניטור שלמות.'}
+                            ? 'Single fast answer by research stage (K→C→B→N→L).'
+                            : 'Four-agent chain (Analysis → Research → Review → Synthesis) with integrity monitoring.'}
                     </p>
                 </div>
 
                 {answerMode === 'quick' && (
                     <div className="answer-mode-section">
-                        <h3 className="stage-heading">סוג זרימה</h3>
+                        <h3 className="stage-heading">Flow Type</h3>
                         <div className="mode-buttons">
                             <button
                                 type="button"
                                 className={`mode-button ${searchFlowMode === 'research' ? 'active' : ''}`}
                                 onClick={() => setSearchFlowMode('research')}
-                                title="שער מחקר, pre-LLM, קרנל — לשאלות ניסוי / ניתוח"
+                                title="Research gate, pre-LLM, kernel — for experiment / analysis questions"
                             >
-                                ניתוח מחקר
+                                Research Analysis
                             </button>
                             <button
                                 type="button"
                                 className={`mode-button ${searchFlowMode === 'document' ? 'active' : ''}`}
                                 onClick={() => setSearchFlowMode('document')}
-                                title="חיפוש והסקה ממסמכים בלבד — ללא FSM"
+                                title="Document retrieval and inference only — no FSM"
                             >
-                                חיפוש מסמך
+                                Document Search
                             </button>
                             <button
                                 type="button"
                                 className={`mode-button ${searchFlowMode === 'lab' ? 'active' : ''}`}
                                 onClick={() => setSearchFlowMode('lab')}
-                                title="Lab Chain — תשובת Answer Composer בלבד (ללא RAG)"
+                                title="Lab Chain — Answer Composer only (no RAG)"
                             >
-                                מעבדה (Lab)
+                                Lab
                             </button>
                         </div>
                         <p className="stage-hint">
                             {searchFlowMode === 'document'
-                                ? 'שליפה מהמאגר והסקה ממסמכים בלבד — בלי מכונת מצבים מלאה של המחקר.'
+                                ? 'Retrieval and inference from documents only — no full research state machine.'
                                 : searchFlowMode === 'lab'
-                                  ? 'הבקשה נשלחת לשרת עם flow=lab — מבנה התשובה הוא לפי Answer Composer (נתוני מעבדה מובנים).'
-                                  : 'מסלול מחקר מלא: סשן, שלב K→L, שער ראיות לפני המודל, וקרנל.'}
+                                  ? 'Request sent with flow=lab — answer structure follows Answer Composer (structured lab data).'
+                                  : 'Full research route: session, K→L stage, evidence gate before model, and kernel.'}
                         </p>
                     </div>
                 )}
 
                 {answerMode === 'quick' && searchFlowMode === 'lab' && (
                     <div className="answer-mode-section lab-bridge-fields">
-                        <h3 className="stage-heading">פרמטרים למעבדה (Lab Chain)</h3>
+                        <h3 className="stage-heading">Lab Chain Parameters</h3>
                         <div className="lab-field-grid">
                             {/* Query type — always shown; drives which fields appear below */}
                             <label className="lab-field">
@@ -450,7 +450,7 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                                 <span className="lab-field-label">
                                     base_id
                                     {labQueryType === 'formulation_delta' && (
-                                        <span className="lab-field-optional"> (אופציונלי)</span>
+                                        <span className="lab-field-optional"> (optional)</span>
                                     )}
                                 </span>
                                 <input
@@ -511,8 +511,8 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                         </div>
                         <p className="stage-hint">
                             {labQueryType === 'formulation_delta'
-                                ? 'השוואת פורמולציות: id_a ו-id_b יכולים להיות תאריך (27.10.2022) או source_id מלא.'
-                                : 'השוואת גרסאות: base_id + version_a + version_b נדרשים.'}
+                                ? 'Formulation comparison: id_a and id_b can be a date (27.10.2022) or a full source_id.'
+                                : 'Version comparison: base_id + version_a + version_b are required.'}
                         </p>
                     </div>
                 )}
@@ -520,13 +520,13 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                 {answerMode === 'agents' && (
                     <div className="pre-justification-section">
                         <label className="stage-hint" htmlFor="pre-justification-ta">
-                            הצדקה לפני ריצה (אופציונלי – נשמר עם הריצה):
+                            Pre-run justification (optional — saved with the run):
                         </label>
                         <textarea
                             id="pre-justification-ta"
                             value={preJustification}
                             onChange={(e) => setPreJustification(e.target.value)}
-                            placeholder="תיעוד סיבת הריצה..."
+                            placeholder="Document the reason for this run…"
                             rows={3}
                             className="search-input"
                         />
@@ -536,10 +536,10 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                 {answerMode === 'quick' && searchFlowMode === 'research' && (
                     <div className="research-stage-section">
                         {sessionLoading && (
-                            <p className="stage-hint" style={{ color: '#a0a0c0' }}>יוצר סשן מחקר...</p>
+                            <p className="stage-hint" style={{ color: '#a0a0c0' }}>Creating research session…</p>
                         )}
-                        <h3 className="stage-heading">שלב מחקר (חובה)</h3>
-                        <p className="stage-hint">יש לבחור שלב לפני שליחת שאלה. מעבר שלבים: K → C → B → N → L</p>
+                        <h3 className="stage-heading">Research Stage (required)</h3>
+                        <p className="stage-hint">Select a stage before sending your question. Stage progression: K → C → B → N → L</p>
                         <div className="stage-buttons">
                             {RESEARCH_STAGES.map((s) => (
                                 <button
@@ -565,16 +565,16 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                                 onClick={() => setShowKernelAdvanced((v) => !v)}
                             >
                                 <span key={showKernelAdvanced ? 'open' : 'closed'}>
-                                    {showKernelAdvanced ? '▼' : '▶'} קרנל v1.6 (אופציונלי): אותות / עוגנים / מתודולוגיה
+                                    {showKernelAdvanced ? '▼' : '▶'} Kernel v1.6 (optional): Signals / Anchors / Methodology
                                 </span>
                             </button>
                             {showKernelAdvanced && (
                                 <div className="kernel-advanced-fields">
                                     <p className="stage-hint">
-                                        עוגן נתונים מותר בלבד: <code>experiment_snapshot</code>,{' '}
-                                        <code>similar_experiments</code>, <code>failure_patterns</code>. לשלב N עם
-                                        אותות: זיהוי שבירה (מודלים / OOD / שאריות / נקודת שינוי). לשלב L:{' '}
-                                        <code>l_validation</code> עם ≥3 הרצות, שיפור מול baseline, יציבות.
+                                        Allowed data anchors: <code>experiment_snapshot</code>,{' '}
+                                        <code>similar_experiments</code>, <code>failure_patterns</code>. For stage N with
+                                        signals: detect breakdown (models / OOD / residuals / change point). For stage L:{' '}
+                                        <code>l_validation</code> with ≥3 runs, improvement vs baseline, stability.
                                     </p>
                                     <label className="kernel-json-label">kernel_signals (JSON)</label>
                                     <textarea
@@ -612,7 +612,7 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                         value={query}
                         onChange={(e) => setQuery(e.target.value)}
                         onKeyPress={handleKeyPress}
-                        placeholder="הכנס שאילתת חיפוש..."
+                        placeholder="Enter your research query…"
                         className="search-input"
                         disabled={gptRagSyncing}
                     />
@@ -632,18 +632,18 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                         {isSearching ? (
                             <span key="searching" className="btn-inner">
                                 <span className="spinner"></span>
-                                <span>מחפש...</span>
+                                <span>Searching…</span>
                             </span>
                         ) : (
                             <span key="idle" className="btn-inner">
-                                <span>חפש</span>
+                                <span>Search</span>
                             </span>
                         )}
                     </button>
                 </div>
                 <div className="search-options">
                     <label>
-                        חיפוש במסמך:
+                        Search in document:
                         <select
                             value={selectedFile}
                             onChange={(e) => setSelectedFile(e.target.value)}
@@ -651,9 +651,9 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                             disabled={isLoadingFiles}
                         >
                             {isLoadingFiles ? (
-                                <option value="">טוען קבצים...</option>
+                                <option value="">Loading files…</option>
                             ) : documentFiles.length === 0 ? (
-                                <option value="">אין קבצים זמינים</option>
+                                <option value="">No files available</option>
                             ) : (
                                 <>
                                     <option value="">{ALL_DOCUMENTS_SCOPE_LABEL}</option>
@@ -679,13 +679,13 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
 
                 {isSearching && (
                     <div className="loading">
-                        <div>מחפש במסמכים...</div>
+                        <div>Searching documents…</div>
                         <div style={{ marginTop: '15px', fontSize: '0.95em', color: '#a0a0c0' }}>
                             {answerMode === 'agents'
-                                ? '🤖 מריץ 4 סוכנים (ניתוח → מחקר → ביקורת → סינתזה)...'
+                                ? '🤖 Running 4 agents (Analysis → Research → Review → Synthesis)…'
                                 : searchFlowMode === 'lab'
-                                  ? 'מעבדה — שולח שאילתה לשרת (מסלול מעבדה)…'
-                                  : 'מייצר תשובה חכמה…'}
+                                  ? 'Lab — sending query to server (lab route)…'
+                                  : 'Generating intelligent answer…'}
                         </div>
                     </div>
                 )}
@@ -696,13 +696,12 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                         {composerPayload && <AnswerView data={results} />}
                         {labMismatch && (
                             <div className="lab-composer-mismatch" role="alert">
-                                <h3>לא זוהה מבנה Answer Composer</h3>
+                                <h3>Answer Composer structure not detected</h3>
                                 <p>
-                                    התשובה מהשרת אינה כוללת את ששת השדות הצפויים. לעיתים זה קורה כש־
-                                    <code className="lab-code-inline">REACT_APP_API_BASE_URL</code> מצביע לשרת ישן
-                                    או לפריסה ללא הקוד העדכני. בדקו את כתובת ה־API ב־
-                                    <code className="lab-code-inline">.env</code> והריצו מחדש את הפרונט לאחר עדכון
-                                    השרת.
+                                    The server response does not include the six expected fields. This can happen when{' '}
+                                    <code className="lab-code-inline">REACT_APP_API_BASE_URL</code> points to an outdated server
+                                    or a deployment without the latest code. Check the API URL in{' '}
+                                    <code className="lab-code-inline">.env</code> and restart the frontend after updating the server.
                                 </p>
                                 <JsonViewer value={results} maxHeight="min(40vh, 320px)" />
                             </div>
@@ -712,13 +711,13 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                         {results.status === 'PARTIAL_EVIDENCE' && (
                             <div className="ai-answer partial-evidence-block">
                                 <div className="research-stage-badge">PARTIAL_EVIDENCE</div>
-                                <h3>מידע חלקי במערכת</h3>
+                                <h3>Partial Information in System</h3>
                                 {results.gap_type ? (
-                                    <p className="stage-hint">סוג פער: {results.gap_type}</p>
+                                    <p className="stage-hint">Gap type: {results.gap_type}</p>
                                 ) : null}
                                 {Array.isArray(results.what_exists) && results.what_exists.length > 0 && (
                                     <div className="partial-list">
-                                        <strong>קיים:</strong>
+                                        <strong>Available:</strong>
                                         <ul>
                                             {results.what_exists.map((x, i) => (
                                                 <li key={`ex-${i}`}>{x}</li>
@@ -728,7 +727,7 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                                 )}
                                 {Array.isArray(results.what_missing) && results.what_missing.length > 0 && (
                                     <div className="partial-list">
-                                        <strong>חסר:</strong>
+                                        <strong>Missing:</strong>
                                         <ul>
                                             {results.what_missing.map((x, i) => (
                                                 <li key={`mi-${i}`}>{x}</li>
@@ -744,32 +743,31 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                             </div>
                         )}
                         {results.research_flow === 'document' && (
-                            <div className="research-stage-badge" title="ללא FSM / קרנל מחקר">
-                                חיפוש מסמך
+                            <div className="research-stage-badge" title="No FSM / research kernel">
+                                Document Search
                             </div>
                         )}
                         {results.blocked && (
                             <div className="blocked-message">
-                                <h3>🚫 תשובה נחסמה</h3>
+                                <h3>🚫 Answer Blocked</h3>
                                 <div className="blocked-text">
-                                    {results.block_reason || results.error || 'התשובה נחסמה על ידי המערכת'}
+                                    {results.block_reason || results.error || 'The answer was blocked by the system'}
                                 </div>
                                 {results.state && (
                                     <div className="state-badge blocked-state">
-                                        מצב: {results.state}
+                                        State: {results.state}
                                     </div>
                                 )}
                             </div>
                         )}
                         {results.kernel_v16?.possibility_shutdown && (
                             <div className="kernel-shutdown-banner">
-                                מרחב אפשרויות סגור (אחרי זיהוי שבירה): אין אופטימיזציה/כוונון במסלול 4 סוכנים עד סשן
-                                חדש.
+                                Possibility space closed (after breakdown detected): no optimization/tuning in 4-agent route until new session.
                             </div>
                         )}
                         {results.kernel_v16?.structured && (
                             <div className="kernel-v16-structured">
-                                <h3>מבנה תשובה (קרנל v1.6)</h3>
+                                <h3>Answer Structure (Kernel v1.6)</h3>
                                 <dl className="kernel-v16-dl">
                                     <dt>Evidence</dt>
                                     <dd>{results.kernel_v16.structured.Evidence}</dd>
@@ -791,7 +789,7 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                                 </dl>
                                 {results.kernel_v16.n_generation?.ideas?.length > 0 && (
                                     <div className="kernel-n-generation">
-                                        <strong>יצירה מבנית (N):</strong>
+                                        <strong>Structural Generation (N):</strong>
                                         <ul>
                                             {results.kernel_v16.n_generation.ideas.map((idea, idx) => (
                                                 <li key={idx}>
@@ -806,24 +804,24 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                         )}
                         {results.stopped_by_violation && (
                             <div className="blocked-message">
-                                <h3>⛔ נעצר על ידי Integrity Monitor</h3>
+                                <h3>⛔ Stopped by Integrity Monitor</h3>
                                 <div className="blocked-text">
-                                    {results.message || 'נוצרה הפרת B-Integrity. יש לטפל בהפרה בדשבורד ניהול.'}
+                                    {results.message || 'B-Integrity violation detected. Handle the violation in the management dashboard.'}
                                 </div>
                                 {results.violation_id && (
-                                    <div className="state-badge blocked-state">מזהה הפרה: {results.violation_id}</div>
+                                    <div className="state-badge blocked-state">Violation ID: {results.violation_id}</div>
                                 )}
                             </div>
                         )}
                         {results.answer && !results.blocked && (
                             <div className="ai-answer">
                                 {results.use_4_agents && (
-                                    <div className="research-stage-badge">4 סוכנים – סינתזה</div>
+                                    <div className="research-stage-badge">4 Agents – Synthesis</div>
                                 )}
                                 {results.research_stage && !results.use_4_agents && (
-                                    <div className="research-stage-badge">שלב: {results.research_stage}</div>
+                                    <div className="research-stage-badge">Stage: {results.research_stage}</div>
                                 )}
-                                <h3>🤖 {results.use_4_agents ? 'תשובה (סינתזה):' : 'תשובה חכמה (Doc Agent):'}</h3>
+                                <h3>🤖 {results.use_4_agents ? 'Answer (Synthesis):' : 'Intelligent Answer (Doc Agent):'}</h3>
                                 {results.warning && (
                                     <div className="warning-banner">
                                         ⚠️ {results.warning}
@@ -831,7 +829,7 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                                 )}
                                 {results.state && (
                                     <div className={`state-badge state-${results.state.toLowerCase()}`}>
-                                        מצב: {results.state}
+                                        State: {results.state}
                                     </div>
                                 )}
                                 <div className="answer-text">
@@ -846,7 +844,7 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                                 />
                                 {results.use_4_agents && results.outputs && (
                                     <details className="four-agents-outputs">
-                                        <summary>פלטי כל הסוכנים</summary>
+                                        <summary>All agent outputs</summary>
                                         <div className="agent-outputs-list">
                                             {Object.entries(results.outputs).map(([name, text]) => (
                                                 <div key={name} className="agent-output-item">
@@ -859,7 +857,7 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                                         </div>
                                         {results.justifications && results.justifications.length > 0 && (
                                             <div className="justifications-list">
-                                                <strong>הצדקות שינוי:</strong>
+                                                <strong>Change Justifications:</strong>
                                                 <ul>
                                                     {results.justifications.map((j, i) => (
                                                         <li key={i}>{j.agent}: {j.label || j.reason}</li>
@@ -871,7 +869,7 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                                 )}
                                 {results.context_sources && (
                                     <div className="answer-sources">
-                                        מבוסס על {results.context_sources} מקורות מהמסמכים
+                                        Based on {results.context_sources} document sources
                                     </div>
                                 )}
                                 {!results.use_4_agents && (
@@ -884,11 +882,11 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                                         {isAnalyzing ? (
                                             <span key="analyzing" className="btn-inner">
                                                 <span className="spinner"></span>
-                                                <span>בודק...</span>
+                                                <span>Checking…</span>
                                             </span>
                                         ) : (
                                             <span key="idle" className="btn-inner">
-                                                <span>🔍 בדוק סתירות (Contradiction Agent)</span>
+                                                <span>🔍 Check Contradictions (Contradiction Agent)</span>
                                             </span>
                                         )}
                                     </button>
@@ -900,11 +898,11 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                                         {isAnalyzing ? (
                                             <span key="analyzing" className="btn-inner">
                                                 <span className="spinner"></span>
-                                                <span>בודק...</span>
+                                                <span>Checking…</span>
                                             </span>
                                         ) : (
                                             <span key="idle" className="btn-inner">
-                                                <span>⚠️ זהה סיכונים (Risk Agent)</span>
+                                                <span>⚠️ Identify Risks (Risk Agent)</span>
                                             </span>
                                         )}
                                     </button>
@@ -914,7 +912,7 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                         )}
                         {!results.answer && results.results_count > 0 && (
                             <div className="info-message">
-                                ⚠️ לא נוצרה תשובה חכמה. מציג תוצאות חיפוש בלבד.
+                                ⚠️ No intelligent answer generated. Showing search results only.
                             </div>
                         )}
 
@@ -922,8 +920,8 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                             <div className={`agent-analysis ${agentAnalysis.type === 'contradiction' ? 'contradiction-analysis' : 'risk-analysis'}`}>
                                 <h3>
                                     {agentAnalysis.type === 'contradiction' 
-                                        ? '🔍 ניתוח סתירות (Contradiction Agent)' 
-                                        : '⚠️ ניתוח סיכונים (Risk Agent)'}
+                                        ? '🔍 Contradiction Analysis (Contradiction Agent)' 
+                                        : '⚠️ Risk Analysis (Risk Agent)'}
                                 </h3>
                                 <div className="agent-analysis-text">
                                     {formatBoldSegments(agentAnalysis.analysis || '').map((part, j) =>
@@ -935,18 +933,18 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                         
                         {!results.use_4_agents && (
                         <>
-                        <h3>נמצאו {results.results_count} תוצאות:</h3>
+                        <h3>Found {results.results_count} results:</h3>
                         {results.results_count === 0 ? (
-                            <div className="empty-state">לא נמצאו תוצאות</div>
+                            <div className="empty-state">No results found</div>
                         ) : (
                             results.results.map((item, index) => (
                                 <div key={index} className="search-result-item">
                                     <div className="result-header">
                                         <span className="result-filename">
-                                            {item.metadata?.filename || 'לא ידוע'}
+                                            {item.metadata?.filename || 'Unknown'}
                                         </span>
                                         <span className="result-distance">
-                                            דמיון: {item.distance ? item.distance.toFixed(4) : 'N/A'}
+                                            Similarity: {item.distance ? item.distance.toFixed(4) : 'N/A'}
                                         </span>
                                     </div>
                                     <div className="result-text">
@@ -956,7 +954,7 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                                     </div>
                                     {item.metadata?.chunk_index !== undefined && (
                                         <div className="result-metadata">
-                                            חלק מספר: {item.metadata.chunk_index}
+                                            Chunk: {item.metadata.chunk_index}
                                         </div>
                                     )}
                                 </div>
