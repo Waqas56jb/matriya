@@ -40,8 +40,9 @@ COLUMN_TYPES = {
     "MEL":             "numeric",
     "Nanoclay":        "numeric",
     "expansion_ratio": "numeric",
+    "adhesion":        "numeric",   # numeric — values like 85.0, 90.0
+    "viscosity":       "numeric",   # numeric — values like 1200.0
     "char_quality":    "categorical",
-    "adhesion":        "categorical",
     "status":          "categorical",
 }
 
@@ -60,13 +61,19 @@ COLUMN_ALIASES = {
     "nanoclay":             "Nanoclay",
     "cloisite":             "Nanoclay",
     "cloisite 30b":         "Nanoclay",
+    # expansion_ratio — exact name AND natural variants all resolve to the same column
+    "expansion_ratio":      "expansion_ratio",
     "expansion":            "expansion_ratio",
     "expansion ratio":      "expansion_ratio",
+    "er":                   "expansion_ratio",
     "char":                 "char_quality",
     "char quality":         "char_quality",
+    "char_quality":         "char_quality",
     "adhesion":             "adhesion",
+    "viscosity":            "viscosity",
     "status":               "status",
     "result":               "status",
+    "outcome":              "status",
 }
 
 OPERATOR_MAP = {
@@ -235,6 +242,31 @@ def _parse_single_condition(part: str, df_columns: list) -> dict:
       None  — unparseable
     """
     part = part.strip()
+
+    # IS NOT NULL / IS NULL — must be checked BEFORE the named-operator loop
+    # because "is" maps to "==" and would mis-parse "expansion_ratio is not null"
+    # as expansion_ratio == "not".
+    m_null = re.search(r"(.+?)\s+is\s+not\s+null\s*$", part, re.IGNORECASE)
+    if m_null:
+        resolved = resolve_column(m_null.group(1).strip(), df_columns)
+        if "column" in resolved:
+            return {"column": resolved["column"], "operator": "is_not_null",
+                    "value": None, "raw": part, "tag": "computed"}
+
+    m_isnull = re.search(r"(.+?)\s+is\s+null\s*$", part, re.IGNORECASE)
+    if m_isnull:
+        resolved = resolve_column(m_isnull.group(1).strip(), df_columns)
+        if "column" in resolved:
+            return {"column": resolved["column"], "operator": "is_null",
+                    "value": None, "raw": part, "tag": "computed"}
+
+    # != null / != None shorthand
+    m_notnull = re.search(r"(.+?)\s*(!=|<>)\s*(null|none)\s*$", part, re.IGNORECASE)
+    if m_notnull:
+        resolved = resolve_column(m_notnull.group(1).strip(), df_columns)
+        if "column" in resolved:
+            return {"column": resolved["column"], "operator": "is_not_null",
+                    "value": None, "raw": part, "tag": "computed"}
 
     # BETWEEN pattern
     m = re.search(
@@ -475,6 +507,12 @@ def execute_query(df: pd.DataFrame, parsed: dict) -> dict:
             elif op == "!=":
                 mask &= df[col] != val
                 step_desc = f"{col} != {val}"
+            elif op == "is_not_null":
+                mask &= df[col].notna()
+                step_desc = f"{col} IS NOT NULL"
+            elif op == "is_null":
+                mask &= df[col].isna()
+                step_desc = f"{col} IS NULL"
             else:
                 failed.append({**f, "error": f"Unknown operator '{op}'"})
                 continue
