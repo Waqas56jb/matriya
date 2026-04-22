@@ -3463,6 +3463,23 @@ app.get('/api/matriya/lab-experiments-export', async (req, res) => {
     const source = (!expErr && Array.isArray(expRows) && expRows.length > 0) ? 'supabase_experiments' : 'supabase_lab_experiments';
     const withData = canonical.filter(r => r.APP != null || r['APP:PER'] != null || r.expansion_ratio != null);
 
+    // ── DIAGNOSTIC LOGS ────────────────────────────────────────────────────
+    console.log(`[lab-export] source=${source} canonical=${canonical.length} withData=${withData.length}`);
+    if (canonical.length > 0) {
+      const expNulls = canonical.filter(r => r.expansion_ratio == null).length;
+      const appNulls = canonical.filter(r => r.APP == null).length;
+      console.log(`[lab-export] expansion_ratio nulls: ${expNulls}/${canonical.length} | APP nulls: ${appNulls}/${canonical.length}`);
+      console.log(`[lab-export] sample canonical row:`, JSON.stringify(canonical[0]));
+      if (source === 'supabase_experiments' && Array.isArray(expRows) && expRows.length > 0) {
+        console.log(`[lab-export] raw experiments[0].formulation:`, JSON.stringify(expRows[0].formulation));
+        console.log(`[lab-export] raw experiments[0].results:`, JSON.stringify(expRows[0].results));
+      }
+    } else {
+      console.log('[lab-export] WARNING: canonical is empty — no rows from either experiments or lab_experiments table');
+      if (expErr) console.log('[lab-export] experiments table error:', expErr.message || expErr);
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
     res.json({
       experiments: withData.length > 0 ? withData : canonical,
       n_rows: withData.length > 0 ? withData.length : canonical.length,
@@ -3470,6 +3487,63 @@ app.get('/api/matriya/lab-experiments-export', async (req, res) => {
     });
   } catch (e) {
     console.error('[lab-experiments-export] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * GET /api/lab/raw-debug
+ * Returns raw Supabase rows (no transformation) from both experiments and lab_experiments tables.
+ * Use this to diagnose what data actually exists in Supabase.
+ */
+app.get('/api/lab/raw-debug', async (req, res) => {
+  try {
+    const serverKey = MANEGER_MATERIALS_SUMMARY_SERVER_KEY;
+    const reqKey = (req.headers['x-matriya-materials-key'] || '').trim();
+    if (serverKey && reqKey !== serverKey) {
+      const user = await getCurrentUser(req).catch(() => null);
+      if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const [{ data: expRows, error: expErr }, { data: legRows, error: legErr }] = await Promise.all([
+      supabase.from('experiments').select('experiment_id, project_id, formulation, results, status').limit(10),
+      supabase.from('lab_experiments').select('experiment_id, project_id, percentages, results, experiment_outcome').limit(10),
+    ]);
+
+    const analyzeTable = (rows, name) => {
+      if (!rows || rows.length === 0) return { table: name, count: 0, rows: [] };
+      const analyzed = rows.map(r => {
+        const formulation = r.formulation || r.percentages || {};
+        const results = (() => { try { return typeof r.results === 'string' ? JSON.parse(r.results) : (r.results || {}); } catch (_) { return { _raw: r.results }; } })();
+        return {
+          experiment_id: r.experiment_id,
+          formulation_keys: Object.keys(formulation),
+          formulation_values: formulation,
+          results_keys: Object.keys(results),
+          results_values: results,
+          expansion_ratio_found: results['expansion_ratio'] ?? results['expansion'] ?? formulation['expansion_ratio'] ?? null,
+          APP_found: formulation['APP'] ?? formulation['app'] ?? null,
+        };
+      });
+      return { table: name, count: rows.length, rows: analyzed };
+    };
+
+    res.json({
+      ok: true,
+      experiments_error: expErr?.message || null,
+      lab_experiments_error: legErr?.message || null,
+      experiments: analyzeTable(expRows, 'experiments'),
+      lab_experiments: analyzeTable(legRows, 'lab_experiments'),
+      diagnosis: {
+        experiments_empty: !expRows || expRows.length === 0,
+        lab_experiments_empty: !legRows || legRows.length === 0,
+        all_empty: (!expRows || expRows.length === 0) && (!legRows || legRows.length === 0),
+        advice: (!expRows || expRows.length === 0) && (!legRows || legRows.length === 0)
+          ? 'Both tables are empty. Add experiments via the management UI or ingest an Excel file.'
+          : 'Check expansion_ratio_found — if null for all rows, results JSONB field is empty. Update experiments with results via the form.',
+      },
+    });
+  } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
