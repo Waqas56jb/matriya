@@ -733,17 +733,23 @@ def execute_query(df: pd.DataFrame, parsed: dict) -> dict:
         rank_n   = ranking["n"]
         if rank_col in result_df.columns:
             numeric_rank = pd.to_numeric(result_df[rank_col], errors="coerce")
-            sorted_df    = result_df.assign(_rank_col=numeric_rank).sort_values(
-                "_rank_col", ascending=False
-            ).drop(columns=["_rank_col"])
-            result_df = sorted_df.head(rank_n)
+            sorted_df = (
+                result_df
+                .assign(_rank_col=numeric_rank)
+                .sort_values("_rank_col", ascending=False)
+                .head(rank_n)  # 🔥 enforce TOP N (critical fix)
+                .drop(columns=["_rank_col"])
+            )
+            result_df = sorted_df
             rank_meta = {
                 "rank_column":    rank_col,
                 "rank_n":         rank_n,
                 "rows_after_rank": len(result_df),
             }
-            print(f"[execute_query] after ranking top {rank_n} by {rank_col}: {len(result_df)} rows",
-                  file=_sqsys.stderr, flush=True)
+            print(
+                f"[execute_query] after ranking top {rank_n} by {rank_col}: {len(sorted_df)} rows",
+                flush=True,
+            )
 
     # ── Step 3: Aggregation — idxmax / idxmin on aggregation column ──────────
     # Applied AFTER ranking so it operates on the ranked subset, not the full
