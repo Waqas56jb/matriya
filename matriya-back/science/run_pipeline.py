@@ -38,13 +38,93 @@ def _out(obj):
 
 def cmd_query(args):
     if len(args) < 2:
-        _out({"error": "Usage: query <filepath> <query> [sheet_name]"})
+        _out({"error": "Usage: query <filepath> <query> [sheet_name_or_index]"})
         sys.exit(1)
-    filepath   = args[0]
-    query      = args[1]
-    sheet_name = args[2] if len(args) > 2 else "Formulation Data"
-    case_id    = args[3] if len(args) > 3 else "QUERY-001"
-    result = run_query_pipeline(filepath, query, case_id, sheet_name)
+
+    filepath = args[0]
+    query    = args[1]
+    case_id  = args[3] if len(args) > 3 else "QUERY-001"
+
+    # Use data_adapter to handle raw Excel format (Hebrew sheets, computed APP:PER / IFR).
+    # This is the integration fix: the Excel file's actual sheet name is Hebrew,
+    # not "Formulation Data". The adapter loads sheet index 0 and normalises columns.
+    adapted = load_and_adapt(filepath, 0)
+    if "error" in adapted:
+        _out({
+            "decision":    "INSUFFICIENT_DATA",
+            "evidence":    {"error": adapted["error"]},
+            "data_source": "NONE",
+            "confidence":  "LOW",
+        })
+        return
+
+    if not adapted["schema_valid"]:
+        _out({
+            "decision":    "INSUFFICIENT_DATA",
+            "quality":     "SCHEMA_ERROR",
+            "evidence":    {
+                "missing_required_columns": adapted["missing_required"],
+                "available_columns":        adapted["canonical_columns"],
+            },
+            "data_source": "NONE",
+            "confidence":  "LOW",
+        })
+        return
+
+    df = adapted["df"]
+    from table_query_engine_final import (
+        parse_natural_language_query, execute_query
+    )
+    from fsctm_state import FSCTMEngine
+
+    parsed = parse_natural_language_query(query, list(df.columns))
+    parsed["_original_query"] = query
+
+    # Surface ambiguity immediately
+    if parsed["ambiguous_items"]:
+        _out({
+            "decision":   "AMBIGUOUS_QUERY",
+            "quality":    "AMBIGUOUS",
+            "warnings":   ["Query contains ambiguous column references."],
+            "evidence":   {
+                "original_query":   query,
+                "ambiguous_items":  [
+                    {"term": a.get("raw"), "candidates": a.get("candidates")}
+                    for a in parsed["ambiguous_items"]
+                ],
+                "suggestion": "Please specify the exact column name.",
+            },
+            "data_source": "NONE",
+            "confidence":  "LOW",
+        })
+        return
+
+    if parsed["parse_confidence"] == "LOW" and not parsed["filters"] and not parsed["count_intent"]:
+        _out({
+            "decision":   "INSUFFICIENT_DATA",
+            "quality":    "PARSE_FAILED",
+            "warnings":   ["Could not parse query into executable filters."],
+            "evidence":   {
+                "original_query":    query,
+                "unparsed":          parsed["unparsed"],
+                "available_columns": list(df.columns),
+                "hint":              "Try: 'APP:PER > 3' or 'IFR between 25 and 30' or 'expansion ratio > 10'",
+            },
+            "data_source": "NONE",
+            "confidence":  "LOW",
+        })
+        return
+
+    result = execute_query(df, parsed)
+    result.pop("result_df", None)
+    result["query"]            = query
+    result["sheet"]            = "adapted_from_raw"
+    result["parse_confidence"] = parsed["parse_confidence"]
+    result["computed_columns"] = adapted.get("computed_columns", [])
+
+    engine = FSCTMEngine(case_id, [query])
+    result["fsctm_state"] = engine.get_state_object()
+    result["audit_trace"]["fsctm_trace"] = engine.get_audit_trace()
     _out(result)
 
 

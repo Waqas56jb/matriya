@@ -308,12 +308,15 @@ def parse_natural_language_query(query: str, df_columns: list) -> dict:
     count_intent = detect_count_intent(query)
     query_lower = query.lower().strip()
 
-    # Strip leading context words — repeat until stable
+    # Strip leading context words — repeat until stable.
+    # "experiments" / "experiment" added to handle framing like "show all experiments with X > Y".
     _strip_words = sorted([
         "find", "show me", "show", "get", "filter", "select",
-        "list", "formulations", "rows", "where", "with", "have", "that",
-        "that have", "which have", "having", "all", "only",
+        "list", "formulations", "formulation", "rows", "row", "where", "with",
+        "have", "that", "that have", "which have", "having", "all", "only",
         "how many", "count of", "number of",
+        "experiments", "experiment", "data", "results", "result",
+        "give me", "return", "display", "output",
     ], key=len, reverse=True)
     for _ in range(6):  # max passes
         prev = query_lower

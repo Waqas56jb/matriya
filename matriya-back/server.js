@@ -957,6 +957,52 @@ app.get('/science/validate', requireAuth, async (req, res) => {
   }
 });
 
+/**
+ * POST /api/lab/query
+ * Dedicated Lab Query Engine endpoint.
+ * Runs a natural language query against the formulations Excel dataset
+ * using the deterministic science pipeline (no LLM, no RAG).
+ *
+ * Body: { query, filepath?, sheet_name? }
+ */
+app.post('/api/lab/query', requireAuth, async (req, res) => {
+  try {
+    const { query, filepath, sheet_name } = req.body || {};
+    if (!query || !String(query).trim()) {
+      return res.status(400).json({ error: 'query is required' });
+    }
+    return await handleScienceQueryFlow(req, res, { query });
+  } catch (e) {
+    logger.error(`[api/lab/query] error: ${e.message}`);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * GET /api/lab/test
+ * Run all science module unit tests and return pass/fail report.
+ * Confirms the lab query engine is connected and working.
+ */
+app.get('/api/lab/test', requireAuth, async (req, res) => {
+  try {
+    const result = await runSciencePython(['test']);
+    logger.info(`[api/lab/test] total_passed=${result.total_passed} total_failed=${result.total_failed}`);
+    return res.json({
+      connected: result.all_passed,
+      total_passed: result.total_passed,
+      total_failed: result.total_failed,
+      all_passed: result.all_passed,
+      test_results: result.test_results,
+      message: result.all_passed
+        ? `Lab Query Engine connected and operational. ${result.total_passed} tests passed.`
+        : `Lab Query Engine has failures. ${result.total_failed} tests failed.`,
+    });
+  } catch (e) {
+    logger.error(`[api/lab/test] error: ${e.message}`);
+    return res.status(500).json({ connected: false, error: e.message });
+  }
+});
+
 /** Logical path or basename ends with .xlsx / .xls */
 function isAskMatriyaSpreadsheetFilename(name) {
   const base = String(name || '').split(/[/\\]/).filter(Boolean).pop() || '';
@@ -1237,6 +1283,172 @@ function normalizeQueryText(q) {
     .toLowerCase();
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SCIENCE QUERY ROUTING — Lab Query Engine (table_query_engine_final.py)
+// Detects NL queries about experiments with numeric conditions and routes
+// them to the Python science pipeline instead of document RAG.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Returns true when the query is asking about experiment data with numeric
+ * or structural conditions — i.e. it should run against the Excel dataset,
+ * not against indexed documents.
+ *
+ * Triggers on:
+ *   - Comparison operators: >, <, >=, <=, between, equal
+ *   - Column/parameter names: expansion ratio, APP:PER, IFR, nanoclay, char, MEL, PER
+ *   - Experiment framing words: experiment, formulation, show all, filter, where, list
+ *   - Count intent: how many experiments/formulations
+ */
+function isScienceQueryQuestion(query) {
+  const q = String(query || '').toLowerCase().trim();
+  if (!q) return false;
+
+  // Must contain at least one numeric operator OR "between...and"
+  const hasOperator = (
+    /[><]=?/.test(q) ||
+    /\bbetween\s+[\d.]+\s+and\s+[\d.]+/.test(q) ||
+    /\b(greater|less|above|below|at least|at most|more than|higher|lower)\b/.test(q) ||
+    /\b(equals?|equal to|is)\s+[\d.]+/.test(q)
+  );
+
+  // AND must reference at least one known column / lab parameter
+  const hasLabColumn = (
+    /\bapp[:\s]?per\b/.test(q) ||
+    /\bifr\b/.test(q) ||
+    /\bexpansion(\s+ratio)?\b/.test(q) ||
+    /\bnanoclay\b/.test(q) ||
+    /\bchar(\s+quality)?\b/.test(q) ||
+    /\bmel\b/.test(q) ||
+    /\badhesion\b/.test(q) ||
+    /\bhrr\b/.test(q) ||
+    /\bexpansion_ratio\b/.test(q) ||
+    /\bformulation\b/.test(q)
+  );
+
+  // Or explicit experiment framing with count/filter intent
+  const hasExperimentFrame = (
+    /\b(show|list|find|filter|get|count)\b.*\b(experiment|formulation|row|result)\b/.test(q) ||
+    /\b(experiment|formulation)\b.*\b(where|with|having|above|below|greater|less)\b/.test(q) ||
+    /\bhow many\b.*\b(experiment|formulation)\b/.test(q) ||
+    /\b(experiment|formulation)\b.*[><]=?/.test(q)
+  );
+
+  return (hasOperator && hasLabColumn) || hasExperimentFrame;
+}
+
+/**
+ * Runs the science query pipeline (Python table_query_engine_final.py) and
+ * formats the result as a MATRIYA-compatible search response for the frontend.
+ */
+async function handleScienceQueryFlow(req, res, { query }) {
+  try {
+    const result = await runSciencePython([
+      'query',
+      _defaultExcel,
+      query,
+      'Formulation Data',
+      `QUERY-${Date.now()}`
+    ]);
+
+    logger.info(`[science-routing] query="${query}" decision=${result.decision}`);
+
+    if (result.decision === 'AMBIGUOUS_QUERY') {
+      return res.status(200).json({
+        query,
+        flow: 'science',
+        routing: 'SCIENCE_QUERY_ENGINE',
+        data_source: 'NONE',
+        decision: 'AMBIGUOUS_QUERY',
+        answer: `השאילתה מכילה הפניה דו-משמעית. אנא ציין את שם העמודה המדויק. ${
+          (result.evidence?.ambiguous_items || []).map(a => `"${a.term}" → ${a.candidates?.join(', ')}`).join('; ')
+        }`,
+        reply: 'AMBIGUOUS_QUERY',
+        evidence: result.evidence || {},
+        warnings: result.warnings || [],
+        sources: [],
+        results: [],
+        results_count: 0,
+      });
+    }
+
+    if (result.decision === 'INSUFFICIENT_DATA' || result.decision === 'NO_MATCHES') {
+      const matched = result.evidence?.matched_rows ?? 0;
+      return res.status(200).json({
+        query,
+        flow: 'science',
+        routing: 'SCIENCE_QUERY_ENGINE',
+        data_source: 'DB_COMPUTED',
+        decision: result.decision,
+        answer: matched === 0
+          ? `לא נמצאו ניסויים העומדים בתנאי השאילתה.`
+          : `הנתונים אינם מספיקים לביצוע השאילתה.`,
+        reply: result.decision,
+        evidence: result.evidence || {},
+        warnings: result.warnings || [],
+        sources: [],
+        results: [],
+        results_count: 0,
+        tag: 'computed',
+      });
+    }
+
+    // MATCHES_FOUND — format rows for frontend
+    const evidence = result.evidence || {};
+    const rows = evidence.result_preview || [];
+    const matchedRows = evidence.matched_rows ?? rows.length;
+    const countResult = evidence.count_result;
+    const isCount = countResult !== undefined && countResult !== null;
+
+    // Build human-readable answer
+    let answer;
+    if (isCount) {
+      answer = `נמצאו ${countResult} ניסויים העומדים בתנאי השאילתה.`;
+    } else if (rows.length === 0) {
+      answer = 'לא נמצאו שורות תואמות.';
+    } else {
+      const colList = (evidence.columns_returned || []).slice(0, 6).join(', ');
+      answer = `נמצאו ${matchedRows} ניסויים העונים על השאילתה${evidence.total_rows ? ` מתוך ${evidence.total_rows}` : ''}.\n` +
+        `עמודות: ${colList || 'לא צוינו'}.\n` +
+        rows.slice(0, 5).map((r, i) =>
+          `שורה ${i + 1}: ${Object.entries(r).slice(0, 6).map(([k, v]) => `${k}=${v}`).join(', ')}`
+        ).join('\n');
+    }
+
+    return res.status(200).json({
+      query,
+      flow: 'science',
+      routing: 'SCIENCE_QUERY_ENGINE',
+      data_source: 'DB_COMPUTED',
+      tag: 'computed',
+      decision: result.decision,
+      answer,
+      reply: 'ANSWER',
+      matched_rows: matchedRows,
+      total_rows: evidence.total_rows,
+      count_result: countResult,
+      rows: rows.slice(0, 20),
+      columns: evidence.columns_returned || [],
+      parse_confidence: result.parse_confidence,
+      filters_applied: evidence.filters_applied || [],
+      audit_trace: result.audit_trace || {},
+      warnings: result.warnings || [],
+      sources: [],
+      results: rows.slice(0, 5).map(r => ({
+        content: Object.entries(r).map(([k, v]) => `${k}: ${v}`).join(' | '),
+        metadata: { source: 'lab_data', routing: 'science_query_engine' },
+        score: 1.0,
+      })),
+      results_count: matchedRows,
+      lab_bridge_invoked: true,
+      document_rag_invoked: false,
+    });
+  } catch (e) {
+    logger.error(`[science-routing] error: ${e.message}`);
+    return res.status(500).json({ error: e.message, routing: 'SCIENCE_QUERY_ENGINE' });
+  }
+}
+
 function isSystemMetadataQuestion(query) {
   const q = normalizeQueryText(query);
   if (!q) return false;
@@ -1508,6 +1720,16 @@ async function handleMatriyaSearch(req, res) {
     const userEarly = await getCurrentUser(req);
     return await handleLabBridgeFlow(req, res, { query, userId: userEarly?.id ?? null });
   }
+
+  // ── SCIENCE QUERY ROUTING ────────────────────────────────────────────────
+  // Detect NL queries about experiment data with numeric conditions and route
+  // them to the Lab Query Engine (Python science pipeline, not document RAG).
+  // flow=science: explicit override. flow=document: skip this routing.
+  if (flowRawEarly === 'science' || (flowRawEarly !== 'document' && isScienceQueryQuestion(query))) {
+    logger.info(`[science-routing] detected lab data query → science pipeline. query="${query}"`);
+    return await handleScienceQueryFlow(req, res, { query });
+  }
+  // ────────────────────────────────────────────────────────────────────────
 
   const labIntentDetected = isLabEngineQuestion(query);
   logger.warn(`[source-guard] lab_intent_detected=${labIntentDetected} query="${query}"`);
