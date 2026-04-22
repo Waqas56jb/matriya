@@ -1853,6 +1853,85 @@ async function handleScienceQueryFlow(req, res, { query }) {
 
     logger.info(`[science-routing] query="${query}" decision=${result.decision}`);
 
+    // ── LAYER 1 RESULT: Invalid query (caught by validate_query before filter) ──
+    if (result.decision === 'INVALID_QUERY') {
+      const invalidAnswer = `Invalid query: ${result.evidence?.reason || result.warnings?.[0] || 'malformed expression'}.\n` +
+        `Please check the syntax. Example: "expansion_ratio > 15" or "highest expansion_ratio".`;
+      return res.status(200).json({
+        query,
+        flow: 'science',
+        routing: 'SCIENCE_QUERY_ENGINE',
+        data_source: 'NONE',
+        decision: 'INVALID_QUERY',
+        answer: invalidAnswer,
+        reply: invalidAnswer,
+        evidence: result.evidence || {},
+        warnings: result.warnings || [],
+        sources: [],
+        results: [],
+        results_count: 0,
+      });
+    }
+
+    // ── LAYER 2 RESULT: Aggregation (highest/lowest/top-N) ────────────────────
+    if (result.decision === 'AGGREGATION_RESULT') {
+      const ev = result.evidence || {};
+      const aggRows = ev.result_preview || [];
+      const summary = ev.summary || '';
+
+      // Priority-ordered field display (same contract as MATCHES_FOUND)
+      const PRIORITY_COLS_AGG = ['experiment_id', 'expansion_ratio', 'adhesion', 'viscosity',
+                                  'char_quality', 'APP:PER', 'IFR', 'APP', 'PER', 'MEL', 'Nanoclay', 'status'];
+      const fmtAggRow = (r) => {
+        const pri = PRIORITY_COLS_AGG
+          .filter(k => r[k] != null)
+          .map(k => { const v = r[k]; return `${k}: ${typeof v === 'number' ? Number(v.toFixed(4)).toString() : v}`; });
+        const rest = Object.entries(r)
+          .filter(([k, v]) => v != null && !PRIORITY_COLS_AGG.includes(k) && k !== 'project_id')
+          .map(([k, v]) => `${k}: ${typeof v === 'number' ? Number(v.toFixed(4)).toString() : v}`);
+        return [...pri, ...rest].join(' | ');
+      };
+
+      const rowLines = aggRows.map((r, i) => `  [${i + 1}] ${fmtAggRow(r)}`).join('\n');
+      const aggAnswer = summary + (rowLines ? `\n\nDetails:\n${rowLines}` : '');
+
+      // Log each aggregation result row
+      aggRows.forEach((r, i) => console.log(`[science] agg_row[${i}]:`, JSON.stringify(r)));
+
+      return res.status(200).json({
+        query,
+        flow: 'science',
+        routing: 'SCIENCE_QUERY_ENGINE',
+        data_source: 'DB_COMPUTED',
+        decision: 'AGGREGATION_RESULT',
+        answer: aggAnswer,
+        reply: aggAnswer,
+        matched_rows: ev.matched_rows,
+        total_rows: ev.total_rows,
+        agg_type: ev.agg_type,
+        agg_column: ev.agg_column,
+        best_value: ev.best_value,
+        best_experiment_id: ev.best_experiment_id,
+        rows: aggRows,
+        columns: ev.columns_returned || [],
+        warnings: result.warnings || [],
+        sources: aggRows.map(r => ({
+          content: fmtAggRow(r),
+          metadata: { source: 'lab_data', routing: 'science_query_engine', experiment_id: r.experiment_id || null },
+          score: 1.0,
+        })),
+        results: aggRows.map(r => ({
+          content: fmtAggRow(r),
+          metadata: { source: 'lab_data', routing: 'science_query_engine' },
+          score: 1.0,
+        })),
+        results_count: ev.matched_rows ?? aggRows.length,
+        lab_bridge_invoked: true,
+        document_rag_invoked: false,
+        tag: 'computed',
+      });
+    }
+
     if (result.decision === 'AMBIGUOUS_QUERY') {
       const ambigAnswer = `Ambiguous query — please specify the exact column name. ${
         (result.evidence?.ambiguous_items || []).map(a => `"${a.term}" could mean: ${a.candidates?.join(', ')}`).join('; ')

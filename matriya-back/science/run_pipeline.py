@@ -49,6 +49,53 @@ def _nan_safe(obj):
         return [_nan_safe(v) for v in obj]
     return obj
 
+
+# ── LAYER 1: Query Validation ─────────────────────────────────────────────────
+# Runs BEFORE the filter engine. Rejects structurally invalid queries early
+# so the filter never sees malformed input.
+import re as _re
+
+def validate_query(query: str) -> dict:
+    """
+    Structural pre-filter validation.
+
+    Returns {"valid": True} or {"valid": False, "reason": str}.
+
+    Catches:
+      - Dangling operator  : "expansion_ratio >"  (no RHS value)
+      - Self-referential   : "expansion_ratio > expansion_ratio"  (column as its own RHS)
+    """
+    q = query.strip()
+
+    # Dangling operator — expression ends with a comparison operator and nothing after
+    dangling = _re.search(r'(>=|<=|!=|==|>|<|=)\s*$', q)
+    if dangling:
+        op = dangling.group(1)
+        return {
+            "valid":  False,
+            "reason": (
+                f"Query ends with operator '{op}' but provides no value. "
+                f"Example: 'expansion_ratio > 15'"
+            ),
+        }
+
+    # Self-referential — same column name used as the RHS of its own condition
+    # e.g. "expansion_ratio > expansion_ratio"
+    self_ref = _re.search(
+        r'\b(\w+)\s*(?:>=|<=|!=|==|>|<)\s*\1\b', q, _re.IGNORECASE
+    )
+    if self_ref:
+        col = self_ref.group(1)
+        return {
+            "valid":  False,
+            "reason": (
+                f"Column '{col}' appears on both sides of the operator. "
+                f"Provide a numeric value on the right-hand side."
+            ),
+        }
+
+    return {"valid": True}
+
 def _out(obj):
     print(json.dumps(_nan_safe(obj), default=str), flush=True)
 
@@ -123,7 +170,64 @@ def cmd_query(args):
         parse_natural_language_query, execute_query
     )
     from fsctm_state import FSCTMEngine
+    from query_aggregation import detect_aggregation_intent, apply_aggregation
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # LAYER 1 — VALIDATION  (pre-filter, returns early on invalid syntax)
+    # ═══════════════════════════════════════════════════════════════════════
+    v = validate_query(query)
+    if not v["valid"]:
+        print(f"[validation] INVALID_QUERY: {v['reason']}", file=_sys.stderr, flush=True)
+        _out({
+            "decision":    "INVALID_QUERY",
+            "quality":     "VALIDATION_FAILED",
+            "warnings":    [v["reason"]],
+            "evidence":    {
+                "original_query": query,
+                "reason":         v["reason"],
+            },
+            "data_source": "NONE",
+            "confidence":  "LOW",
+        })
+        return
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # LAYER 2 — AGGREGATION DETECTION  (runs filter first if filters exist,
+    #           then aggregates; bypasses filter when query is agg-only)
+    # ═══════════════════════════════════════════════════════════════════════
+    agg_intent = detect_aggregation_intent(query, list(df.columns))
+    if agg_intent["has_agg"]:
+        # Parse to check for any accompanying filter conditions
+        _parsed_for_agg = parse_natural_language_query(query, list(df.columns))
+        _parsed_for_agg["_original_query"] = query
+
+        if _parsed_for_agg.get("filters"):
+            # Filters present → run filter first, then aggregate on the subset
+            print("[aggregation] has filters — running filter then aggregating",
+                  file=_sys.stderr, flush=True)
+            _filter_result = execute_query(df, _parsed_for_agg)
+            _agg_df = _filter_result.get("result_df")
+            if _agg_df is None or len(_agg_df) == 0:
+                # Filter produced nothing — aggregate on full dataset as fallback
+                print("[aggregation] filter returned 0 rows — aggregating on full df",
+                      file=_sys.stderr, flush=True)
+                _agg_df = df
+        else:
+            # Pure aggregation query — use the full dataset directly
+            print("[aggregation] no filters — aggregating on full df",
+                  file=_sys.stderr, flush=True)
+            _agg_df = df
+
+        result = apply_aggregation(_agg_df, agg_intent)
+        result["query"]            = query
+        result["parse_confidence"] = "HIGH"
+        result["computed_columns"] = adapted.get("computed_columns", [])
+        _out(result)
+        return
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # LAYER 3 — FILTER ENGINE  (table_query_engine_final — NOT modified)
+    # ═══════════════════════════════════════════════════════════════════════
     parsed = parse_natural_language_query(query, list(df.columns))
     parsed["_original_query"] = query
 
