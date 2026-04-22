@@ -786,6 +786,51 @@ app.post("/ingest/directory", async (req, res) => {
   }
 });
 
+/**
+ * POST /integration/email-received
+ * Called by managment-back after every inbound email.
+ * Indexes the email body into the MATRIYA RAG vector store so it appears in search results.
+ */
+app.post('/integration/email-received', async (req, res) => {
+  try {
+    const { project_id, email_id, from, subject, body_text, received_at } = req.body || {};
+    if (!body_text || !String(body_text).trim()) {
+      return res.status(400).json({ error: 'body_text is required' });
+    }
+    const document = [
+      `Source: inbound email`,
+      `Project: ${project_id || 'unknown'}`,
+      `From: ${from || 'unknown'}`,
+      `Subject: ${subject || ''}`,
+      `Date: ${received_at || new Date().toISOString()}`,
+      '',
+      String(body_text).trim()
+    ].join('\n');
+    const safeSubject = (subject || '').slice(0, 60).replace(/[^a-z0-9\-_.]/gi, '_');
+    const filename = `email-inbound-${safeSubject || (email_id || Date.now()).toString().slice(0, 12)}.txt`;
+    const tempPath = join(settings.UPLOAD_DIR || '/tmp', filename);
+    const { writeFileSync } = await import('fs');
+    writeFileSync(tempPath, document, 'utf8');
+    try {
+      const ragService = getRagService();
+      const result = await ragService.ingestFile(tempPath, filename);
+      try { if (existsSync(tempPath)) unlinkSync(tempPath); } catch (_) {}
+      if (result && result.success) {
+        scheduleMatriyaOpenAiSyncAfterIngest(() => getRagService(), 'integration/email-received', { logicalName: filename });
+        logger.info(`[email-received] indexed: ${filename} project=${project_id}`);
+        return res.json({ ok: true, indexed: true, email_id, filename });
+      }
+      return res.status(500).json({ error: result?.error || 'Indexing failed' });
+    } catch (e) {
+      try { if (existsSync(tempPath)) unlinkSync(tempPath); } catch (_) {}
+      throw e;
+    }
+  } catch (e) {
+    logger.error(`/integration/email-received error: ${e.message}`);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 /** Logical path or basename ends with .xlsx / .xls */
 function isAskMatriyaSpreadsheetFilename(name) {
   const base = String(name || '').split(/[/\\]/).filter(Boolean).pop() || '';

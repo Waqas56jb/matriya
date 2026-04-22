@@ -909,6 +909,48 @@ const emailAttachImportSchema = z.object({
   destination: z.enum(['project_files', 'lab'])
 });
 
+/** Save inbound email as a .txt project file so it is indexed in local RAG + OpenAI vector store. */
+async function _ingestInboundEmailToRag(projectId, emailId, fromEmail, subject, bodyText) {
+  try {
+    const safeSubject = (subject || '').slice(0, 60).replace(/[^a-z0-9\-_.]/gi, '_');
+    const filename = `email-inbound-${safeSubject || emailId.slice(0, 8)}.txt`;
+    const content = [
+      `Source: inbound email`,
+      `From: ${fromEmail}`,
+      `Subject: ${subject || ''}`,
+      `Date: ${new Date().toISOString()}`,
+      `Project: ${projectId}`,
+      '',
+      bodyText
+    ].join('\n');
+    const buffer = Buffer.from(content, 'utf8');
+    const { data: fileRow, error: fileErr } = await supabase.from('project_files').insert({
+      project_id: projectId,
+      original_name: filename,
+      folder_display_name: 'Emails'
+    }).select().single();
+    if (fileErr || !fileRow) {
+      console.error('[email-inbound] project_files insert failed:', fileErr?.message);
+      return;
+    }
+    await ensureManualBucketExists();
+    const relativeKey = `${PROJECT_PREFIX}${projectId}/${fileRow.id}/${safeStorageKeySegment(filename)}`;
+    const storage_path = `${MANUAL_PREFIX}/${relativeKey}`;
+    const { error: upErr } = await supabase.storage.from(MANUAL_BUCKET).upload(relativeKey, buffer, { contentType: 'text/plain', upsert: false });
+    if (upErr) {
+      await supabase.from('project_files').delete().eq('id', fileRow.id);
+      console.error('[email-inbound] storage upload failed:', upErr.message);
+      return;
+    }
+    await supabase.from('project_files').update({ storage_path }).eq('id', fileRow.id);
+    if (hasLocalRag()) ingestFileInBackground(projectId, fileRow.id, buffer, filename);
+    scheduleOpenAiVectorSyncForProject(projectId, 'email/inbound', fileRow.id);
+    console.info(`[email-inbound] RAG indexed: ${filename} → project ${projectId}`);
+  } catch (e) {
+    console.error('[email-inbound] _ingestInboundEmailToRag failed:', e.message);
+  }
+}
+
 /** Resend Inbound: after email.received, fetch full body and store under matched project (UUID in To address). */
 app.post('/api/webhooks/resend-inbound', async (req, res) => {
   try {
@@ -989,6 +1031,26 @@ app.post('/api/webhooks/resend-inbound', async (req, res) => {
       throw insErr;
     }
     auditLog(projectId, null, 'inbound', 'create', 'project_email', emailId, { subject, from: fromEmail }, req.requestId);
+
+    // ── Auto-index inbound email into RAG + notify MATRIYA ──────────────────
+    const emailBodyText = bodyText || (bodyHtml ? bodyHtml.replace(/<[^>]+>/g, ' ') : null);
+    if (emailBodyText && emailBodyText.trim().length > 10) {
+      setImmediate(() => _ingestInboundEmailToRag(projectId, emailId, fromEmail, subject, emailBodyText));
+    }
+    if (MATRIYA_BACK_URL) {
+      setImmediate(() => {
+        axios.post(`${MATRIYA_BACK_URL}/integration/email-received`, {
+          project_id: projectId,
+          email_id: emailId,
+          from: fromEmail,
+          subject,
+          body_text: emailBodyText,
+          received_at: new Date().toISOString()
+        }, { timeout: 15000 }).catch(e => console.warn('[email-inbound] MATRIYA notify failed:', e.message));
+      });
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
     return res.status(201).json({ ok: true, project_id: projectId });
   } catch (e) {
     return res.status(500).json({ error: e.message });
