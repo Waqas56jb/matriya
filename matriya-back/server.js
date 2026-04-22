@@ -1627,16 +1627,25 @@ function isScienceQueryQuestion(query) {
     /=/.test(q) && hasLabColumn
   );
 
-  // "show raw experiments", "show experiments where ...", "list experiments", etc.
-  const hasExperimentFrame = (
-    /\b(show|list|find|filter|get|count|fetch|select)\b.*\b(experiment|formulation|row|result)\b/.test(q) ||
-    /\b(experiment|formulation)\b.*\b(where|with|having|above|below|greater|less)\b/.test(q) ||
-    /\bhow many\b.*\b(experiment|formulation)\b/.test(q) ||
-    /\b(experiment|formulation)\b.*[><]=?/.test(q) ||
-    /\bshow raw\b/.test(q)
+  // Standalone lab entity keywords — any mention routes to LAB
+  // "show all experiments", "list experiments", "all runs", "formulation data", etc.
+  const hasStandaloneLabEntity = (
+    /\bexperiments?\b/.test(q) ||
+    /\bformulations?\b/.test(q) ||
+    /\b(lab\s+)?runs?\b/.test(q) ||
+    /\blab\s+data\b/.test(q)
   );
 
-  return (hasNumericOperator && hasLabColumn) || hasEqualityFilter || hasExperimentFrame;
+  // "show raw experiments", "show experiments where ...", "list experiments", etc.
+  const hasExperimentFrame = (
+    /\b(show|list|find|filter|get|count|fetch|select)\b.*\b(experiment|formulation|row|result|run)\b/.test(q) ||
+    /\b(experiment|formulation|run)\b.*\b(where|with|having|above|below|greater|less)\b/.test(q) ||
+    /\bhow many\b.*\b(experiment|formulation|run)\b/.test(q) ||
+    /\b(experiment|formulation|run)\b.*[><]=?/.test(q) ||
+    /\bshow (all|raw)\b/.test(q)
+  );
+
+  return (hasNumericOperator && hasLabColumn) || hasEqualityFilter || hasExperimentFrame || hasStandaloneLabEntity;
 }
 
 /**
@@ -1661,6 +1670,16 @@ async function fetchLabDataFromManagementApi() {
     });
 
     const rows = resp.data?.experiments;
+
+    // ── DIAGNOSTIC LOGS (data integrity check) ──────────────────────────────
+    console.log("ROWS:", Array.isArray(rows) ? rows.length : 'NOT_ARRAY');
+    if (Array.isArray(rows) && rows.length > 0) {
+      console.log("SAMPLE:", JSON.stringify(rows[0], null, 2));
+    } else {
+      console.log("SAMPLE: none");
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
     if (!Array.isArray(rows) || rows.length === 0) {
       logger.warn('[science-routing] lab-experiments-export returned 0 rows — falling back to Excel');
       return null;
@@ -1670,6 +1689,11 @@ async function fetchLabDataFromManagementApi() {
     const cols = ['experiment_id', 'project_id', 'APP', 'PER', 'MEL', 'APP:PER', 'IFR',
                   'Nanoclay', 'expansion_ratio', 'char_quality', 'adhesion', 'viscosity', 'status', 'formula'];
     const header = cols.join(',');
+
+    // ── DIAGNOSTIC: log CSV headers ──────────────────────────────────────────
+    console.log("CSV HEADERS:", header);
+    // ────────────────────────────────────────────────────────────────────────
+
     const escapeVal = v => {
       if (v == null) return '';
       const s = String(v);
