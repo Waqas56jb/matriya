@@ -1600,37 +1600,43 @@ function isScienceQueryQuestion(query) {
   const q = String(query || '').toLowerCase().trim();
   if (!q) return false;
 
-  // Must contain at least one numeric operator OR "between...and"
-  const hasOperator = (
+  // Known lab column names (used for equality-filter detection)
+  const LAB_COLUMNS = [
+    'experiment_id', 'app:per', 'app_per', 'app', 'per', 'mel', 'nanoclay', 'ifr',
+    'expansion_ratio', 'expansion ratio', 'char_quality', 'char quality', 'char',
+    'adhesion', 'viscosity', 'hrr', 'formulation', 'status', 'project_id',
+    'validated', 'results', 'source',
+  ];
+
+  const hasLabColumn = LAB_COLUMNS.some(col => {
+    const escaped = col.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`\\b${escaped}\\b`).test(q);
+  });
+
+  // Numeric operators
+  const hasNumericOperator = (
     /[><]=?/.test(q) ||
     /\bbetween\s+[\d.]+\s+and\s+[\d.]+/.test(q) ||
     /\b(greater|less|above|below|at least|at most|more than|higher|lower)\b/.test(q) ||
     /\b(equals?|equal to|is)\s+[\d.]+/.test(q)
   );
 
-  // AND must reference at least one known column / lab parameter
-  const hasLabColumn = (
-    /\bapp[:\s]?per\b/.test(q) ||
-    /\bifr\b/.test(q) ||
-    /\bexpansion(\s+ratio)?\b/.test(q) ||
-    /\bnanoclay\b/.test(q) ||
-    /\bchar(\s+quality)?\b/.test(q) ||
-    /\bmel\b/.test(q) ||
-    /\badhesion\b/.test(q) ||
-    /\bhrr\b/.test(q) ||
-    /\bexpansion_ratio\b/.test(q) ||
-    /\bformulation\b/.test(q)
+  // Equality / string filter on a known column:
+  // e.g. experiment_id = "abc", status = "PASS", experiment_id == "xyz"
+  const hasEqualityFilter = (
+    /=/.test(q) && hasLabColumn
   );
 
-  // Or explicit experiment framing with count/filter intent
+  // "show raw experiments", "show experiments where ...", "list experiments", etc.
   const hasExperimentFrame = (
-    /\b(show|list|find|filter|get|count)\b.*\b(experiment|formulation|row|result)\b/.test(q) ||
+    /\b(show|list|find|filter|get|count|fetch|select)\b.*\b(experiment|formulation|row|result)\b/.test(q) ||
     /\b(experiment|formulation)\b.*\b(where|with|having|above|below|greater|less)\b/.test(q) ||
     /\bhow many\b.*\b(experiment|formulation)\b/.test(q) ||
-    /\b(experiment|formulation)\b.*[><]=?/.test(q)
+    /\b(experiment|formulation)\b.*[><]=?/.test(q) ||
+    /\bshow raw\b/.test(q)
   );
 
-  return (hasOperator && hasLabColumn) || hasExperimentFrame;
+  return (hasNumericOperator && hasLabColumn) || hasEqualityFilter || hasExperimentFrame;
 }
 
 /**
