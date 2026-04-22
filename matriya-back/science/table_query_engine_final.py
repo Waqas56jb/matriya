@@ -459,17 +459,23 @@ def execute_query(df: pd.DataFrame, parsed: dict) -> dict:
     # Type validation
     type_warnings = validate_filter_types(filters)
 
-    # Coerce numeric columns before comparison
+    # Coerce ALL numeric columns to float before any comparison.
+    # This must happen once up-front so every filter sees proper NaN (not empty strings).
     df = df.copy()
-    for f in filters:
-        col = f["column"]
-        if col in df.columns and COLUMN_TYPES.get(col) == "numeric":
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+    for col_name, col_type in COLUMN_TYPES.items():
+        if col_type == "numeric" and col_name in df.columns:
+            df[col_name] = pd.to_numeric(df[col_name], errors="coerce")
 
     mask = pd.Series([True] * len(df), index=df.index)
     applied = []
     failed = []
     execution_steps = []
+
+    # NULL-safety rule (mirrors SQL WHERE semantics):
+    # For any numeric comparison operator (>, <, >=, <=, between, ==, !=),
+    # a NULL (NaN) value in the column MUST evaluate to FALSE.
+    # We enforce this by applying .notna() to the column mask before the comparison.
+    NUMERIC_OPS = {">", "<", ">=", "<=", "between", "==", "!="}
 
     for f in filters:
         col = f["column"]
@@ -477,27 +483,39 @@ def execute_query(df: pd.DataFrame, parsed: dict) -> dict:
         val = f["value"]
 
         if col not in df.columns:
-            failed.append({**f, "error": f"Column '{col}' not found in DataFrame"})
+            failed.append({**f, "error": f"Column '{col}' not found in DataFrame. Available: {list(df.columns)}"})
             continue
 
         try:
             before = mask.sum()
+
+            # SQL-style NULL semantics: exclude NULL rows from ALL numeric comparisons
+            is_numeric_col = COLUMN_TYPES.get(col) == "numeric"
+            if is_numeric_col and op in NUMERIC_OPS:
+                null_mask = df[col].notna()
+                null_count = (~null_mask).sum()
+                if null_count > 0:
+                    import sys as _sys2
+                    print(f"[execute_query] NULL-safety: excluding {null_count} NULL rows from '{col} {op} {val}'",
+                          file=_sys2.stderr, flush=True)
+                mask &= null_mask  # enforce: NULL always = FALSE for numeric filters
+
             if op == "between":
                 lo, hi = val
                 mask &= (df[col] >= lo) & (df[col] <= hi)
-                step_desc = f"{col} between {lo} and {hi}"
+                step_desc = f"{col} BETWEEN {lo} AND {hi} (nulls excluded)"
             elif op == ">":
                 mask &= df[col] > val
-                step_desc = f"{col} > {val}"
+                step_desc = f"{col} > {val} (nulls excluded)"
             elif op == "<":
                 mask &= df[col] < val
-                step_desc = f"{col} < {val}"
+                step_desc = f"{col} < {val} (nulls excluded)"
             elif op == ">=":
                 mask &= df[col] >= val
-                step_desc = f"{col} >= {val}"
+                step_desc = f"{col} >= {val} (nulls excluded)"
             elif op == "<=":
                 mask &= df[col] <= val
-                step_desc = f"{col} <= {val}"
+                step_desc = f"{col} <= {val} (nulls excluded)"
             elif op == "==":
                 if isinstance(val, str):
                     mask &= df[col].astype(str).str.strip().str.lower() == val.lower()
