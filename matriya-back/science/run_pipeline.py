@@ -205,8 +205,11 @@ def cmd_query(args):
             # Filters present → run filter first, then aggregate on the subset
             print("[aggregation] has filters — running filter then aggregating",
                   file=_sys.stderr, flush=True)
+            _parsed_for_agg["defer_final_aggregation"] = True
             _filter_result = execute_query(df, _parsed_for_agg)
-            _agg_df = _filter_result.get("result_df")
+            _agg_df = _filter_result.get("ranked_working_df")
+            if _agg_df is None or (hasattr(_agg_df, "__len__") and len(_agg_df) == 0):
+                _agg_df = _filter_result.get("result_df")
             if _agg_df is None or len(_agg_df) == 0:
                 # No silent fallback — surface the empty result explicitly
                 print("[aggregation] filter returned 0 rows — returning NO_MATCHES",
@@ -314,6 +317,7 @@ def cmd_query(args):
         return
 
     result = execute_query(df, parsed)
+    result.pop("ranked_working_df", None)
 
     # ── DIAGNOSTIC LOGS (David request) ─────────────────────────────────────
     result_df_ref = result.get("result_df")

@@ -748,6 +748,7 @@ def execute_query(df: pd.DataFrame, parsed: dict) -> dict:
     # ── Step 2: Ranking — top N by <rank_column> ─────────────────────────────
     # "top 3 by expansion_ratio" → sort desc, keep top 3 rows.
     rank_meta = None
+    working_df = None
     if ranking and len(result_df) > 0:
         rank_col = ranking.get("column", "expansion_ratio")
         rank_n   = ranking["n"]
@@ -765,30 +766,43 @@ def execute_query(df: pd.DataFrame, parsed: dict) -> dict:
                 "rank_n":         rank_n,
                 "rows_after_rank": len(result_df),
             }
-            print(f"[DEBUG] AFTER RANKING rows={len(result_df)} rank_col={rank_col}", flush=True)
+            print(f"[DEBUG] AFTER RANKING rows={len(result_df)}", flush=True)
+            working_df = result_df.copy()
+            print(
+                f"[DEBUG] PIPELINE INPUT TO AGG rows={len(working_df)}",
+                flush=True,
+            )
 
+    # Data passed into aggregation: ranked subset when we ranked, else post-filter
+    agg_in = working_df if working_df is not None else result_df
+    defer_agg = bool(parsed.get("defer_final_aggregation"))
     # ── Step 3: Aggregation — idxmax / idxmin on aggregation column ──────────
     # Applied AFTER ranking so it operates on the ranked subset, not the full
     # filter result.  This is the correct two-step pipeline:
     #   filter → rank → aggregate
+    # When defer_final_aggregation (run_pipeline + apply_aggregation), we keep
+    # the ranked rows; query_aggregation applies min/max on that subset.
     agg_meta = None
-    if aggregation and len(result_df) > 0:
-        agg_col = aggregation["column"]
-        agg_dir = aggregation["direction"]
-        if agg_col in result_df.columns:
-            numeric_col = pd.to_numeric(result_df[agg_col], errors="coerce")
-            if not numeric_col.isna().all():
-                best_idx = numeric_col.idxmax() if agg_dir == "max" else numeric_col.idxmin()
-                best_row = result_df.loc[[best_idx]]
-                agg_meta = {
-                    "aggregation_column":    agg_col,
-                    "aggregation_direction": agg_dir,
-                    "aggregation_keyword":   aggregation["keyword"],
-                    "aggregation_value":     float(numeric_col.loc[best_idx]),
-                    "applied_on":            "ranked_result" if rank_meta else "filtered_result",
-                    "best_row":              best_row.to_dict(orient="records"),
-                }
-                result_df = best_row   # narrow to the single best row
+    if aggregation and len(agg_in) > 0:
+        if defer_agg:
+            result_df = agg_in
+        else:
+            agg_col = aggregation["column"]
+            agg_dir = aggregation["direction"]
+            if agg_col in agg_in.columns:
+                numeric_col = pd.to_numeric(agg_in[agg_col], errors="coerce")
+                if not numeric_col.isna().all():
+                    best_idx = numeric_col.idxmax() if agg_dir == "max" else numeric_col.idxmin()
+                    best_row = agg_in.loc[[best_idx]]
+                    agg_meta = {
+                        "aggregation_column":    agg_col,
+                        "aggregation_direction": agg_dir,
+                        "aggregation_keyword":   aggregation["keyword"],
+                        "aggregation_value":     float(numeric_col.loc[best_idx]),
+                        "applied_on":            "ranked_result" if rank_meta else "filtered_result",
+                        "best_row":              best_row.to_dict(orient="records"),
+                    }
+                    result_df = best_row   # narrow to the single best row
 
     matched = len(result_df)
     total = len(df)
@@ -829,7 +843,8 @@ def execute_query(df: pd.DataFrame, parsed: dict) -> dict:
         "confidence":  "HIGH" if not failed and not all_warnings else "MEDIUM",
         "tag":         "computed",
         "audit_trace": _build_trace(parsed, execution_steps, applied, result_df),
-        "result_df":   result_df   # removed before JSON serialisation in query_excel
+        "result_df":   result_df,   # removed before JSON serialisation in query_excel
+        "ranked_working_df": working_df,  # post-rank copy for run_pipeline + apply_aggregation
     }
 
 
@@ -940,6 +955,7 @@ def query_excel(filepath: str, natural_language_query: str,
     # 3. Execute
     result = execute_query(df, parsed)
     result.pop("result_df", None)   # not JSON-serialisable
+    result.pop("ranked_working_df", None)
     result["query"]            = natural_language_query
     result["sheet"]            = sheet_name
     result["parse_confidence"] = parsed["parse_confidence"]
