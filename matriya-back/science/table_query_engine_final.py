@@ -555,6 +555,24 @@ def validate_filter_types(filters: list) -> list:
 
 
 # ─────────────────────────────────────────────────────────
+# RANKING — column from natural language (… by <column>)
+# ─────────────────────────────────────────────────────────
+
+def _inject_ranking_column_from_nl_query(parsed: dict) -> None:
+    """Set parsed['ranking']['column'] from `… by <id>` in _original_query (identifier token)."""
+    q = str(parsed.get("_original_query", "") or "")
+    match = re.search(
+        r"\bby\s+([a-zA-Z_][a-zA-Z0-9_]*)", q, re.IGNORECASE
+    )
+    if not match:
+        return
+    ranking = dict(parsed.get("ranking") or {})
+    ranking["column"] = match.group(1)
+    if ranking:
+        parsed["ranking"] = ranking
+
+
+# ─────────────────────────────────────────────────────────
 # STEP 5: EXECUTE QUERY
 # ─────────────────────────────────────────────────────────
 
@@ -565,6 +583,8 @@ def execute_query(df: pd.DataFrame, parsed: dict) -> dict:
 
     Returns full MATRIYA-compatible response with audit trace.
     """
+    _inject_ranking_column_from_nl_query(parsed)
+
     filters      = parsed.get("filters", [])
     count_intent = parsed.get("count_intent", False)
     aggregation  = parsed.get("aggregation")   # {"keyword", "column", "direction"} | None
@@ -729,27 +749,23 @@ def execute_query(df: pd.DataFrame, parsed: dict) -> dict:
     # "top 3 by expansion_ratio" → sort desc, keep top 3 rows.
     rank_meta = None
     if ranking and len(result_df) > 0:
-        rank_col = ranking["column"]
+        rank_col = ranking.get("column", "expansion_ratio")
         rank_n   = ranking["n"]
         if rank_col in result_df.columns:
             numeric_rank = pd.to_numeric(result_df[rank_col], errors="coerce")
-            sorted_df = (
+            result_df = (
                 result_df
                 .assign(_rank_col=numeric_rank)
                 .sort_values("_rank_col", ascending=False)
-                .head(rank_n)  # 🔥 enforce TOP N (critical fix)
+                .head(rank_n)
                 .drop(columns=["_rank_col"])
             )
-            result_df = sorted_df
             rank_meta = {
                 "rank_column":    rank_col,
                 "rank_n":         rank_n,
                 "rows_after_rank": len(result_df),
             }
-            print(
-                f"[execute_query] after ranking top {rank_n} by {rank_col}: {len(sorted_df)} rows",
-                flush=True,
-            )
+            print(f"[DEBUG] AFTER RANKING rows={len(result_df)} rank_col={rank_col}", flush=True)
 
     # ── Step 3: Aggregation — idxmax / idxmin on aggregation column ──────────
     # Applied AFTER ranking so it operates on the ranked subset, not the full
@@ -847,6 +863,9 @@ def query_excel(filepath: str, natural_language_query: str,
 
     Returns MATRIYA-compatible JSON-serialisable dict.
     """
+    print("🔥 RUNNING query_excel ENTRY POINT 🔥", flush=True)
+    print(f"[DEBUG] incoming query = {natural_language_query}", flush=True)
+
     # 1. Load
     loaded = load_excel(filepath, sheet_name)
     if "error" in loaded:
@@ -876,6 +895,12 @@ def query_excel(filepath: str, natural_language_query: str,
     # 2. Parse
     parsed = parse_natural_language_query(natural_language_query, list(df.columns))
     parsed["_original_query"] = natural_language_query
+    _inject_ranking_column_from_nl_query(parsed)
+    print(
+        f"[DEBUG] ranking column (query_excel) = "
+        f"{(parsed.get('ranking') or {}).get('column')}",
+        flush=True,
+    )
 
     # Surface ambiguity immediately — do NOT silently execute
     if parsed["ambiguous_items"]:
