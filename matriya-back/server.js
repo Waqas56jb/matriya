@@ -1708,6 +1708,106 @@ async function fetchLabDataFromManagementApi() {
 }
 
 /**
+ * GET /api/lab/debug
+ * Diagnostic endpoint: runs full Supabase→CSV→Python pipeline and reports at each step.
+ * Returns rows_before, rows_after, columns, expansion_ratio stats, and sample row.
+ */
+app.get('/api/lab/debug', requireAuth, async (req, res) => {
+  const report = { steps: [] };
+  const step = (name, data) => { report.steps.push({ step: name, ...data }); };
+
+  // Step 1: fetch from managment-back export
+  const managementBase = settings.MATRIYA_MANAGEMENT_API_URL || '';
+  step('1_config', { management_base: managementBase || 'NOT SET', active_excel: _activeLabExcel || 'none' });
+
+  let rows = [];
+  if (managementBase) {
+    try {
+      const resp = await axios.get(`${managementBase}/api/matriya/lab-experiments-export`, {
+        headers: {
+          'Accept': 'application/json',
+          ...(settings.MATRIYA_MANAGEMENT_MATERIALS_KEY
+            ? { 'X-Matriya-Materials-Key': settings.MATRIYA_MANAGEMENT_MATERIALS_KEY }
+            : {}),
+        },
+        timeout: 15000,
+      });
+      rows = resp.data?.experiments || [];
+      const nullExp = rows.filter(r => r.expansion_ratio == null).length;
+      const nullApp = rows.filter(r => r.APP == null).length;
+      const nullAppPer = rows.filter(r => r['APP:PER'] == null).length;
+      step('2_supabase_fetch', {
+        rows_fetched: rows.length,
+        source: resp.data?.source || 'unknown',
+        expansion_ratio_nulls: `${nullExp}/${rows.length}`,
+        APP_nulls: `${nullApp}/${rows.length}`,
+        'APP:PER_nulls': `${nullAppPer}/${rows.length}`,
+        sample_row: rows[0] || null,
+      });
+    } catch (e) {
+      step('2_supabase_fetch', { error: e.message, rows_fetched: 0 });
+    }
+  } else {
+    step('2_supabase_fetch', { skipped: 'MATRIYA_MANAGEMENT_API_URL not set' });
+  }
+
+  // Step 2: build CSV and count non-empty expansion_ratio values
+  if (rows.length > 0) {
+    const cols = ['experiment_id','project_id','APP','PER','MEL','APP:PER','IFR',
+                  'Nanoclay','expansion_ratio','char_quality','adhesion','viscosity','status','formula'];
+    const escapeVal = v => { if (v == null) return ''; const s = String(v); return s.includes(',') || s.includes('"') ? `"${s.replace(/"/g,'""')}"` : s; };
+    const csvLines = [cols.join(','), ...rows.map(r => cols.map(c => escapeVal(r[c])).join(','))];
+    const csvPreview = csvLines.slice(0, 4).join('\n');
+    const nonEmptyExp = rows.filter(r => r.expansion_ratio != null && !isNaN(Number(r.expansion_ratio))).length;
+    step('3_csv_build', {
+      rows_in_csv: rows.length,
+      expansion_ratio_with_value: nonEmptyExp,
+      expansion_ratio_empty: rows.length - nonEmptyExp,
+      csv_header: csvLines[0],
+      csv_preview_3_rows: csvPreview,
+    });
+  }
+
+  // Step 3: run Python pipeline with test query
+  if (rows.length > 0 || _activeLabExcel) {
+    try {
+      const csvPath = await fetchLabDataFromManagementApi();
+      const dataFile = csvPath || _activeLabExcel;
+      if (dataFile) {
+        const pyResult = await runSciencePython(['query', dataFile, 'expansion_ratio >= 0', 'Formulation Data', 'DEBUG-001']);
+        if (csvPath) { try { unlinkSync(csvPath); } catch (_) {} }
+        step('4_python_query', {
+          test_query: 'expansion_ratio >= 0',
+          decision: pyResult.decision,
+          matched_rows: pyResult.evidence?.matched_rows,
+          total_rows: pyResult.evidence?.total_rows,
+          columns_detected: pyResult.evidence?.columns_returned,
+          filters_applied: pyResult.evidence?.filters_applied,
+          filters_failed: pyResult.evidence?.filters_failed,
+          sample_result: (pyResult.evidence?.result_preview || [])[0] || null,
+          warnings: pyResult.warnings,
+        });
+      } else {
+        step('4_python_query', { skipped: 'no data file available' });
+      }
+    } catch (e) {
+      step('4_python_query', { error: e.message });
+    }
+  }
+
+  return res.json({
+    ok: true,
+    summary: {
+      rows_from_supabase: rows.length,
+      expansion_ratio_populated: rows.filter(r => r.expansion_ratio != null).length,
+      active_excel: _activeLabExcel || null,
+      management_api_configured: !!managementBase,
+    },
+    steps: report.steps,
+  });
+});
+
+/**
  * Runs the science query pipeline (Python table_query_engine_final.py) and
  * formats the result as a MATRIYA-compatible search response for the frontend.
  *
@@ -1723,7 +1823,13 @@ async function handleScienceQueryFlow(req, res, { query }) {
     if (!dataFile) {
       dataFile = _activeLabExcel;
     }
-    console.log("ACTIVE DATASET:", dataFile, "| source:", dataSource);
+    // ── STEP TRACKING ────────────────────────────────────────────────────────
+    console.log(`[LAB PIPELINE] STEP-A: data_source=${dataSource} | file=${dataFile || 'NULL'}`);
+    console.log(`[LAB PIPELINE] STEP-B: query="${query}"`);
+    if (!dataFile) {
+      console.log('[LAB PIPELINE] STEP-A FAIL: no data file — both Supabase and Excel fallback are null');
+    }
+    // ────────────────────────────────────────────────────────────────────────
 
     const result = await runSciencePython([
       'query',
@@ -1737,6 +1843,13 @@ async function handleScienceQueryFlow(req, res, { query }) {
     if (dataSource === 'SUPABASE_LIVE') {
       try { unlinkSync(dataFile); } catch (_) {}
     }
+
+    // ── STEP TRACKING ────────────────────────────────────────────────────────
+    console.log(`[LAB PIPELINE] STEP-C: python_decision=${result.decision}`);
+    console.log(`[LAB PIPELINE] STEP-C: matched_rows=${result.evidence?.matched_rows} total_rows=${result.evidence?.total_rows}`);
+    console.log(`[LAB PIPELINE] STEP-C: result_preview_length=${(result.evidence?.result_preview || []).length}`);
+    console.log(`[LAB PIPELINE] STEP-C: warnings=${JSON.stringify(result.warnings || [])}`);
+    // ────────────────────────────────────────────────────────────────────────
 
     logger.info(`[science-routing] query="${query}" decision=${result.decision}`);
 
