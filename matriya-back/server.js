@@ -1901,14 +1901,10 @@ async function handleScienceQueryFlow(req, res, { query }) {
     const matchedRows = evidence.matched_rows ?? rows.length;
 
     // ── DIAGNOSTIC ───────────────────────────────────────────────────────────
-    console.log("QUERY RESULT decision:", result.decision);
-    console.log("MATCHED ROWS:", matchedRows);
-    console.log("RESULT_PREVIEW length:", rows.length);
-    if (rows.length > 0) {
-      console.log("RESULT_PREVIEW[0]:", JSON.stringify(rows[0]));
-    } else {
-      console.log("RESULT_PREVIEW: EMPTY — rows lost between Python and Node");
-    }
+    console.log("[science] decision:", result.decision,
+                "| matched:", matchedRows, "| preview_rows:", rows.length);
+    // Log every row object so field presence can be verified in Railway logs
+    rows.forEach((r, i) => console.log(`[science] row[${i}]:`, JSON.stringify(r)));
     // ────────────────────────────────────────────────────────────────────────
     const countResult = evidence.count_result;
     const isCount = countResult !== undefined && countResult !== null;
@@ -1973,19 +1969,23 @@ async function handleScienceQueryFlow(req, res, { query }) {
       matched_rows: matchedRows,
       total_rows: evidence.total_rows,
       count_result: countResult,
-      rows: rows.slice(0, 20),
+      // Full unmodified result rows — no positional or count truncation.
+      // Display layers (answer text, sources) may subset for readability,
+      // but this field is the ground truth from the Python engine.
+      rows,
       columns: evidence.columns_returned || [],
       parse_confidence: result.parse_confidence,
       filters_applied: evidence.filters_applied || [],
       audit_trace: result.audit_trace || {},
       warnings: result.warnings || [],
-      sources: rows.slice(0, 10).map(r => ({
-        content: Object.entries(r).filter(([,v]) => v != null).map(([k, v]) => `${k}: ${v}`).join(' | '),
+      // sources and results use formatRow so all non-null fields are preserved
+      sources: rows.map(r => ({
+        content: formatRow(r),
         metadata: { source: 'lab_data', routing: 'science_query_engine', experiment_id: r.experiment_id || null },
         score: 1.0,
       })),
-      results: rows.slice(0, 10).map(r => ({
-        content: Object.entries(r).filter(([,v]) => v != null).map(([k, v]) => `${k}: ${v}`).join(' | '),
+      results: rows.map(r => ({
+        content: formatRow(r),
         metadata: { source: 'lab_data', routing: 'science_query_engine' },
         score: 1.0,
       })),

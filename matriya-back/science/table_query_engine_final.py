@@ -623,7 +623,9 @@ def execute_query(df: pd.DataFrame, parsed: dict) -> dict:
         evidence["count_result"] = matched
         evidence["count_note"] = f"{matched} rows match the query out of {total} total"
     else:
-        evidence["result_preview"] = result_df.head(10).to_dict(orient="records")
+        # Full result rows — no positional cap. The Node.js layer is responsible
+        # for display limits; the data contract requires unmodified rows here.
+        evidence["result_preview"] = result_df.to_dict(orient="records")
         evidence["columns_returned"] = list(result_df.columns)
 
     return {
