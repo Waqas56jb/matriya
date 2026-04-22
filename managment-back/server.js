@@ -1026,32 +1026,40 @@ async function _saveAttachmentRow(projectId, emailId, fileRow, buffer, safeName,
     // ── Schedule OpenAI vector store sync ──────────────────────────────────
     scheduleOpenAiVectorSyncForProject(projectId, 'email/attachment', fileRow.id);
 
-    // ── POST to MATRIYA /ingest/file (main RAG — David requirement) ────────
-    // This is what makes MATRIYA able to answer "what does the attached document say?"
+    // ── Route to MATRIYA based on file type (David M3 requirement) ─────────
+    // Excel / CSV → /ingest/excel  (lab pipeline + schema normalisation)
+    // Documents   → /ingest/file   (RAG text chunking)
     if (MATRIYA_BACK_URL) {
       setImmediate(async () => {
         try {
+          const ext = (originalName || '').split('.').pop().toLowerCase();
+          const isLabFile = ['xlsx', 'xls', 'csv'].includes(ext);
+          const endpoint  = isLabFile ? '/ingest/excel' : '/ingest/file';
+
           const fd = new FormData();
-          // Node.js 18+ has native FormData + Blob
           fd.append('file', new Blob([buffer], { type: mime }), originalName);
-          const r = await fetch(`${MATRIYA_BACK_URL}/ingest/file`, {
+          const r = await fetch(`${MATRIYA_BACK_URL}${endpoint}`, {
             method: 'POST',
             body: fd,
-            signal: AbortSignal.timeout(60000),
+            signal: AbortSignal.timeout(90000),
           });
           if (r.ok) {
             const result = await r.json().catch(() => ({}));
-            console.info(`[email-attachment] MATRIYA /ingest/file OK: ${originalName} chunks=${result.chunks_stored ?? '?'}`);
+            if (isLabFile) {
+              console.info(`[email-attachment] MATRIYA /ingest/excel OK: ${originalName} rows=${result.rows_valid ?? '?'} schema_valid=${result.schema_valid}`);
+            } else {
+              console.info(`[email-attachment] MATRIYA /ingest/file OK: ${originalName} chunks=${result.chunks_stored ?? '?'}`);
+            }
           } else {
             const errBody = await r.text().catch(() => '');
-            console.warn(`[email-attachment] MATRIYA /ingest/file ${r.status} for ${originalName}: ${errBody.slice(0, 200)}`);
+            console.warn(`[email-attachment] MATRIYA ${endpoint} ${r.status} for ${originalName}: ${errBody.slice(0, 200)}`);
           }
         } catch (e) {
-          console.warn(`[email-attachment] MATRIYA /ingest/file error: ${e.message}`);
+          console.warn(`[email-attachment] MATRIYA ingest error: ${e.message}`);
         }
       });
     } else {
-      console.warn('[email-attachment] MATRIYA_BACK_URL not set — skipping /ingest/file call');
+      console.warn('[email-attachment] MATRIYA_BACK_URL not set — skipping ingest call');
     }
     // ────────────────────────────────────────────────────────────────────────
 

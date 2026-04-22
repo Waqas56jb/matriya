@@ -7,7 +7,7 @@ import multer from 'multer';
 import { Op } from 'sequelize';
 import { fileURLToPath } from 'url';
 import path, { dirname, join } from 'path';
-import { existsSync, mkdirSync, unlinkSync } from 'fs';
+import { existsSync, mkdirSync, unlinkSync, readdirSync, writeFileSync, readFileSync, copyFileSync } from 'fs';
 import settings from './config.js';
 import RAGService from './ragService.js';
 import { initDb, SearchHistory, ResearchSession, ResearchAuditLog, PolicyAuditLog, DecisionAuditLog, NoiseEvent, IntegrityCycleSnapshot, Experiment, EXPERIMENT_OUTCOMES } from './database.js';
@@ -755,6 +755,115 @@ app.post("/ingest/file", upload.single('file'), async (req, res) => {
 });
 
 /**
+ * POST /ingest/excel
+ *
+ * Route for Excel / CSV attachments sent by managment-back when an email arrives
+ * with a spreadsheet attached.  Unlike /ingest/file (which chunks text into RAG),
+ * this endpoint:
+ *   1. Saves the file to lab_data/ so it persists across restarts.
+ *   2. Validates the schema via the Python data_adapter (normalises APP_pct → APP:PER etc.)
+ *   3. Sets the file as the ACTIVE lab dataset so all science queries use it.
+ *   4. Optionally also ingests a human-readable summary text block into RAG so
+ *      document-mode questions ("how many experiments?") still work.
+ *
+ * Returns: { ok, filename, rows_valid, canonical_columns, schema_valid, active_lab_excel }
+ */
+app.post("/ingest/excel", upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file provided' });
+
+  const file = req.file;
+  let originalFilename = Buffer.isBuffer(file.originalname)
+    ? file.originalname.toString('utf-8')
+    : String(file.originalname || 'data.xlsx');
+  originalFilename = repairUtf8MisdecodedAsLatin1(originalFilename);
+
+  const fileExt = path.extname(originalFilename).toLowerCase();
+  if (!['.xlsx', '.xls', '.csv'].includes(fileExt)) {
+    try { if (existsSync(file.path)) unlinkSync(file.path); } catch (_) {}
+    return res.status(400).json({ error: `File must be Excel (.xlsx, .xls) or CSV (.csv). Got: ${fileExt}` });
+  }
+
+  // Persist to lab_data/ so the file survives restarts and is accessible to Python.
+  const destFilename = `${Date.now()}_${originalFilename.replace(/[^a-z0-9._\-]/gi, '_')}`;
+  const destPath = join(_labDataDir, destFilename);
+  try {
+    copyFileSync(file.path, destPath);
+  } catch (copyErr) {
+    logger.error(`[ingest/excel] copy to lab_data failed: ${copyErr.message}`);
+    return res.status(500).json({ error: `Failed to persist lab file: ${copyErr.message}` });
+  } finally {
+    try { if (existsSync(file.path)) unlinkSync(file.path); } catch (_) {}
+  }
+
+  // Validate schema + get stats via Python data_adapter.
+  let validateResult = null;
+  try {
+    validateResult = await runSciencePython(['validate', destPath, '0']);
+  } catch (pyErr) {
+    logger.warn(`[ingest/excel] Python validation error (non-fatal): ${pyErr.message}`);
+  }
+
+  const schemaValid  = validateResult?.schema_valid ?? false;
+  const rowsValid    = validateResult?.rows_valid   ?? 0;
+  const columns      = validateResult?.canonical_columns ?? [];
+  const columnStats  = validateResult?.column_stats ?? {};
+
+  // Activate as the lab dataset regardless of schema warnings (dataset may still be queryable).
+  _activeLabExcel = destPath;
+  try { writeFileSync(_labActiveFile, destPath, 'utf8'); } catch (_) {}
+  logger.info(`[ingest/excel] activated lab dataset: ${originalFilename} | rows=${rowsValid} | schema_valid=${schemaValid} | path=${destPath}`);
+
+  // Optionally index a text summary into RAG so document-mode queries are aware of the dataset.
+  if (schemaValid && rowsValid > 0) {
+    setImmediate(async () => {
+      try {
+        const statLines = Object.entries(columnStats)
+          .map(([col, s]) => `  ${col}: min=${s.min}, max=${s.max}, mean=${s.mean}, n=${s.n_valid}`)
+          .join('\n');
+        const summaryText = [
+          `Lab dataset: ${originalFilename}`,
+          `Rows: ${rowsValid}`,
+          `Columns: ${columns.join(', ')}`,
+          `Column statistics:`,
+          statLines,
+          '',
+          'This dataset contains structured experimental (formulation) data.',
+          'For precise numeric queries (e.g. "expansion ratio > 10") use the Science Query Engine.',
+        ].join('\n');
+
+        const summaryFilename = `lab-summary-${destFilename.replace(/\.[^.]+$/, '')}.txt`;
+        const summaryPath = join(_labDataDir, summaryFilename);
+        writeFileSync(summaryPath, summaryText, 'utf8');
+        const ragService = getRagService();
+        await ragService.ingestFile(summaryPath, summaryFilename);
+        try { unlinkSync(summaryPath); } catch (_) {}
+        logger.info(`[ingest/excel] RAG summary indexed for ${originalFilename}`);
+      } catch (ragErr) {
+        logger.warn(`[ingest/excel] RAG summary indexing failed (non-fatal): ${ragErr.message}`);
+      }
+    });
+  }
+
+  return res.json({
+    ok: true,
+    filename: originalFilename,
+    path: destPath,
+    rows_valid: rowsValid,
+    canonical_columns: columns,
+    column_stats: columnStats,
+    schema_valid: schemaValid,
+    active_lab_excel: destPath,
+    message: schemaValid
+      ? `Lab dataset loaded: ${rowsValid} experiments, ${columns.length} columns`
+      : `File saved but schema validation had issues. Science queries may return limited results.`,
+    validation: validateResult ? {
+      missing_required: validateResult.missing_required,
+      adapter_warnings: validateResult.adapter_warnings,
+    } : null,
+  });
+});
+
+/**
  * Ingest all supported files from a directory
  * 
  * Returns:
@@ -837,8 +946,29 @@ app.post('/integration/email-received', async (req, res) => {
 // ─────────────────────────────────────────────────────────
 import { spawn } from 'child_process';
 
-const _scienceDir = join(dirname(fileURLToPath(import.meta.url)), 'science');
-const _defaultExcel = join(dirname(fileURLToPath(import.meta.url)), 'MATRIYA_Experiment_Template-1.xlsx');
+const _scienceDir   = join(dirname(fileURLToPath(import.meta.url)), 'science');
+const _builtinExcel = join(dirname(fileURLToPath(import.meta.url)), 'MATRIYA_Experiment_Template-1.xlsx');
+
+// Persistent lab dataset directory — uploaded Excel/CSV files land here.
+// The most recently ingested file becomes the active lab dataset for science queries.
+const _labDataDir = join(dirname(fileURLToPath(import.meta.url)), 'lab_data');
+const _labActiveFile = join(_labDataDir, '_active.txt');
+try { mkdirSync(_labDataDir, { recursive: true }); } catch (_) {}
+
+/**
+ * Mutable path to the active lab Excel/CSV dataset.
+ * Initialised from _active.txt (written on each /ingest/excel call) so it
+ * survives server restarts. Falls back to the bundled template.
+ */
+let _activeLabExcel = (() => {
+  try {
+    if (existsSync(_labActiveFile)) {
+      const p = readFileSync(_labActiveFile, 'utf8').trim();
+      if (p && existsSync(p)) { logger.info(`[lab-data] restored active dataset: ${p}`); return p; }
+    }
+  } catch (_) {}
+  return _builtinExcel;
+})();
 
 /**
  * Spawn Python science runner and resolve with parsed JSON output.
@@ -883,7 +1013,7 @@ app.post('/science/query', requireAuth, async (req, res) => {
     if (!query || !String(query).trim()) {
       return res.status(400).json({ error: 'query is required' });
     }
-    const excelPath = filepath || _defaultExcel;
+    const excelPath = filepath || _activeLabExcel;
     const sheet     = sheet_name || 'Formulation Data';
     const caseId    = case_id   || `QUERY-${Date.now()}`;
     const result    = await runSciencePython(['query', excelPath, query, sheet, caseId]);
@@ -950,7 +1080,7 @@ app.get('/science/tests', requireAuth, async (req, res) => {
  */
 app.get('/science/validate', requireAuth, async (req, res) => {
   try {
-    const filepath = req.query.filepath || _defaultExcel;
+    const filepath = req.query.filepath || _activeLabExcel;
     const result   = await runSciencePython(['validate', filepath, '0']);
     logger.info(`[science/validate] tests_passed=${result.tests_passed}/${result.total_tests}`);
     return res.json(result);
@@ -1348,7 +1478,7 @@ async function handleScienceQueryFlow(req, res, { query }) {
   try {
     const result = await runSciencePython([
       'query',
-      _defaultExcel,
+      _activeLabExcel,
       query,
       'Formulation Data',
       `QUERY-${Date.now()}`
