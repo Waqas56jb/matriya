@@ -1913,23 +1913,43 @@ async function handleScienceQueryFlow(req, res, { query }) {
     const countResult = evidence.count_result;
     const isCount = countResult !== undefined && countResult !== null;
 
-    // Build human-readable answer — shown as the assistant message in the chat
+    // Build human-readable answer — shown as the assistant message in the chat.
+    // COLUMN ORDER: result_preview rows come from Python in CSV column order:
+    // experiment_id(0) project_id(1) APP(2) PER(3) MEL(4) APP:PER(5) IFR(6) Nanoclay(7) expansion_ratio(8) ...
+    // We must NOT slice by position — always show ALL non-null fields.
+    // Priority columns appear first so key results are never cut off.
+    const PRIORITY_COLS = ['experiment_id', 'expansion_ratio', 'adhesion', 'viscosity',
+                           'char_quality', 'APP:PER', 'IFR', 'APP', 'PER', 'MEL', 'Nanoclay', 'status'];
+    const formatRow = (r) => {
+      const prioritized = PRIORITY_COLS
+        .filter(k => r[k] != null)
+        .map(k => {
+          const v = r[k];
+          return `${k}: ${typeof v === 'number' ? Number(v.toFixed(4)).toString() : v}`;
+        });
+      const rest = Object.entries(r)
+        .filter(([k, v]) => v != null && !PRIORITY_COLS.includes(k) && k !== 'project_id')
+        .map(([k, v]) => `${k}: ${typeof v === 'number' ? Number(v.toFixed(4)).toString() : v}`);
+      return [...prioritized, ...rest].join(' | ');
+    };
+
     let answer;
     if (isCount) {
       answer = `Found ${countResult} experiment${countResult !== 1 ? 's' : ''} matching: "${query}".`;
     } else if (rows.length === 0) {
-      answer = `Query matched ${matchedRows} rows but result preview is empty. Check Railway logs for pipeline details.`;
+      answer = `No rows matched the query "${query}". Filters were applied but returned 0 results.\n` +
+        `Warnings: ${(result.warnings || []).join('; ') || 'none'}\n` +
+        `Filters applied: ${(evidence.filters_applied || []).map(f => `${f.column} ${f.operator} ${f.value}`).join(', ') || 'none'}\n` +
+        `Filters failed: ${(evidence.filters_failed || []).map(f => `${f.column}: ${f.error}`).join(', ') || 'none'}`;
     } else {
-      const colList = (evidence.columns_returned || []).slice(0, 8).join(', ');
-      const rowLines = rows.slice(0, 10).map((r, i) => {
-        const fields = Object.entries(r)
-          .filter(([, v]) => v != null)
-          .slice(0, 8)
-          .map(([k, v]) => `${k}: ${typeof v === 'number' ? v.toFixed(2).replace(/\.?0+$/, '') : v}`)
-          .join(' | ');
-        return `  [${i + 1}] ${fields}`;
-      }).join('\n');
-      answer = `Found ${matchedRows} experiment${matchedRows !== 1 ? 's' : ''}${evidence.total_rows ? ` out of ${evidence.total_rows} total` : ''} matching: "${query}"\n` +
+      const colList = (evidence.columns_returned || [])
+        .filter(c => c !== 'project_id')
+        .join(', ');
+      const rowLines = rows.slice(0, 10).map((r, i) =>
+        `  [${i + 1}] ${formatRow(r)}`
+      ).join('\n');
+      answer = `Found ${matchedRows} experiment${matchedRows !== 1 ? 's' : ''}` +
+        `${evidence.total_rows ? ` out of ${evidence.total_rows} total` : ''} matching: "${query}"\n` +
         `Columns: ${colList || 'see rows below'}\n\n` +
         `Results:\n${rowLines}`;
     }

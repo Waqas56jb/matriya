@@ -585,7 +585,23 @@ def execute_query(df: pd.DataFrame, parsed: dict) -> dict:
         except Exception as e:
             failed.append({**f, "error": str(e)})
 
+    # ── DATASET CONSISTENCY CHECK (David request) ──────────────────────────────
+    # Verify id(df) is the same object used for filtering and for result_df.
+    # This confirms no reload or re-mapping happened between filter and return.
+    print(f"[execute_query] id(df)_before_result={id(df)} | mask_true_count={int(mask.sum())} | df_len={len(df)}",
+          file=_sqsys.stderr, flush=True)
     result_df = df[mask]
+    print(f"[execute_query] id(df)_after={id(df)} | id(result_df)={id(result_df)} | result_df_len={len(result_df)}",
+          file=_sqsys.stderr, flush=True)
+    # Log actual expansion_ratio values in result_df to confirm filter correctness
+    if 'expansion_ratio' in result_df.columns:
+        er_vals = result_df['expansion_ratio'].tolist()
+        print(f"[execute_query] result_df expansion_ratio values: {er_vals}", file=_sqsys.stderr, flush=True)
+    # Log first result row completely
+    if len(result_df) > 0:
+        print(f"[execute_query] result_df[0]: {result_df.iloc[0].to_dict()}", file=_sqsys.stderr, flush=True)
+    # ────────────────────────────────────────────────────────────────────────────
+
     matched = len(result_df)
     total = len(df)
 
