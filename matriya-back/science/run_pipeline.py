@@ -30,6 +30,12 @@ from fsctm_state import run_tests as run_fsctm_tests
 from domain_priors import run_tests as run_dp_tests
 from matriya_pipeline import run_tests as run_pipeline_tests
 from data_adapter import load_and_adapt
+from document_guard import (
+    run_tests as run_guard_tests,
+    classify_document, guard_response, check_metric_contamination,
+)
+from lab_schema_normalizer import run_tests as run_normalizer_tests
+from lab_connector import run_tests as run_connector_tests
 
 
 def _out(obj):
@@ -146,6 +152,35 @@ def cmd_boundary(args):
     _out(result)
 
 
+def cmd_guard_text(args):
+    """
+    Check a text string for forbidden metric contamination.
+    Usage: guard_text <text>
+    Returns guard_response JSON (action: ALLOW | SANITIZE | BLOCK).
+    """
+    if not args:
+        _out({"error": "Usage: guard_text <text>"})
+        sys.exit(1)
+    text   = " ".join(args)
+    result = guard_response(text)
+    _out(result)
+
+
+def cmd_classify_doc(args):
+    """
+    Classify a document into a domain using filename + optional content preview.
+    Usage: classify_doc <filename> [content_preview]
+    Returns: {domain, confidence, reason, allowed_in_lab_queries}
+    """
+    if not args:
+        _out({"error": "Usage: classify_doc <filename> [content_preview]"})
+        sys.exit(1)
+    filename = args[0]
+    preview  = " ".join(args[1:]) if len(args) > 1 else ""
+    result   = classify_document(filename, preview)
+    _out(result)
+
+
 def cmd_test(_args):
     """Run all module unit tests and report results."""
     results = {}
@@ -153,12 +188,15 @@ def cmd_test(_args):
     total_failed = 0
 
     modules = [
-        ("table_query_engine", run_tqe_tests),
+        ("table_query_engine",  run_tqe_tests),
         ("experimental_schema", run_schema_tests),
         ("decision_rule_engine", run_dre_tests),
-        ("fsctm_state", run_fsctm_tests),
-        ("domain_priors", run_dp_tests),
-        ("matriya_pipeline", run_pipeline_tests),
+        ("fsctm_state",         run_fsctm_tests),
+        ("domain_priors",       run_dp_tests),
+        ("matriya_pipeline",    run_pipeline_tests),
+        ("document_guard",      run_guard_tests),
+        ("lab_schema_normalizer", run_normalizer_tests),
+        ("lab_connector",       run_connector_tests),
     ]
 
     for name, fn in modules:
@@ -348,11 +386,13 @@ def cmd_sheets(args):
 
 
 COMMANDS = {
-    "query":    cmd_query,
-    "boundary": cmd_boundary,
-    "test":     cmd_test,
-    "validate": cmd_validate,
-    "sheets":   cmd_sheets,
+    "query":        cmd_query,
+    "boundary":     cmd_boundary,
+    "test":         cmd_test,
+    "validate":     cmd_validate,
+    "sheets":       cmd_sheets,
+    "guard_text":   cmd_guard_text,
+    "classify_doc": cmd_classify_doc,
 }
 
 if __name__ == "__main__":

@@ -1294,9 +1294,27 @@ app.post("/ask-matriya", requireAuth, askMatriyaMulter, async (req, res) => {
   // Full-document context in the chat prompt (no vector / file_search RAG for this route).
   let fileContext = '';
   let contextHasSpreadsheet = false;
-  if (filenames.length > 0) {
+
+  // ── PRE-RETRIEVAL DOCUMENT GUARD ──────────────────────────────────────────
+  // Classify each requested filename and block UNRELATED domain docs
+  // (e.g. Final Project Report.pdf with ML metrics) from contaminating
+  // lab/formulation experiment responses. LAB_FORMULATION files pass through;
+  // UNKNOWN files also pass (conservative — only clear unrelated docs blocked).
+  const isLabFormulationQuery = /\b(formulation|intumescent|experiment|expansion|char|app.?per|ifr|coating|binder|fire)\b/i.test(message);
+  let filteredFilenames = filenames;
+  if (isLabFormulationQuery && filenames.length > 0) {
+    filteredFilenames = filterFilenamesByDomain(filenames, 'LAB_FORMULATION');
+    if (filteredFilenames.length === 0) {
+      // All files were blocked — fall back to using all files to avoid empty context
+      logger.warn('[document-guard] All files blocked by domain filter — falling back to unfiltered list');
+      filteredFilenames = filenames;
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
+  if (filteredFilenames.length > 0) {
     const rag = getRagService();
-    for (const fn of filenames) {
+    for (const fn of filteredFilenames) {
       if (fileContext.length >= MAX_FILE_CONTEXT_CHARS) break;
       const text = await loadIndexedTextForAskMatriya(rag, fn);
       if (text) {
@@ -1388,12 +1406,24 @@ ${fileContext}`
         timeout: 60000
       }
     );
-    const reply = response.data?.choices?.[0]?.message?.content?.trim() || "";
+    let reply = response.data?.choices?.[0]?.message?.content?.trim() || "";
     logger.info(
       `[ask-matriya routing] response path=DOCUMENTS | spreadsheetMode=${spreadsheetMode} file_context_chars=${String(fileContext || '').length} reply_chars=${reply.length}`
     );
-    // Ask Matriya: no RAG fail-safe sanitizer — the model already sees full document text in the system message.
-    return res.json({ reply, sources: [] });
+
+    // ── POST-RESPONSE DOCUMENT GUARD ─────────────────────────────────────────
+    // Check for forbidden ML metric contamination (F1-score, MCC, etc.)
+    // These must never appear in formulation/experiment design responses.
+    const guardResult = guardResponseText(reply);
+    if (guardResult.contaminated) {
+      logger.warn(
+        `[document-guard] Post-response contamination detected: ${guardResult.violations.slice(0, 3).join(', ')} — sanitizing reply`
+      );
+      reply = guardResult.sanitized_text;
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    return res.json({ reply, sources: [], guard_action: guardResult.action });
   } catch (e) {
     const upstream = e.response?.status;
     const msg = e.response?.data?.error?.message || e.message || "OpenAI request failed";
@@ -1431,6 +1461,79 @@ function normalizeQueryText(q) {
     .trim()
     .replace(/\s+/g, ' ')
     .toLowerCase();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DOCUMENT GUARD — Index separation + metric contamination control
+// Prevents cross-domain contamination: unrelated docs (e.g. Final Project
+// Report.pdf with ML metrics) are blocked from lab/formulation queries.
+// Mirrors document_guard.py but runs inline without a Python subprocess.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const _LAB_FILENAME_KEYS  = ["formulation", "intumescent", "corrosion", "experiment", "lab", "int-tfx", "ifr", "fresco", "barnacle", "bio-001", "corr-001"];
+const _MATR_FILENAME_KEYS = ["matriya", "kernel", "handover", "developer", "fsctm", "scope", "rachel", "report.txt"];
+
+/** Classify a document filename into its domain (fast, no subprocess). */
+function classifyDocumentDomain(filename) {
+  const f = String(filename || '').toLowerCase();
+  if (_LAB_FILENAME_KEYS.some(k => f.includes(k)))  return { domain: 'LAB_FORMULATION',  allowed: true  };
+  if (_MATR_FILENAME_KEYS.some(k => f.includes(k))) return { domain: 'MATRIYA_METHOD',   allowed: false };
+  return { domain: 'UNKNOWN', allowed: false };
+}
+
+/**
+ * Filter a list of filenames down to those allowed for a given query domain.
+ * For lab/formulation queries: only LAB_FORMULATION files are allowed.
+ * For general queries (UNKNOWN domain arg): all files pass through.
+ */
+function filterFilenamesByDomain(filenames, queryDomain = 'LAB_FORMULATION') {
+  if (!Array.isArray(filenames) || filenames.length === 0) return filenames;
+  const classified = filenames.map(fn => ({ fn, ...classifyDocumentDomain(fn) }));
+  const blocked = classified.filter(c => !c.allowed);
+  if (blocked.length > 0) {
+    logger.info(`[document-guard] Pre-retrieval filter: blocked ${blocked.length} non-lab file(s): ${blocked.map(c => `${c.fn}(${c.domain})`).join(', ')}`);
+  }
+  return classified.filter(c => c.allowed).map(c => c.fn);
+}
+
+// Forbidden ML metric terms that must not appear in lab/experiment outputs
+const _FORBIDDEN_METRIC_TERMS = [
+  "f1-score", "f1 score", "f1score",
+  "matthews correlation", "matthews corr",
+  "classification accuracy", "model accuracy", "test accuracy", "validation accuracy", "accuracy score",
+  "confusion matrix", "roc auc", "roc curve", "auc score",
+  "cross-validation", "cross validation", "k-fold", "kfold",
+  "overfitting", "underfitting", "train/test split", "hyperparameter",
+  "human activity recognition", "accelerometer", "gyroscope", "sensor fusion", "activity classification",
+];
+
+/**
+ * Scan response text for forbidden ML metric terms.
+ * Returns {contaminated, violations, sanitized_text}
+ */
+function guardResponseText(text) {
+  const lower = String(text || '').toLowerCase();
+  const violations = _FORBIDDEN_METRIC_TERMS.filter(term => lower.includes(term));
+  if (violations.length === 0) {
+    return { contaminated: false, violations: [], sanitized_text: text, action: 'ALLOW' };
+  }
+  // Sanitize: remove sentences containing forbidden terms
+  let sanitized = text;
+  for (const term of violations) {
+    const re = new RegExp(term.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&'), 'gi');
+    sanitized = sanitized.replace(re, '[METRIC_BLOCKED]');
+  }
+  const sentences = sanitized.split(/(?<=[.!?])\s+/);
+  const clean = sentences.map(s =>
+    s.includes('[METRIC_BLOCKED]') ? '[SENTENCE_REMOVED: irrelevant domain metric]' : s
+  );
+  return {
+    contaminated: true,
+    violations,
+    sanitized_text: clean.join(' '),
+    action: 'SANITIZE',
+    n_removed: violations.length,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1565,6 +1668,13 @@ async function handleScienceQueryFlow(req, res, { query }) {
         ).join('\n');
     }
 
+    // Post-response guard on science answer (blocks ML metrics in experiment outputs)
+    const sciGuard = guardResponseText(answer);
+    if (sciGuard.contaminated) {
+      logger.warn(`[document-guard] Science answer contamination: ${sciGuard.violations.slice(0, 3).join(', ')} — sanitizing`);
+      answer = sciGuard.sanitized_text;
+    }
+
     return res.status(200).json({
       query,
       flow: 'science',
@@ -1592,6 +1702,7 @@ async function handleScienceQueryFlow(req, res, { query }) {
       results_count: matchedRows,
       lab_bridge_invoked: true,
       document_rag_invoked: false,
+      guard_action: sciGuard.action,
     });
   } catch (e) {
     logger.error(`[science-routing] error: ${e.message}`);

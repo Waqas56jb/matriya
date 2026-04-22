@@ -202,11 +202,25 @@ CREATE TABLE IF NOT EXISTS public.material_library (
   project_id       text        NOT NULL,
   name             text        NOT NULL,
   role_or_function text,
-  created_at       timestamptz NOT NULL DEFAULT now()
+  created_at       timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (project_id, name)
 );
 
 -- ─────────────────────────────────────────────
--- 16. LAB EXPERIMENTS
+-- 16. RESEARCH SESSIONS (Supabase management layer)
+-- Used by managment-back /api/projects/:projectId/research-sessions
+-- Separate from matriya-back Sequelize research_sessions (FSCTM engine).
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS public.research_sessions (
+  id         uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id text        NOT NULL,
+  name       text,
+  started_at timestamptz NOT NULL DEFAULT now(),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- ─────────────────────────────────────────────
+-- 17. LAB EXPERIMENTS
 -- ─────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS public.lab_experiments (
   id                    uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -424,6 +438,21 @@ ALTER TABLE public.materials ADD COLUMN IF NOT EXISTS technology_domain text;
 -- material_library
 ALTER TABLE public.material_library ADD COLUMN IF NOT EXISTS project_id       text NOT NULL DEFAULT '';
 ALTER TABLE public.material_library ADD COLUMN IF NOT EXISTS role_or_function text;
+-- Add UNIQUE constraint required for upsert onConflict: 'project_id,name'
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'material_library_project_id_name_key'
+      AND conrelid = 'public.material_library'::regclass
+  ) THEN
+    ALTER TABLE public.material_library ADD CONSTRAINT material_library_project_id_name_key UNIQUE (project_id, name);
+  END IF;
+END $$;
+
+-- research_sessions
+ALTER TABLE public.research_sessions ADD COLUMN IF NOT EXISTS project_id text NOT NULL DEFAULT '';
+ALTER TABLE public.research_sessions ADD COLUMN IF NOT EXISTS name       text;
+ALTER TABLE public.research_sessions ADD COLUMN IF NOT EXISTS started_at timestamptz NOT NULL DEFAULT now();
 
 -- lab_experiments
 ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS experiment_version    integer     NOT NULL DEFAULT 1;
@@ -479,6 +508,8 @@ CREATE INDEX IF NOT EXISTS idx_notes_project           ON public.notes(project_i
 CREATE INDEX IF NOT EXISTS idx_audit_log_project       ON public.audit_log(project_id);
 CREATE INDEX IF NOT EXISTS idx_audit_log_created       ON public.audit_log(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_material_library_proj   ON public.material_library(project_id);
+CREATE INDEX IF NOT EXISTS idx_research_sessions_proj  ON public.research_sessions(project_id);
+CREATE INDEX IF NOT EXISTS idx_research_sessions_ts    ON public.research_sessions(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_lab_experiments_project ON public.lab_experiments(project_id);
 CREATE INDEX IF NOT EXISTS idx_lab_experiments_eid     ON public.lab_experiments(experiment_id);
 CREATE INDEX IF NOT EXISTS idx_import_log_project      ON public.import_log(project_id);
