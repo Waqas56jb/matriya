@@ -20,6 +20,7 @@ and does not pre-compute APP:PER or IFR.
 This adapter bridges the raw data format to the query engine schema.
 """
 
+import sys
 import pandas as pd
 from pathlib import Path
 
@@ -74,18 +75,37 @@ def load_and_adapt(filepath: str, sheet_index: int = 0) -> dict:
     raw_columns = list(df.columns)
     rows_loaded = len(df)
 
-    # Drop fully empty rows (template placeholders)
-    # A row is valid if experiment_id is present and at least one numeric col is filled
+    # ── STEP 1 DIAGNOSTIC ───────────────────────────────────────────────────
+    print(f"[data_adapter] STEP1 — RAW rows loaded: {rows_loaded}", file=sys.stderr, flush=True)
+    print(f"[data_adapter] STEP1 — RAW columns: {raw_columns}", file=sys.stderr, flush=True)
+    if rows_loaded > 0:
+        print(f"[data_adapter] STEP1 — RAW sample row: {df.iloc[0].to_dict()}", file=sys.stderr, flush=True)
+    # ────────────────────────────────────────────────────────────────────────
+
+    # Drop fully empty rows — keep a row if ANY known lab column has data.
+    # Previous bug: only APP/PER/APP:PER were checked, so rows with only
+    # expansion_ratio data were silently dropped.
+    ALL_LAB_CANDIDATES = [
+        "APP", "PER", "APP:PER", "MEL", "IFR", "Nanoclay",
+        "expansion_ratio", "adhesion", "viscosity",
+    ]
     if is_csv:
-        # Supabase CSV: already canonical — drop rows with no APP or APP:PER
-        numeric_candidates = [c for c in ["APP", "PER", "APP:PER"] if c in df.columns]
+        numeric_candidates = [c for c in ALL_LAB_CANDIDATES if c in df.columns]
     else:
         numeric_candidates = [c for c in ["APP_pct", "PER_pct", "MEL_pct"] if c in df.columns]
 
     if numeric_candidates:
+        before_drop = len(df)
         df = df.dropna(subset=numeric_candidates, how="all")
+        after_drop = len(df)
+        # ── STEP 2 DIAGNOSTIC ────────────────────────────────────────────────
+        print(f"[data_adapter] STEP2 — after dropna: {after_drop} rows (dropped {before_drop - after_drop})", file=sys.stderr, flush=True)
+        print(f"[data_adapter] STEP2 — dropna subset: {numeric_candidates}", file=sys.stderr, flush=True)
+        # ─────────────────────────────────────────────────────────────────────
     elif "experiment_id" in df.columns:
+        before_drop = len(df)
         df = df.dropna(subset=["experiment_id"])
+        print(f"[data_adapter] STEP2 — after experiment_id dropna: {len(df)} rows (was {before_drop})", file=sys.stderr, flush=True)
 
     rows_valid = len(df)
 
@@ -122,13 +142,23 @@ def load_and_adapt(filepath: str, sheet_index: int = 0) -> dict:
 
     # Coerce all numeric columns
     for col in ["APP", "PER", "MEL", "Nanoclay", "APP:PER", "IFR",
-                "expansion_ratio", "HRR_reduction_pct"]:
+                "expansion_ratio", "HRR_reduction_pct", "adhesion", "viscosity"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
     canonical_columns = list(df.columns)
     required = ["APP:PER", "IFR"]
     missing  = [c for c in required if c not in canonical_columns]
+
+    # ── STEP 3 DIAGNOSTIC ───────────────────────────────────────────────────
+    print(f"[data_adapter] STEP3 — FINAL df shape: {df.shape}", file=sys.stderr, flush=True)
+    print(f"[data_adapter] STEP3 — FINAL columns: {canonical_columns}", file=sys.stderr, flush=True)
+    if len(df) > 0:
+        print(f"[data_adapter] STEP3 — FINAL sample: {df.iloc[0].to_dict()}", file=sys.stderr, flush=True)
+    else:
+        print(f"[data_adapter] STEP3 — DF IS EMPTY — all rows were dropped!", file=sys.stderr, flush=True)
+    print(f"[data_adapter] STEP3 — expansion_ratio non-null: {df['expansion_ratio'].notna().sum() if 'expansion_ratio' in df.columns else 'N/A'}", file=sys.stderr, flush=True)
+    # ────────────────────────────────────────────────────────────────────────
 
     return {
         "df":                 df,

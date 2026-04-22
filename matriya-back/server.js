@@ -1688,9 +1688,18 @@ async function fetchLabDataFromManagementApi() {
     const lines = [header, ...rows.map(r => cols.map(c => escapeVal(r[c])).join(','))];
     const csv = lines.join('\n');
 
+    // ── DIAGNOSTIC: log normalized rows before writing CSV ───────────────────
+    console.log("NORMALIZED:", rows.length);
+    console.log("NORMALIZED SAMPLE:", JSON.stringify(rows[0]));
+    const nullExpCount = rows.filter(r => r.expansion_ratio == null).length;
+    const nullAppCount = rows.filter(r => r.APP == null).length;
+    console.log(`NORMALIZED — expansion_ratio nulls: ${nullExpCount}/${rows.length}, APP nulls: ${nullAppCount}/${rows.length}`);
+    // ─────────────────────────────────────────────────────────────────────────
+
     const csvPath = join(_labDataDir, `supabase_export_${Date.now()}.csv`);
     writeFileSync(csvPath, csv, 'utf8');
     logger.info(`[science-routing] fetched ${rows.length} rows from Supabase → ${csvPath}`);
+    console.log("CSV PATH:", csvPath);
     return csvPath;
   } catch (e) {
     logger.warn(`[science-routing] fetchLabDataFromManagementApi failed: ${e.message} — falling back to Excel`);
