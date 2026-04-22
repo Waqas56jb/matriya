@@ -222,6 +222,8 @@ export const projectFiles = {
     return r.data;
   },
   listSharepointBucket: (projectId) => api.get(`/api/projects/${projectId}/files/sharepoint-bucket`, { params: { _: Date.now() }, timeout: 60000 }).then(r => r.data),
+  /** List files directly from Microsoft Graph API (real SharePoint site). Credentials + site must be configured in Railway env. */
+  getSharepointFiles: (params = {}) => api.get('/api/sharepoint/files', { params, timeout: 30000 }).then(r => r.data),
   addFromBucket: (projectId, path, displayName, folderDisplayName) =>
     api.post(`/api/projects/${projectId}/files/from-bucket`, { path, displayName, folder_display_name: folderDisplayName || undefined }, { timeout: FILE_INGEST_TIMEOUT }).then(r => r.data),
   /** Register uploaded paths (e.g. after direct-to-bucket upload) into project_files and trigger Matriya indexing so they can be asked on. */

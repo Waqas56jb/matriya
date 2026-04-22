@@ -2594,9 +2594,15 @@ function RagTab({ projectId }) {
                 setSharepointBucketFiles(files);
                 setSharepointDisplayNamesMap(displayNamesMap);
                 setSharepointBucketLoading(false);
-                // Auto-expand "manual" so uploaded files (with Hebrew/English display names) are visible
+                // Auto-expand "manual" and "graph" folders so uploaded/SharePoint files are visible immediately
                 const hasManual = files.some(f => (f.path || '').startsWith('manual/'));
-                if (hasManual) setSharepointExpandedFolders(prev => new Set(prev).add('manual'));
+                const hasGraph  = files.some(f => (f.path || '').startsWith('graph/'));
+                setSharepointExpandedFolders(prev => {
+                  const next = new Set(prev);
+                  if (hasManual) next.add('manual');
+                  if (hasGraph)  next.add('graph');
+                  return next;
+                });
               }).catch(err => {
                 console.warn('[SharePoint decode] list failed:', err);
                 setSharepointBucketLoading(false); setSharepointBucketFiles([]); setSharepointDisplayNamesMap({});
@@ -2920,7 +2926,14 @@ function RagTab({ projectId }) {
                             setSharepointBucketFiles(files);
                             setSharepointDisplayNamesMap(d.displayNamesMap || {});
                             setSharepointBucketLoading(false);
-                            setSharepointExpandedFolders(prev => new Set(prev).add('manual'));
+                            const hasManual2 = files.some(f => (f.path || '').startsWith('manual/'));
+                            const hasGraph2  = files.some(f => (f.path || '').startsWith('graph/'));
+                            setSharepointExpandedFolders(prev => {
+                              const next = new Set(prev);
+                              if (hasManual2) next.add('manual');
+                              if (hasGraph2)  next.add('graph');
+                              return next;
+                            });
                           }).catch(() => setSharepointBucketLoading(false));
                         }
                       })

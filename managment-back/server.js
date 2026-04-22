@@ -47,9 +47,15 @@ const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.en
 const MATRIYA_BACK_URL = (process.env.MATRIYA_BACK_URL || '').replace(/\/$/, '');
 /** Optional: same value as MATRIYA_MANAGEMENT_MATERIALS_KEY on Matriya back — allows GET /api/matriya/projects-with-materials-summary without user JWT (server / curl / local dev). */
 const MANEGER_MATERIALS_SUMMARY_SERVER_KEY = (process.env.MANEGER_MATERIALS_SUMMARY_SERVER_KEY || '').trim();
-const SHAREPOINT_TENANT_ID = process.env.SHAREPOINT_TENANT_ID || '';
-const SHAREPOINT_CLIENT_ID = process.env.SHAREPOINT_CLIENT_ID || '';
-const SHAREPOINT_CLIENT_SECRET = process.env.SHAREPOINT_CLIENT_SECRET || '';
+// SharePoint / Microsoft Graph credentials.
+// Accepts both SHAREPOINT_* (legacy) and MICROSOFT_* (David M3 naming) env var conventions.
+const SHAREPOINT_TENANT_ID = process.env.SHAREPOINT_TENANT_ID || process.env.MICROSOFT_TENANT_ID || '';
+const SHAREPOINT_CLIENT_ID = process.env.SHAREPOINT_CLIENT_ID || process.env.MICROSOFT_CLIENT_ID || '';
+const SHAREPOINT_CLIENT_SECRET = process.env.SHAREPOINT_CLIENT_SECRET || process.env.MICROSOFT_CLIENT_SECRET || '';
+// Default SharePoint site for the /api/sharepoint/files listing endpoint.
+// Set SHAREPOINT_SITE_URL (e.g. https://tenant.sharepoint.com/sites/MySite) or SHAREPOINT_SITE_ID in Railway.
+const SHAREPOINT_SITE_URL = (process.env.SHAREPOINT_SITE_URL || '').trim();
+const SHAREPOINT_SITE_ID  = (process.env.SHAREPOINT_SITE_ID  || '').trim();
 const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || '').trim();
 const OPENAI_API_BASE = 'https://api.openai.com/v1';
 /** Model for GPT RAG (Responses API + file_search). */
@@ -4088,6 +4094,88 @@ app.post('/api/projects/:projectId/files/pull-sharepoint', limiterSharePoint, as
   }
 });
 
+/**
+ * GET /api/sharepoint/files
+ * List files directly from Microsoft Graph API (real SharePoint site).
+ *
+ * Credentials: SHAREPOINT_TENANT_ID + SHAREPOINT_CLIENT_ID + SHAREPOINT_CLIENT_SECRET
+ *              (also accepts MICROSOFT_TENANT_ID / MICROSOFT_CLIENT_ID / MICROSOFT_CLIENT_SECRET aliases)
+ * Default site: SHAREPOINT_SITE_URL or SHAREPOINT_SITE_ID env vars.
+ *              Override per-request via ?site_url=... or ?site_id=...
+ *
+ * Optional query params:
+ *   site_url      – full SharePoint site URL (e.g. https://tenant.sharepoint.com/sites/MySite)
+ *   site_id       – Graph site GUID
+ *   folder_path   – sub-folder path relative to drive root (e.g. "Documents/Reports")
+ *   drive_id      – specific drive GUID (defaults to the site's default drive)
+ */
+app.get('/api/sharepoint/files', requireAuth, async (req, res) => {
+  try {
+    if (!SHAREPOINT_TENANT_ID || !SHAREPOINT_CLIENT_ID || !SHAREPOINT_CLIENT_SECRET) {
+      return res.status(503).json({
+        error: 'SharePoint not configured. Add MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET, MICROSOFT_TENANT_ID (or SHAREPOINT_* equivalents) to Railway environment variables.',
+        configured: false,
+        missing: [
+          !SHAREPOINT_TENANT_ID && 'MICROSOFT_TENANT_ID (or SHAREPOINT_TENANT_ID)',
+          !SHAREPOINT_CLIENT_ID && 'MICROSOFT_CLIENT_ID (or SHAREPOINT_CLIENT_ID)',
+          !SHAREPOINT_CLIENT_SECRET && 'MICROSOFT_CLIENT_SECRET (or SHAREPOINT_CLIENT_SECRET)',
+        ].filter(Boolean),
+      });
+    }
+
+    const siteId   = (req.query.site_id    || SHAREPOINT_SITE_ID  || '').trim();
+    const siteUrl  = (req.query.site_url   || SHAREPOINT_SITE_URL || '').trim();
+    const folderPath = (req.query.folder_path || req.query.folder || '').trim();
+    const driveId  = (req.query.drive_id   || '').trim();
+
+    if (!siteId && !siteUrl) {
+      return res.status(400).json({
+        error: 'site_id or site_url is required. Provide as query param (?site_id=... or ?site_url=...) or set SHAREPOINT_SITE_ID / SHAREPOINT_SITE_URL in Railway environment variables.',
+      });
+    }
+
+    const token = await getGraphToken();
+    let resolvedSiteId = siteId;
+    if (!resolvedSiteId && siteUrl) {
+      resolvedSiteId = await getSiteIdFromUrl(siteUrl, token);
+    }
+    if (!resolvedSiteId) {
+      return res.status(400).json({ error: 'Could not resolve SharePoint site from the provided URL.' });
+    }
+
+    const drivePart = driveId
+      ? `https://graph.microsoft.com/v1.0/sites/${resolvedSiteId}/drives/${driveId}`
+      : `https://graph.microsoft.com/v1.0/sites/${resolvedSiteId}/drive`;
+    const folderPathEnc = folderPath.replace(/^\//, '').trim();
+    const listUrl = folderPathEnc
+      ? `${drivePart}/root:/${folderPathEnc}:/children`
+      : `${drivePart}/root/children`;
+
+    const listRes = await axios.get(listUrl, { headers: { Authorization: `Bearer ${token}` }, timeout: 20000 });
+    const items = listRes.data?.value || [];
+
+    const files = items.map(item => ({
+      id:           item.id,
+      name:         item.name,
+      displayName:  item.name,
+      // path format 'graph/{itemId}' is recognised by POST /files/from-bucket for download+ingest
+      path:         `graph/${item.id}`,
+      size:         item.size || 0,
+      type:         item.file ? 'file' : 'folder',
+      mimeType:     item.file?.mimeType || null,
+      lastModified: item.lastModifiedDateTime || null,
+      webUrl:       item.webUrl || null,
+      source:       'sharepoint_graph',
+    }));
+
+    return res.json({ files, site_id: resolvedSiteId, folder_path: folderPath, total: files.length, configured: true });
+  } catch (e) {
+    const msg = e.response?.data?.error?.message ?? e.message;
+    const status = e.response?.status || 500;
+    return res.status(status).json({ error: msg });
+  }
+});
+
 app.post('/api/projects/:projectId/files', limiterUpload, upload.single('file'), async (req, res) => {
   const projectId = req.params.projectId;
   const ctx = await requireProjectMember(req, res, projectId);
@@ -4474,7 +4562,39 @@ app.get('/api/projects/:projectId/files/sharepoint-bucket', async (req, res) => 
     if (dbRows.length > 0) {
       bucketListCache.byProject[projectId] = { displayNamesMap, safeDisplay, expiresAt: now + BUCKET_DISPLAY_NAMES_CACHE_TTL_MS };
     }
-    res.json({ files: withDisplay, displayNamesMap });
+
+    // Augment with live files from Microsoft Graph API (real SharePoint) when credentials + site are configured.
+    // Files appear under a top-level "graph" folder in the browser; clicking Add to Project downloads them.
+    let graphFiles = [];
+    if (SHAREPOINT_TENANT_ID && SHAREPOINT_CLIENT_ID && SHAREPOINT_CLIENT_SECRET && (SHAREPOINT_SITE_URL || SHAREPOINT_SITE_ID)) {
+      try {
+        const gToken = await getGraphToken();
+        let gSiteId = SHAREPOINT_SITE_ID;
+        if (!gSiteId && SHAREPOINT_SITE_URL) gSiteId = await getSiteIdFromUrl(SHAREPOINT_SITE_URL, gToken);
+        if (gSiteId) {
+          const gRes = await axios.get(
+            `https://graph.microsoft.com/v1.0/sites/${gSiteId}/drive/root/children`,
+            { headers: { Authorization: `Bearer ${gToken}` }, timeout: 20000 }
+          );
+          graphFiles = (gRes.data?.value || [])
+            .filter(item => item.file)
+            .map(item => ({
+              path:         `graph/${item.id}`,
+              name:         item.name,
+              displayName:  item.name,
+              size:         item.size || 0,
+              source:       'sharepoint_graph',
+              webUrl:       item.webUrl || null,
+              lastModified: item.lastModifiedDateTime || null,
+            }));
+          console.log(`[sharepoint-bucket] Graph API: ${graphFiles.length} files from site ${gSiteId}`);
+        }
+      } catch (graphErr) {
+        console.warn('[sharepoint-bucket] Graph API fetch failed (non-fatal):', graphErr.message);
+      }
+    }
+
+    res.json({ files: [...withDisplay, ...graphFiles], displayNamesMap });
   } catch (e) {
     res.status(500).json({ error: e?.message || 'Failed to list bucket' });
   }
@@ -4925,6 +5045,37 @@ app.post('/api/projects/:projectId/files/from-bucket', async (req, res) => {
     if (!ctx) return;
     const path = req.body?.path;
     if (!path || typeof path !== 'string') return res.status(400).json({ error: 'path is required' });
+
+    // Handle Graph API paths: 'graph/{itemId}' — download from Microsoft Graph, not Supabase Storage.
+    if (path.startsWith('graph/')) {
+      const itemId = path.split('/').slice(1).join('/');
+      if (!itemId) return res.status(400).json({ error: 'Invalid graph path: missing item ID' });
+      if (!SHAREPOINT_TENANT_ID || !SHAREPOINT_CLIENT_ID || !SHAREPOINT_CLIENT_SECRET) {
+        return res.status(503).json({ error: 'SharePoint credentials not configured. Set MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET, MICROSOFT_TENANT_ID in Railway.' });
+      }
+      let gSiteId = SHAREPOINT_SITE_ID;
+      if (!gSiteId && SHAREPOINT_SITE_URL) {
+        const gToken = await getGraphToken();
+        gSiteId = await getSiteIdFromUrl(SHAREPOINT_SITE_URL, gToken);
+      }
+      if (!gSiteId) {
+        return res.status(400).json({ error: 'SharePoint site not configured. Set SHAREPOINT_SITE_ID or SHAREPOINT_SITE_URL in Railway.' });
+      }
+      const gToken = await getGraphToken();
+      let displayName = req.body?.displayName || 'sharepoint_file';
+      const folderDisplayName = req.body?.folder_display_name != null ? String(req.body.folder_display_name).trim() || null : null;
+      const contentRes = await axios.get(
+        `https://graph.microsoft.com/v1.0/sites/${gSiteId}/drive/items/${itemId}/content`,
+        { headers: { Authorization: `Bearer ${gToken}` }, responseType: 'arraybuffer', timeout: 120000, maxRedirects: 5 }
+      );
+      const buffer = Buffer.from(contentRes.data);
+      const rowOut = await createProjectFileFromBuffer(projectId, ctx, buffer, displayName, folderDisplayName || 'SharePoint', req, {
+        auditSource: 'sharepoint_graph',
+        syncReason: 'sharepoint-graph-pull',
+      });
+      return res.status(201).json(rowOut);
+    }
+
     const { bucket, storagePath } = resolveBucketAndPath(path);
     let displayName = req.body?.displayName;
     if (!displayName || typeof displayName !== 'string') {

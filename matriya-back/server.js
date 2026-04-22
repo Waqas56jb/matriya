@@ -846,7 +846,10 @@ const _defaultExcel = join(dirname(fileURLToPath(import.meta.url)), 'MATRIYA_Exp
  */
 function runSciencePython(args) {
   return new Promise((resolve, reject) => {
-    const proc = spawn('python', [join(_scienceDir, 'run_pipeline.py'), ...args], {
+    // On Railway/Linux the executable is 'python3'; on Windows dev it is 'python'.
+    // PYTHON_CMD env var overrides both.
+    const pythonCmd = process.env.PYTHON_CMD || (process.platform === 'win32' ? 'python' : 'python3');
+    const proc = spawn(pythonCmd, [join(_scienceDir, 'run_pipeline.py'), ...args], {
       env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
     });
     let stdout = '';
