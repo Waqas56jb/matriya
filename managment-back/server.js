@@ -3381,16 +3381,30 @@ app.get('/api/matriya/lab-experiments-export', async (req, res) => {
       if (!user) return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // Priority 1: Read from canonical `experiments` table (populated from Excel normalization)
-    const { data: expRows, error: expErr } = await supabase
-      .from('experiments')
-      .select('experiment_id, project_id, formulation, results, status')
-      .order('created_at', { ascending: false })
-      .limit(2000);
+    // Fetch both tables in parallel — choose the one with richer data
+    const [
+      { data: expRows,    error: expErr },
+      { data: legacyAll, error: legacyAllErr },
+    ] = await Promise.all([
+      supabase.from('experiments').select('experiment_id, project_id, formulation, results, status').order('created_at', { ascending: false }).limit(2000),
+      supabase.from('lab_experiments').select('experiment_id, project_id, percentages, results, experiment_outcome, formula, updated_at, expansion_ratio, char_quality, adhesion, viscosity').order('updated_at', { ascending: false }).limit(2000),
+    ]);
+
+    // Count rows that have at least one numeric value we can query on
+    const expWithData  = (expRows    || []).filter(r => { const f = r.formulation || {}; const res = r.results || {}; return Object.keys(f).length > 0 || Object.keys(res).length > 0; }).length;
+    const legWithData  = (legacyAll  || []).filter(r => r.expansion_ratio != null || (r.percentages && Object.keys(r.percentages).length > 0)).length;
+
+    console.log(`[lab-export] experiments table: ${(expRows||[]).length} rows, ${expWithData} with data`);
+    console.log(`[lab-export] lab_experiments table: ${(legacyAll||[]).length} rows, ${legWithData} with expansion_ratio/percentages`);
+
+    // Prefer lab_experiments if it has more usable rows (seed data lives there)
+    const useCanonical = expWithData >= legWithData && expWithData > 0;
+    const useRows = useCanonical ? expRows : legacyAll;
+    console.log(`[lab-export] using table: ${useCanonical ? 'experiments' : 'lab_experiments'} (${(useRows||[]).length} rows)`);
 
     let canonical = [];
 
-    if (!expErr && Array.isArray(expRows) && expRows.length > 0) {
+    if (useCanonical && !expErr && Array.isArray(expRows) && expRows.length > 0) {
       // `experiments` table rows are already in canonical JSONB format
       canonical = expRows.map(row => {
         const f = (typeof row.formulation === 'object' && row.formulation) ? row.formulation : {};
@@ -3426,15 +3440,10 @@ app.get('/api/matriya/lab-experiments-export', async (req, res) => {
         };
       });
     } else {
-      // Fallback: read from lab_experiments table (legacy data source)
-      const { data: legacyRows, error: legacyErr } = await supabase
-        .from('lab_experiments')
-        .select('experiment_id, project_id, percentages, results, experiment_outcome, formula, updated_at, expansion_ratio, char_quality, adhesion, viscosity')
-        .order('updated_at', { ascending: false })
-        .limit(2000);
-
-      if (legacyErr) throw legacyErr;
-      if (!legacyRows || legacyRows.length === 0) {
+      // Use lab_experiments (already fetched above)
+      const legacyRows = legacyAll || [];
+      if (legacyAllErr) throw legacyAllErr;
+      if (legacyRows.length === 0) {
         return res.json({ experiments: [], n_rows: 0, source: 'none' });
       }
 
@@ -3478,7 +3487,7 @@ app.get('/api/matriya/lab-experiments-export', async (req, res) => {
       });
     }
 
-    const source = (!expErr && Array.isArray(expRows) && expRows.length > 0) ? 'supabase_experiments' : 'supabase_lab_experiments';
+    const source = useCanonical ? 'supabase_experiments' : 'supabase_lab_experiments';
     const withData = canonical.filter(r => r.APP != null || r['APP:PER'] != null || r.expansion_ratio != null);
 
     // ── DIAGNOSTIC LOGS ────────────────────────────────────────────────────
