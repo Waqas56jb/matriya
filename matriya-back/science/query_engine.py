@@ -79,18 +79,36 @@ def detect_aggregation(query: str) -> Optional[str]:
     return None
 
 
-COLUMN_KEYWORDS = {
-    "expansion_ratio": ["expansion", "expansion_ratio", "expand", "swelling"],
+_COLUMN_MAP = {
+    "expansion_ratio": ["expansion_ratio", "expansion", "expand", "swelling"],
     "viscosity":       ["viscosity", "thickness"],
     "adhesion":        ["adhesion", "bond", "bonding"],
 }
 
+_AGG_WORDS = ["lowest", "highest", "minimum", "maximum", "min", "max",
+              "smallest", "largest", "worst", "best"]
 
-def detect_target_column(query: str) -> Optional[str]:
-    q = query.lower().strip()
-    for column, keywords in COLUMN_KEYWORDS.items():
-        if any(kw in q for kw in keywords):
-            return column
+
+def extract_target_column(query: str) -> Optional[str]:
+    """
+    Detect the aggregation target column by looking ONLY at the phrase
+    immediately after the aggregation keyword.
+
+    Example:
+      "highest viscosity where expansion_ratio > 15"
+       → searches phrase after "highest" → "viscosity ..."  → returns "viscosity"
+       NOT expansion_ratio (that sits in the filter condition, not after the keyword).
+    """
+    q = query.lower()
+
+    for agg in _AGG_WORDS:
+        match = re.search(rf'\b{agg}\s+([a-zA-Z_][a-zA-Z0-9_\s]*)', q)
+        if match:
+            phrase = match.group(1)
+            for col, keywords in _COLUMN_MAP.items():
+                if any(k in phrase for k in keywords):
+                    return col
+
     return None
 
 
@@ -114,7 +132,7 @@ def handle_aggregation(filtered: pd.DataFrame, query: str) -> Dict[str, Any]:
     if agg is None:
         return {"error": "INVALID_QUERY", "reason": "unknown aggregation"}
 
-    col = detect_target_column(query)
+    col = extract_target_column(query)
     if col is None:
         return {"error": "INVALID_QUERY", "reason": "unknown target column"}
 
@@ -242,7 +260,7 @@ def extract_pre_among_segment(query: str) -> str:
 
 
 def detect_final_aggregation_target(query: str) -> Optional[str]:
-    return detect_target_column(extract_pre_among_segment(query))
+    return extract_target_column(extract_pre_among_segment(query))
 
 
 def detect_final_aggregation(query: str) -> Optional[str]:
