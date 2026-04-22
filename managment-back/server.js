@@ -3390,13 +3390,20 @@ app.get('/api/matriya/lab-experiments-export', async (req, res) => {
       supabase.from('lab_experiments').select('experiment_id, project_id, percentages, results, experiment_outcome, formula, updated_at, expansion_ratio, char_quality, adhesion, viscosity').order('updated_at', { ascending: false }).limit(2000),
     ]);
 
-    // "Usable" = row has at least one of: expansion_ratio, adhesion, experiment_outcome
-    // This is the explicit definition used for table selection and logging.
+    // "Usable" = row has at least one NUMERIC result field (expansion_ratio or adhesion).
+    // Status/outcome alone does NOT count — a row with only status="PENDING" and no
+    // numeric results is not queryable and must not cause the wrong table to be selected.
     const isUsable = (r, isCanonical) => {
       if (isCanonical) {
         const res = (typeof r.results === 'object' && r.results) ? r.results : {};
-        return res['expansion_ratio'] != null || res['adhesion'] != null || r.status != null;
+        const f   = (typeof r.formulation === 'object' && r.formulation) ? r.formulation : {};
+        // Must have actual numeric result OR real formulation data (not just status)
+        return res['expansion_ratio'] != null
+            || res['adhesion'] != null
+            || res['viscosity'] != null
+            || Object.keys(f).some(k => ['APP','PER','MEL','IFR'].includes(k.toUpperCase()));
       }
+      // lab_experiments: usable if has numeric result column or experiment_outcome
       return r.expansion_ratio != null || r.adhesion != null || r.experiment_outcome != null;
     };
 
@@ -3405,10 +3412,10 @@ app.get('/api/matriya/lab-experiments-export', async (req, res) => {
     const expUsable     = (expRows   || []).filter(r => isUsable(r, true)).length;
     const legUsable     = (legacyAll || []).filter(r => isUsable(r, false)).length;
 
-    console.log(`[lab-export] TABLE=experiments    total=${expTotal}  usable_rows=${expUsable}  (usable: expansion_ratio|adhesion|status != null)`);
-    console.log(`[lab-export] TABLE=lab_experiments total=${legTotal} usable_rows=${legUsable}  (usable: expansion_ratio|adhesion|experiment_outcome != null)`);
+    console.log(`[lab-export] TABLE=experiments    total=${expTotal}  usable_rows=${expUsable}  (numeric results or real formulation data)`);
+    console.log(`[lab-export] TABLE=lab_experiments total=${legTotal} usable_rows=${legUsable}  (expansion_ratio|adhesion|experiment_outcome != null)`);
 
-    // Use the table with more usable rows — lab_experiments wins when seed data is there
+    // Use the table with more NUMERIC usable rows
     const useCanonical = expUsable >= legUsable && expUsable > 0;
     console.log(`[lab-export] SELECTED=${useCanonical ? 'experiments' : 'lab_experiments'} (${useCanonical ? expUsable : legUsable} usable rows)`);
 

@@ -471,19 +471,55 @@ def execute_query(df: pd.DataFrame, parsed: dict) -> dict:
     failed = []
     execution_steps = []
 
+    import sys as _sqsys
+
     # NULL-safety rule (mirrors SQL WHERE semantics):
     # For any numeric comparison operator (>, <, >=, <=, between, ==, !=),
     # a NULL (NaN) value in the column MUST evaluate to FALSE.
     # We enforce this by applying .notna() to the column mask before the comparison.
     NUMERIC_OPS = {">", "<", ">=", "<=", "between", "==", "!="}
 
+    # CRITICAL: if ANY filter references a column that does not exist in the DataFrame,
+    # we must NOT silently return all rows. Raise it as a hard failure so the caller
+    # returns NO_MATCHES (not MATCHES_FOUND with all rows).
+    missing_cols = [f["column"] for f in filters if f["column"] not in df.columns]
+    if missing_cols:
+        print(f"[execute_query] COLUMN NOT FOUND: {missing_cols}. DataFrame columns: {list(df.columns)}",
+              file=_sqsys.stderr, flush=True)
+        return {
+            "decision":    "NO_MATCHES",
+            "quality":     "SCHEMA_ERROR",
+            "warnings":    [f"Column(s) not found in dataset: {missing_cols}. Available: {list(df.columns)}"],
+            "evidence":    {
+                "matched_rows":     0,
+                "total_rows":       len(df),
+                "match_rate":       0.0,
+                "filters_applied":  [],
+                "filters_failed":   [{"column": c, "error": "Column not found"} for c in missing_cols],
+                "result_preview":   [],
+                "columns_returned": list(df.columns),
+            },
+            "data_source": "DB_COMPUTED",
+            "confidence":  "LOW",
+            "tag":         "computed",
+            "audit_trace": _build_trace(parsed, [], [], df.head(0)),
+            "result_df":   df.head(0),
+        }
+
     for f in filters:
         col = f["column"]
         op  = f["operator"]
         val = f["value"]
 
-        if col not in df.columns:
-            failed.append({**f, "error": f"Column '{col}' not found in DataFrame. Available: {list(df.columns)}"})
+        # Log each filter step for full traceability
+        print(f"[execute_query] FILTER: {col} {op} {val} | col_in_df={col in df.columns} | "
+              f"dtype={df[col].dtype if col in df.columns else 'N/A'} | "
+              f"non_null={(df[col].notna().sum() if col in df.columns else 'N/A')}",
+              file=_sqsys.stderr, flush=True)
+
+        # col always exists here (missing_cols check above handles the case)
+        if col not in df.columns:  # defensive — should never reach here
+            failed.append({**f, "error": f"Column '{col}' not found (defensive)"})
             continue
 
         try:
