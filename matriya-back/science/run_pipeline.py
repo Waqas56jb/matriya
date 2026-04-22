@@ -38,8 +38,19 @@ from lab_schema_normalizer import run_tests as run_normalizer_tests
 from lab_connector import run_tests as run_connector_tests
 
 
+def _nan_safe(obj):
+    """Recursively replace NaN/Inf floats with None so JSON output is valid."""
+    import math
+    if isinstance(obj, float):
+        return None if (math.isnan(obj) or math.isinf(obj)) else obj
+    if isinstance(obj, dict):
+        return {k: _nan_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_nan_safe(v) for v in obj]
+    return obj
+
 def _out(obj):
-    print(json.dumps(obj, default=str), flush=True)
+    print(json.dumps(_nan_safe(obj), default=str), flush=True)
 
 
 def cmd_query(args):
@@ -185,6 +196,20 @@ def cmd_query(args):
         return
 
     result = execute_query(df, parsed)
+
+    # ── DIAGNOSTIC LOGS (David request) ─────────────────────────────────────
+    result_df_ref = result.get("result_df")
+    print("QUERY RESULT decision:", result.get("decision"), file=_sys.stderr, flush=True)
+    print("RESULT_DF shape:", result_df_ref.shape if result_df_ref is not None else "None", file=_sys.stderr, flush=True)
+    print("MATCHED ROWS:", result.get("evidence", {}).get("matched_rows"), file=_sys.stderr, flush=True)
+    preview = result.get("evidence", {}).get("result_preview", [])
+    print("RESULT_PREVIEW length:", len(preview), file=_sys.stderr, flush=True)
+    if preview:
+        print("RESULT_PREVIEW[0]:", preview[0], file=_sys.stderr, flush=True)
+    else:
+        print("RESULT_PREVIEW: EMPTY — rows not populated in execute_query", file=_sys.stderr, flush=True)
+    # ────────────────────────────────────────────────────────────────────────
+
     result.pop("result_df", None)
     result["query"]            = query
     result["sheet"]            = "adapted_from_raw"
@@ -194,6 +219,13 @@ def cmd_query(args):
     engine = FSCTMEngine(case_id, [query])
     result["fsctm_state"] = engine.get_state_object()
     result["audit_trace"]["fsctm_trace"] = engine.get_audit_trace()
+
+    # ── FINAL OUTPUT VERIFICATION ─────────────────────────────────────────
+    final_rows = result.get("evidence", {}).get("result_preview", [])
+    print("FINAL OUTPUT rows count:", len(final_rows), file=_sys.stderr, flush=True)
+    print("FINAL OUTPUT decision:", result.get("decision"), file=_sys.stderr, flush=True)
+    # ─────────────────────────────────────────────────────────────────────
+
     _out(result)
 
 

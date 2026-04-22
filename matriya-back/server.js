@@ -1784,6 +1784,17 @@ async function handleScienceQueryFlow(req, res, { query }) {
     const evidence = result.evidence || {};
     const rows = evidence.result_preview || [];
     const matchedRows = evidence.matched_rows ?? rows.length;
+
+    // ── DIAGNOSTIC ───────────────────────────────────────────────────────────
+    console.log("QUERY RESULT decision:", result.decision);
+    console.log("MATCHED ROWS:", matchedRows);
+    console.log("RESULT_PREVIEW length:", rows.length);
+    if (rows.length > 0) {
+      console.log("RESULT_PREVIEW[0]:", JSON.stringify(rows[0]));
+    } else {
+      console.log("RESULT_PREVIEW: EMPTY — rows lost between Python and Node");
+    }
+    // ────────────────────────────────────────────────────────────────────────
     const countResult = evidence.count_result;
     const isCount = countResult !== undefined && countResult !== null;
 
