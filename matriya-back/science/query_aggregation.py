@@ -20,6 +20,38 @@ import sys
 import pandas as pd
 
 
+# ── Change 2: normalize_condition ────────────────────────────────────────────
+def normalize_condition(cond: str) -> str:
+    """
+    Normalise a condition string before passing it to df.query().
+
+    Rules:
+      1. Replace bare '=' with '==' (but leave >=, <=, != untouched).
+      2. Quote bare identifier values so pandas.query() treats them as strings
+         rather than column references.
+         e.g.  binder == K52  →  binder == "K52"
+    """
+    # Rule 1 — = → == (not preceded or followed by another operator char)
+    cond = re.sub(r'(?<![<>!])=(?!=)', '==', cond)
+    # Rule 2 — quote bare word on the RHS of ==
+    cond = re.sub(r'(\b\w+\b\s*==\s*)([A-Za-z_]\w*)', r'\1"\2"', cond)
+    return cond.strip()
+
+
+# ── Change 3: SORT_PATTERNS (tighter sort detection via regex) ────────────────
+SORT_PATTERNS = [
+    r'^\s*by\s+\w+',
+    r'sort(?:ed)?\s+by\s+\w+',
+    r'order\s+by\s+\w+',
+    r'rank(?:ed)?\s+by\s+\w+',
+]
+
+
+def has_sort_intent(query: str) -> bool:
+    """Return True if the query contains a sort/rank/order-by phrase."""
+    return any(re.search(p, query, re.IGNORECASE) for p in SORT_PATTERNS)
+
+
 # ── Column aliases recognised in natural-language aggregation queries ────────
 _ALIASES: dict[str, str] = {
     "expansion ratio":  "expansion_ratio",
@@ -80,9 +112,9 @@ def detect_aggregation_intent(query: str, available_columns: list) -> dict:
     elif bot_match:
         agg_type = "bottom_n"
         n = int(bot_match.group(1))
-    elif any(kw in q for kw in ["highest", "maximum", "largest", "best", "max "]):
+    elif any(re.search(r'\b' + kw + r'\b', q) for kw in ["highest", "maximum", "largest", "best", "max"]):
         agg_type = "max"
-    elif any(kw in q for kw in ["lowest", "minimum", "smallest", "worst", "min "]):
+    elif any(re.search(r'\b' + kw + r'\b', q) for kw in ["lowest", "minimum", "smallest", "worst", "min"]):
         agg_type = "min"
 
     if not agg_type:
