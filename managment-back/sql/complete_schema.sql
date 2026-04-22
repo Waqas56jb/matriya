@@ -359,9 +359,13 @@ ALTER TABLE public.project_members ADD COLUMN IF NOT EXISTS role       text NOT 
 ALTER TABLE public.project_members ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now();
 
 -- project_files
-ALTER TABLE public.project_files ADD COLUMN IF NOT EXISTS file_size    integer;
-ALTER TABLE public.project_files ADD COLUMN IF NOT EXISTS storage_path text;
-ALTER TABLE public.project_files ADD COLUMN IF NOT EXISTS uploaded_by  text;
+ALTER TABLE public.project_files ADD COLUMN IF NOT EXISTS file_size          integer;
+ALTER TABLE public.project_files ADD COLUMN IF NOT EXISTS storage_path       text;
+ALTER TABLE public.project_files ADD COLUMN IF NOT EXISTS uploaded_by        text;
+ALTER TABLE public.project_files ADD COLUMN IF NOT EXISTS original_name      text;
+ALTER TABLE public.project_files ADD COLUMN IF NOT EXISTS folder_display_name text;
+ALTER TABLE public.project_files ADD COLUMN IF NOT EXISTS ingest_error       text;
+ALTER TABLE public.project_files ADD COLUMN IF NOT EXISTS source_email_id    text;
 
 -- project_emails — patch old incomplete schema
 ALTER TABLE public.project_emails ADD COLUMN IF NOT EXISTS direction        text        NOT NULL DEFAULT 'sent';

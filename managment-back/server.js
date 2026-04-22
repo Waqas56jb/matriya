@@ -909,6 +909,99 @@ const emailAttachImportSchema = z.object({
   destination: z.enum(['project_files', 'lab'])
 });
 
+/**
+ * Download one attachment from Resend receiving API, save to project_files + storage,
+ * and index the content into RAG (local + OpenAI vector store).
+ * No user context required — runs in background from the inbound webhook.
+ */
+async function _ingestInboundAttachment(projectId, emailId, attachment) {
+  const { id: attachmentId, filename, content_type: contentType, content: rawContent } = attachment;
+  if (!filename) return;
+
+  try {
+    let buffer;
+
+    // Prefer pre-fetched base64 content; fall back to Resend attachment API
+    if (rawContent) {
+      buffer = Buffer.from(rawContent, 'base64');
+    } else if (attachmentId && RESEND_API_KEY) {
+      const url = `https://api.resend.com/emails/receiving/${emailId}/attachments/${attachmentId}`;
+      const r = await fetch(url, { headers: { Authorization: `Bearer ${RESEND_API_KEY}` } });
+      if (!r.ok) {
+        console.warn(`[email-attachment] fetch failed (${r.status}) for ${filename}`);
+        return;
+      }
+      const arrayBuf = await r.arrayBuffer();
+      buffer = Buffer.from(arrayBuf);
+    } else {
+      console.warn(`[email-attachment] no content or id for attachment: ${filename}`);
+      return;
+    }
+
+    if (!buffer || buffer.length === 0) {
+      console.warn(`[email-attachment] empty content for attachment: ${filename}`);
+      return;
+    }
+
+    const safeName = filename.replace(/[^a-z0-9\-_.]/gi, '_');
+    const mime = contentType || 'application/octet-stream';
+
+    // Insert project_files row
+    const { data: fileRow, error: fileErr } = await supabase.from('project_files').insert({
+      project_id: projectId,
+      original_name: filename,
+      folder_display_name: 'Email Attachments',
+      source_email_id: emailId,
+    }).select().single();
+
+    if (fileErr || !fileRow) {
+      // source_email_id column may not exist yet — retry without it
+      const { data: fileRow2, error: fileErr2 } = await supabase.from('project_files').insert({
+        project_id: projectId,
+        original_name: filename,
+        folder_display_name: 'Email Attachments',
+      }).select().single();
+      if (fileErr2 || !fileRow2) {
+        console.error('[email-attachment] project_files insert failed:', fileErr2?.message || fileErr?.message);
+        return;
+      }
+      // Use fallback row
+      Object.assign(fileRow || {}, fileRow2);
+      // Reassign to mutable variable for remaining logic
+      return await _saveAttachmentRow(projectId, emailId, fileRow2, buffer, safeName, mime, filename);
+    }
+
+    await _saveAttachmentRow(projectId, emailId, fileRow, buffer, safeName, mime, filename);
+  } catch (e) {
+    console.error('[email-attachment] _ingestInboundAttachment failed:', e.message);
+  }
+}
+
+async function _saveAttachmentRow(projectId, emailId, fileRow, buffer, safeName, mime, originalName) {
+  try {
+    await ensureManualBucketExists();
+    const relativeKey = `${PROJECT_PREFIX}${projectId}/${fileRow.id}/${safeStorageKeySegment(safeName)}`;
+    const storage_path = `${MANUAL_PREFIX}/${relativeKey}`;
+
+    const { error: upErr } = await supabase.storage.from(MANUAL_BUCKET).upload(relativeKey, buffer, {
+      contentType: mime,
+      upsert: false,
+    });
+    if (upErr) {
+      await supabase.from('project_files').delete().eq('id', fileRow.id);
+      console.error('[email-attachment] storage upload failed:', upErr.message);
+      return;
+    }
+
+    await supabase.from('project_files').update({ storage_path }).eq('id', fileRow.id);
+    if (hasLocalRag()) ingestFileInBackground(projectId, fileRow.id, buffer, originalName);
+    scheduleOpenAiVectorSyncForProject(projectId, 'email/attachment', fileRow.id);
+    console.info(`[email-attachment] indexed: ${originalName} (${buffer.length} bytes) → project ${projectId}`);
+  } catch (e) {
+    console.error('[email-attachment] _saveAttachmentRow failed:', e.message);
+  }
+}
+
 /** Save inbound email as a .txt project file so it is indexed in local RAG + OpenAI vector store. */
 async function _ingestInboundEmailToRag(projectId, emailId, fromEmail, subject, bodyText) {
   try {
@@ -952,7 +1045,7 @@ async function _ingestInboundEmailToRag(projectId, emailId, fromEmail, subject, 
 }
 
 /** Resend Inbound: after email.received, fetch full body and store under matched project (UUID in To address). */
-app.post('/api/webhooks/resend-inbound', async (req, res) => {
+async function handleResendInboundWebhook(req, res) {
   try {
     if (RESEND_INBOUND_WEBHOOK_SECRET) {
       const q = req.query.secret;
@@ -993,19 +1086,25 @@ app.post('/api/webhooks/resend-inbound', async (req, res) => {
     const subject = String(full.subject || '');
     const bodyText = full.text != null ? String(full.text) : null;
     const bodyHtml = full.html != null ? String(full.html) : null;
-    const attachments = Array.isArray(full.attachments)
-      ? full.attachments.map(a => {
-        const id = a.id || a.attachment_id || a.attachmentId;
-        return {
-          id,
-          attachment_id: id,
-          filename: a.filename,
-          content_type: a.content_type,
-          content_disposition: a.content_disposition,
-          content_id: a.content_id
-        };
-      })
-      : [];
+    // Keep full attachment objects (with content if Resend includes it) for RAG ingestion.
+    // Strip large base64 content from the metadata stored in project_emails.attachments.
+    const attachmentsFull = Array.isArray(full.attachments) ? full.attachments : [];
+    const attachments = attachmentsFull.map(a => {
+      const id = a.id || a.attachment_id || a.attachmentId;
+      return {
+        id,
+        attachment_id: id,
+        filename: a.filename,
+        content_type: a.content_type,
+        content_disposition: a.content_disposition,
+        content_id: a.content_id,
+        // store content separately; do NOT persist raw base64 in project_emails row
+        _content: a.content || null,
+      };
+    });
+
+    // Strip internal _content field before storing in DB
+    const attachmentsForDb = attachments.map(({ _content, ...meta }) => meta);
 
     const insertPayload = {
       project_id: projectId,
@@ -1018,7 +1117,7 @@ app.post('/api/webhooks/resend-inbound', async (req, res) => {
       resend_email_id: emailId,
       sent_by_user_id: null,
       sent_by_username: null,
-      attachments
+      attachments: attachmentsForDb
     };
     const { error: insErr } = await supabase.from('project_emails').insert(insertPayload);
     if (insErr) {
@@ -1032,7 +1131,7 @@ app.post('/api/webhooks/resend-inbound', async (req, res) => {
     }
     auditLog(projectId, null, 'inbound', 'create', 'project_email', emailId, { subject, from: fromEmail }, req.requestId);
 
-    // ── Auto-index inbound email into RAG + notify MATRIYA ──────────────────
+    // ── Auto-index email body into RAG + notify MATRIYA ────────────────────
     const emailBodyText = bodyText || (bodyHtml ? bodyHtml.replace(/<[^>]+>/g, ' ') : null);
     if (emailBodyText && emailBodyText.trim().length > 10) {
       setImmediate(() => _ingestInboundEmailToRag(projectId, emailId, fromEmail, subject, emailBodyText));
@@ -1049,13 +1148,37 @@ app.post('/api/webhooks/resend-inbound', async (req, res) => {
         }, { timeout: 15000 }).catch(e => console.warn('[email-inbound] MATRIYA notify failed:', e.message));
       });
     }
+
+    // ── Auto-index every attachment into RAG ────────────────────────────────
+    const ingestableAttachments = attachments.filter(a => a.filename &&
+      /\.(pdf|docx?|txt|md|xlsx?|csv|pptx?|png|jpg|jpeg)$/i.test(a.filename));
+    if (ingestableAttachments.length > 0) {
+      console.info(`[resend-inbound] queuing ${ingestableAttachments.length} attachment(s) for RAG indexing`);
+      setImmediate(() => {
+        for (const att of ingestableAttachments) {
+          _ingestInboundAttachment(projectId, emailId, att).catch(e =>
+            console.warn('[email-attachment] background ingest error:', e.message)
+          );
+        }
+      });
+    }
     // ────────────────────────────────────────────────────────────────────────
 
-    return res.status(201).json({ ok: true, project_id: projectId });
+    return res.status(201).json({
+      ok: true,
+      project_id: projectId,
+      attachments_queued: ingestableAttachments.length,
+    });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
-});
+}
+
+// Register handler on both URL paths:
+// - /api/webhooks/resend-inbound  (original, kept for backward compat)
+// - /api/webhooks/email/inbound   (David's configured Resend webhook URL)
+app.post('/api/webhooks/resend-inbound', handleResendInboundWebhook);
+app.post('/api/webhooks/email/inbound',  handleResendInboundWebhook);
 
 app.get('/api/projects/:projectId/emails', async (req, res) => {
   try {
