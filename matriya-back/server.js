@@ -7,7 +7,7 @@ import multer from 'multer';
 import { Op } from 'sequelize';
 import { fileURLToPath } from 'url';
 import path, { dirname, join } from 'path';
-import { existsSync, mkdirSync, unlinkSync } from 'fs';
+import { existsSync, mkdirSync, unlinkSync, readdirSync, writeFileSync, readFileSync, copyFileSync } from 'fs';
 import settings from './config.js';
 import RAGService from './ragService.js';
 import { initDb, SearchHistory, ResearchSession, ResearchAuditLog, PolicyAuditLog, DecisionAuditLog, NoiseEvent, IntegrityCycleSnapshot, Experiment, EXPERIMENT_OUTCOMES } from './database.js';
@@ -755,6 +755,156 @@ app.post("/ingest/file", upload.single('file'), async (req, res) => {
 });
 
 /**
+ * POST /ingest/excel
+ *
+ * Route for Excel / CSV attachments sent by managment-back when an email arrives
+ * with a spreadsheet attached.  Unlike /ingest/file (which chunks text into RAG),
+ * this endpoint:
+ *   1. Saves the file to lab_data/ so it persists across restarts.
+ *   2. Validates the schema via the Python data_adapter (normalises APP_pct → APP:PER etc.)
+ *   3. Sets the file as the ACTIVE lab dataset so all science queries use it.
+ *   4. Optionally also ingests a human-readable summary text block into RAG so
+ *      document-mode questions ("how many experiments?") still work.
+ *
+ * Returns: { ok, filename, rows_valid, canonical_columns, schema_valid, active_lab_excel }
+ */
+app.post("/ingest/excel", upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file provided' });
+
+  const file = req.file;
+  let originalFilename = Buffer.isBuffer(file.originalname)
+    ? file.originalname.toString('utf-8')
+    : String(file.originalname || 'data.xlsx');
+  originalFilename = repairUtf8MisdecodedAsLatin1(originalFilename);
+
+  const fileExt = path.extname(originalFilename).toLowerCase();
+  if (!['.xlsx', '.xls', '.csv'].includes(fileExt)) {
+    try { if (existsSync(file.path)) unlinkSync(file.path); } catch (_) {}
+    return res.status(400).json({ error: `File must be Excel (.xlsx, .xls) or CSV (.csv). Got: ${fileExt}` });
+  }
+
+  // Persist to lab_data/ so the file survives restarts and is accessible to Python.
+  const destFilename = `${Date.now()}_${originalFilename.replace(/[^a-z0-9._\-]/gi, '_')}`;
+  const destPath = join(_labDataDir, destFilename);
+  try {
+    copyFileSync(file.path, destPath);
+  } catch (copyErr) {
+    logger.error(`[ingest/excel] copy to lab_data failed: ${copyErr.message}`);
+    return res.status(500).json({ error: `Failed to persist lab file: ${copyErr.message}` });
+  } finally {
+    try { if (existsSync(file.path)) unlinkSync(file.path); } catch (_) {}
+  }
+
+  // Validate schema + get stats via Python data_adapter.
+  let validateResult = null;
+  try {
+    validateResult = await runSciencePython(['validate', destPath, '0']);
+  } catch (pyErr) {
+    logger.warn(`[ingest/excel] Python validation error (non-fatal): ${pyErr.message}`);
+  }
+
+  const schemaValid  = validateResult?.schema_valid ?? false;
+  const rowsValid    = validateResult?.rows_valid   ?? 0;
+  const columns      = validateResult?.canonical_columns ?? [];
+  const columnStats  = validateResult?.column_stats ?? {};
+
+  // Activate as the lab dataset regardless of schema warnings (dataset may still be queryable).
+  _activeLabExcel = destPath;
+  try { writeFileSync(_labActiveFile, destPath, 'utf8'); } catch (_) {}
+  logger.info(`[ingest/excel] activated lab dataset: ${originalFilename} | rows=${rowsValid} | schema_valid=${schemaValid} | path=${destPath}`);
+
+  // ── Push rows into Supabase experiments table ──────────────────────────────
+  // After activation, dump parsed rows and send to managment-back for storage
+  // in the canonical `experiments` table (same source as Lab Decision Board).
+  const projectId = req.body?.project_id || req.query?.project_id || null;
+  const managementBase = settings.MATRIYA_MANAGEMENT_API_URL || '';
+  if (managementBase && rowsValid > 0) {
+    setImmediate(async () => {
+      try {
+        const dumpResult = await runSciencePython(['dump_rows', destPath, '0']);
+        const rows = dumpResult?.rows;
+        if (!Array.isArray(rows) || rows.length === 0) {
+          logger.warn('[ingest/excel] dump_rows returned no rows — Supabase sync skipped');
+          return;
+        }
+        const ingestResp = await axios.post(
+          `${managementBase}/api/matriya/experiments/ingest`,
+          {
+            project_id: projectId || 'default',
+            source: `excel:${originalFilename}`,
+            rows,
+          },
+          {
+            headers: {
+              'Content-Type': 'application/json',
+              ...(settings.MATRIYA_MANAGEMENT_MATERIALS_KEY
+                ? { 'X-Matriya-Materials-Key': settings.MATRIYA_MANAGEMENT_MATERIALS_KEY }
+                : {}),
+            },
+            timeout: 30000,
+          }
+        );
+        logger.info(`[ingest/excel] Supabase experiments sync: inserted=${ingestResp.data?.inserted} errors=${ingestResp.data?.error_count}`);
+      } catch (syncErr) {
+        logger.warn(`[ingest/excel] Supabase sync failed (non-fatal): ${syncErr.message}`);
+      }
+    });
+  } else if (!managementBase) {
+    logger.warn('[ingest/excel] MATRIYA_MANAGEMENT_API_URL not set — Supabase experiments sync skipped');
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // Optionally index a text summary into RAG so document-mode queries are aware of the dataset.
+  if (schemaValid && rowsValid > 0) {
+    setImmediate(async () => {
+      try {
+        const statLines = Object.entries(columnStats)
+          .map(([col, s]) => `  ${col}: min=${s.min}, max=${s.max}, mean=${s.mean}, n=${s.n_valid}`)
+          .join('\n');
+        const summaryText = [
+          `Lab dataset: ${originalFilename}`,
+          `Rows: ${rowsValid}`,
+          `Columns: ${columns.join(', ')}`,
+          `Column statistics:`,
+          statLines,
+          '',
+          'This dataset contains structured experimental (formulation) data.',
+          'For precise numeric queries (e.g. "expansion ratio > 10") use the Science Query Engine.',
+        ].join('\n');
+
+        const summaryFilename = `lab-summary-${destFilename.replace(/\.[^.]+$/, '')}.txt`;
+        const summaryPath = join(_labDataDir, summaryFilename);
+        writeFileSync(summaryPath, summaryText, 'utf8');
+        const ragService = getRagService();
+        await ragService.ingestFile(summaryPath, summaryFilename);
+        try { unlinkSync(summaryPath); } catch (_) {}
+        logger.info(`[ingest/excel] RAG summary indexed for ${originalFilename}`);
+      } catch (ragErr) {
+        logger.warn(`[ingest/excel] RAG summary indexing failed (non-fatal): ${ragErr.message}`);
+      }
+    });
+  }
+
+  return res.json({
+    ok: true,
+    filename: originalFilename,
+    path: destPath,
+    rows_valid: rowsValid,
+    canonical_columns: columns,
+    column_stats: columnStats,
+    schema_valid: schemaValid,
+    active_lab_excel: destPath,
+    message: schemaValid
+      ? `Lab dataset loaded: ${rowsValid} experiments, ${columns.length} columns`
+      : `File saved but schema validation had issues. Science queries may return limited results.`,
+    validation: validateResult ? {
+      missing_required: validateResult.missing_required,
+      adapter_warnings: validateResult.adapter_warnings,
+    } : null,
+  });
+});
+
+/**
  * Ingest all supported files from a directory
  * 
  * Returns:
@@ -837,8 +987,31 @@ app.post('/integration/email-received', async (req, res) => {
 // ─────────────────────────────────────────────────────────
 import { spawn } from 'child_process';
 
-const _scienceDir = join(dirname(fileURLToPath(import.meta.url)), 'science');
-const _defaultExcel = join(dirname(fileURLToPath(import.meta.url)), 'MATRIYA_Experiment_Template-1.xlsx');
+const _scienceDir   = join(dirname(fileURLToPath(import.meta.url)), 'science');
+const _builtinExcel = join(dirname(fileURLToPath(import.meta.url)), 'MATRIYA_Experiment_Template-1.xlsx');
+
+// Persistent lab dataset directory — uploaded Excel/CSV files land here.
+// The most recently ingested file becomes the active lab dataset for science queries.
+const _labDataDir = join(dirname(fileURLToPath(import.meta.url)), 'lab_data');
+const _labActiveFile = join(_labDataDir, '_active.txt');
+try { mkdirSync(_labDataDir, { recursive: true }); } catch (_) {}
+
+/**
+ * Mutable path to the active lab Excel/CSV dataset.
+ * Initialised from _active.txt (written on each /ingest/excel call) so it
+ * survives server restarts. Falls back to the bundled template.
+ */
+let _activeLabExcel = (() => {
+  try {
+    if (existsSync(_labActiveFile)) {
+      const p = readFileSync(_labActiveFile, 'utf8').trim();
+      if (p && existsSync(p)) { logger.info(`[lab-data] restored active dataset: ${p}`); return p; }
+    }
+  } catch (_) {}
+  return _builtinExcel;
+})();
+console.log("ACTIVE DATASET:", _activeLabExcel);
+logger.info(`[lab-data] active dataset on startup: ${_activeLabExcel}`);
 
 /**
  * Spawn Python science runner and resolve with parsed JSON output.
@@ -846,7 +1019,10 @@ const _defaultExcel = join(dirname(fileURLToPath(import.meta.url)), 'MATRIYA_Exp
  */
 function runSciencePython(args) {
   return new Promise((resolve, reject) => {
-    const proc = spawn('python', [join(_scienceDir, 'run_pipeline.py'), ...args], {
+    // On Railway/Linux the executable is 'python3'; on Windows dev it is 'python'.
+    // PYTHON_CMD env var overrides both.
+    const pythonCmd = process.env.PYTHON_CMD || (process.platform === 'win32' ? 'python' : 'python3');
+    const proc = spawn(pythonCmd, [join(_scienceDir, 'run_pipeline.py'), ...args], {
       env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
     });
     let stdout = '';
@@ -880,7 +1056,7 @@ app.post('/science/query', requireAuth, async (req, res) => {
     if (!query || !String(query).trim()) {
       return res.status(400).json({ error: 'query is required' });
     }
-    const excelPath = filepath || _defaultExcel;
+    const excelPath = filepath || _activeLabExcel;
     const sheet     = sheet_name || 'Formulation Data';
     const caseId    = case_id   || `QUERY-${Date.now()}`;
     const result    = await runSciencePython(['query', excelPath, query, sheet, caseId]);
@@ -947,13 +1123,59 @@ app.get('/science/tests', requireAuth, async (req, res) => {
  */
 app.get('/science/validate', requireAuth, async (req, res) => {
   try {
-    const filepath = req.query.filepath || _defaultExcel;
+    const filepath = req.query.filepath || _activeLabExcel;
     const result   = await runSciencePython(['validate', filepath, '0']);
     logger.info(`[science/validate] tests_passed=${result.tests_passed}/${result.total_tests}`);
     return res.json(result);
   } catch (e) {
     logger.error(`[science/validate] error: ${e.message}`);
     return res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * POST /api/lab/query
+ * Dedicated Lab Query Engine endpoint.
+ * Runs a natural language query against the formulations Excel dataset
+ * using the deterministic science pipeline (no LLM, no RAG).
+ *
+ * Body: { query, filepath?, sheet_name? }
+ */
+app.post('/api/lab/query', requireAuth, async (req, res) => {
+  try {
+    const { query, filepath, sheet_name } = req.body || {};
+    if (!query || !String(query).trim()) {
+      return res.status(400).json({ error: 'query is required' });
+    }
+    return await handleScienceQueryFlow(req, res, { query });
+  } catch (e) {
+    logger.error(`[api/lab/query] error: ${e.message}`);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * GET /api/lab/test
+ * Run all science module unit tests and return pass/fail report.
+ * Confirms the lab query engine is connected and working.
+ */
+app.get('/api/lab/test', requireAuth, async (req, res) => {
+  try {
+    const result = await runSciencePython(['test']);
+    logger.info(`[api/lab/test] total_passed=${result.total_passed} total_failed=${result.total_failed}`);
+    return res.json({
+      connected: result.all_passed,
+      total_passed: result.total_passed,
+      total_failed: result.total_failed,
+      all_passed: result.all_passed,
+      test_results: result.test_results,
+      message: result.all_passed
+        ? `Lab Query Engine connected and operational. ${result.total_passed} tests passed.`
+        : `Lab Query Engine has failures. ${result.total_failed} tests failed.`,
+    });
+  } catch (e) {
+    logger.error(`[api/lab/test] error: ${e.message}`);
+    return res.status(500).json({ connected: false, error: e.message });
   }
 });
 
@@ -1017,6 +1239,17 @@ app.post("/ask-matriya", requireAuth, askMatriyaMulter, async (req, res) => {
   if (!message) {
     return res.status(400).json({ error: "message is required" });
   }
+
+  // ── DEBUG LOGGING ───────────────────────────────────────────────────────
+  console.log("QUERY RECEIVED:", message);
+  console.log("ROUTING:", isScienceQueryQuestion(message) ? "LAB" : "RAG");
+
+  // ── SCIENCE QUERY ROUTING for /ask-matriya ──────────────────────────────
+  if (isScienceQueryQuestion(message)) {
+    logger.info(`[ask-matriya] science routing → Python pipeline. query="${message}"`);
+    return await handleScienceQueryFlow(req, res, { query: message });
+  }
+  // ────────────────────────────────────────────────────────────────────────
 
   // Mock fixtures removed (David M2 — all responses must come from real data, not fixtures).
 
@@ -1098,9 +1331,27 @@ app.post("/ask-matriya", requireAuth, askMatriyaMulter, async (req, res) => {
   // Full-document context in the chat prompt (no vector / file_search RAG for this route).
   let fileContext = '';
   let contextHasSpreadsheet = false;
-  if (filenames.length > 0) {
+
+  // ── PRE-RETRIEVAL DOCUMENT GUARD ──────────────────────────────────────────
+  // Classify each requested filename and block UNRELATED domain docs
+  // (e.g. Final Project Report.pdf with ML metrics) from contaminating
+  // lab/formulation experiment responses. LAB_FORMULATION files pass through;
+  // UNKNOWN files also pass (conservative — only clear unrelated docs blocked).
+  const isLabFormulationQuery = /\b(formulation|intumescent|experiment|expansion|char|app.?per|ifr|coating|binder|fire)\b/i.test(message);
+  let filteredFilenames = filenames;
+  if (isLabFormulationQuery && filenames.length > 0) {
+    filteredFilenames = filterFilenamesByDomain(filenames, 'LAB_FORMULATION');
+    if (filteredFilenames.length === 0) {
+      // All files were blocked — fall back to using all files to avoid empty context
+      logger.warn('[document-guard] All files blocked by domain filter — falling back to unfiltered list');
+      filteredFilenames = filenames;
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
+  if (filteredFilenames.length > 0) {
     const rag = getRagService();
-    for (const fn of filenames) {
+    for (const fn of filteredFilenames) {
       if (fileContext.length >= MAX_FILE_CONTEXT_CHARS) break;
       const text = await loadIndexedTextForAskMatriya(rag, fn);
       if (text) {
@@ -1192,12 +1443,24 @@ ${fileContext}`
         timeout: 60000
       }
     );
-    const reply = response.data?.choices?.[0]?.message?.content?.trim() || "";
+    let reply = response.data?.choices?.[0]?.message?.content?.trim() || "";
     logger.info(
       `[ask-matriya routing] response path=DOCUMENTS | spreadsheetMode=${spreadsheetMode} file_context_chars=${String(fileContext || '').length} reply_chars=${reply.length}`
     );
-    // Ask Matriya: no RAG fail-safe sanitizer — the model already sees full document text in the system message.
-    return res.json({ reply, sources: [] });
+
+    // ── POST-RESPONSE DOCUMENT GUARD ─────────────────────────────────────────
+    // Check for forbidden ML metric contamination (F1-score, MCC, etc.)
+    // These must never appear in formulation/experiment design responses.
+    const guardResult = guardResponseText(reply);
+    if (guardResult.contaminated) {
+      logger.warn(
+        `[document-guard] Post-response contamination detected: ${guardResult.violations.slice(0, 3).join(', ')} — sanitizing reply`
+      );
+      reply = guardResult.sanitized_text;
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    return res.json({ reply, sources: [], guard_action: guardResult.action });
   } catch (e) {
     const upstream = e.response?.status;
     const msg = e.response?.data?.error?.message || e.message || "OpenAI request failed";
@@ -1235,6 +1498,650 @@ function normalizeQueryText(q) {
     .trim()
     .replace(/\s+/g, ' ')
     .toLowerCase();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DOCUMENT GUARD — Index separation + metric contamination control
+// Prevents cross-domain contamination: unrelated docs (e.g. Final Project
+// Report.pdf with ML metrics) are blocked from lab/formulation queries.
+// Mirrors document_guard.py but runs inline without a Python subprocess.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const _LAB_FILENAME_KEYS  = ["formulation", "intumescent", "corrosion", "experiment", "lab", "int-tfx", "ifr", "fresco", "barnacle", "bio-001", "corr-001"];
+const _MATR_FILENAME_KEYS = ["matriya", "kernel", "handover", "developer", "fsctm", "scope", "rachel", "report.txt"];
+
+/** Classify a document filename into its domain (fast, no subprocess). */
+function classifyDocumentDomain(filename) {
+  const f = String(filename || '').toLowerCase();
+  if (_LAB_FILENAME_KEYS.some(k => f.includes(k)))  return { domain: 'LAB_FORMULATION',  allowed: true  };
+  if (_MATR_FILENAME_KEYS.some(k => f.includes(k))) return { domain: 'MATRIYA_METHOD',   allowed: false };
+  return { domain: 'UNKNOWN', allowed: false };
+}
+
+/**
+ * Filter a list of filenames down to those allowed for a given query domain.
+ * For lab/formulation queries: only LAB_FORMULATION files are allowed.
+ * For general queries (UNKNOWN domain arg): all files pass through.
+ */
+function filterFilenamesByDomain(filenames, queryDomain = 'LAB_FORMULATION') {
+  if (!Array.isArray(filenames) || filenames.length === 0) return filenames;
+  const classified = filenames.map(fn => ({ fn, ...classifyDocumentDomain(fn) }));
+  const blocked = classified.filter(c => !c.allowed);
+  if (blocked.length > 0) {
+    logger.info(`[document-guard] Pre-retrieval filter: blocked ${blocked.length} non-lab file(s): ${blocked.map(c => `${c.fn}(${c.domain})`).join(', ')}`);
+  }
+  return classified.filter(c => c.allowed).map(c => c.fn);
+}
+
+// Forbidden ML metric terms that must not appear in lab/experiment outputs
+const _FORBIDDEN_METRIC_TERMS = [
+  "f1-score", "f1 score", "f1score",
+  "matthews correlation", "matthews corr",
+  "classification accuracy", "model accuracy", "test accuracy", "validation accuracy", "accuracy score",
+  "confusion matrix", "roc auc", "roc curve", "auc score",
+  "cross-validation", "cross validation", "k-fold", "kfold",
+  "overfitting", "underfitting", "train/test split", "hyperparameter",
+  "human activity recognition", "accelerometer", "gyroscope", "sensor fusion", "activity classification",
+];
+
+/**
+ * Scan response text for forbidden ML metric terms.
+ * Returns {contaminated, violations, sanitized_text}
+ */
+function guardResponseText(text) {
+  const lower = String(text || '').toLowerCase();
+  const violations = _FORBIDDEN_METRIC_TERMS.filter(term => lower.includes(term));
+  if (violations.length === 0) {
+    return { contaminated: false, violations: [], sanitized_text: text, action: 'ALLOW' };
+  }
+  // Sanitize: remove sentences containing forbidden terms
+  let sanitized = text;
+  for (const term of violations) {
+    const re = new RegExp(term.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&'), 'gi');
+    sanitized = sanitized.replace(re, '[METRIC_BLOCKED]');
+  }
+  const sentences = sanitized.split(/(?<=[.!?])\s+/);
+  const clean = sentences.map(s =>
+    s.includes('[METRIC_BLOCKED]') ? '[SENTENCE_REMOVED: irrelevant domain metric]' : s
+  );
+  return {
+    contaminated: true,
+    violations,
+    sanitized_text: clean.join(' '),
+    action: 'SANITIZE',
+    n_removed: violations.length,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SCIENCE QUERY ROUTING — Lab Query Engine (table_query_engine_final.py)
+// Detects NL queries about experiments with numeric conditions and routes
+// them to the Python science pipeline instead of document RAG.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Returns true when the query is asking about experiment data with numeric
+ * or structural conditions — i.e. it should run against the Excel dataset,
+ * not against indexed documents.
+ *
+ * Triggers on:
+ *   - Comparison operators: >, <, >=, <=, between, equal
+ *   - Column/parameter names: expansion ratio, APP:PER, IFR, nanoclay, char, MEL, PER
+ *   - Experiment framing words: experiment, formulation, show all, filter, where, list
+ *   - Count intent: how many experiments/formulations
+ */
+function isScienceQueryQuestion(query) {
+  const q = String(query || '').toLowerCase().trim();
+  if (!q) return false;
+
+  // ── TIER 1: Direct lab entity keywords — immediate LAB route ────────────
+  // Any query that mentions these words is a structured lab data query,
+  // not a document RAG query. No operator required.
+  const LAB_KEYWORDS = [
+    'experiment', 'experiments',
+    'formulation', 'formulations',
+    'expansion_ratio', 'expansion ratio',
+    'experiment_id', 'app:per', 'app_per',
+    'ifr', 'nanoclay', 'adhesion', 'viscosity',
+    'char_quality', 'char quality',
+    'lab data', 'lab run', 'lab runs',
+  ];
+  for (const kw of LAB_KEYWORDS) {
+    if (q.includes(kw)) return true;
+  }
+
+  // ── TIER 2: "show all", "list all", "get all" without a specific entity ─
+  if (/\b(show|list|get|fetch|find|count)\s+all\b/.test(q)) return true;
+
+  // ── TIER 3: Known lab columns + numeric operator ─────────────────────────
+  const LAB_COLUMNS = [
+    'app', 'per', 'mel', 'hrr', 'status', 'results', 'validated', 'source',
+  ];
+  const hasLabColumn = LAB_COLUMNS.some(col =>
+    new RegExp(`\\b${col}\\b`).test(q)
+  );
+  const hasNumericOperator = (
+    /[><]=?/.test(q) ||
+    /\bbetween\s+[\d.]+\s+and\s+[\d.]+/.test(q) ||
+    /\b(greater|less|above|below|at least|at most|more than|higher|lower)\b/.test(q)
+  );
+  if (hasNumericOperator && hasLabColumn) return true;
+
+  // ── TIER 4: Equality filter on any lab column ────────────────────────────
+  // e.g. "status = PASS", "experiment_id = abc"
+  if (/=/.test(q) && hasLabColumn) return true;
+
+  return false;
+}
+
+/**
+ * Fetch all lab experiments from managment-back (same source as Lab Decision Board)
+ * and write them as a CSV file into _labDataDir so the Python query engine can read them.
+ *
+ * Returns the path to the CSV file, or null if the fetch fails.
+ * The CSV uses canonical column names (APP, PER, MEL, APP:PER, IFR, expansion_ratio, …).
+ */
+async function fetchLabDataFromManagementApi() {
+  const managementBase = settings.MATRIYA_MANAGEMENT_API_URL || '';
+  if (!managementBase) return null;
+  try {
+    const resp = await axios.get(`${managementBase}/api/matriya/lab-experiments-export`, {
+      headers: {
+        'Accept': 'application/json',
+        ...(settings.MATRIYA_MANAGEMENT_MATERIALS_KEY
+          ? { 'X-Matriya-Materials-Key': settings.MATRIYA_MANAGEMENT_MATERIALS_KEY }
+          : {}),
+      },
+      timeout: 20000,
+    });
+
+    const rows = resp.data?.experiments;
+
+    // ── DIAGNOSTIC LOGS (data integrity check) ──────────────────────────────
+    console.log("ROWS:", Array.isArray(rows) ? rows.length : 'NOT_ARRAY');
+    if (Array.isArray(rows) && rows.length > 0) {
+      console.log("SAMPLE:", JSON.stringify(rows[0], null, 2));
+    } else {
+      console.log("SAMPLE: none");
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
+    if (!Array.isArray(rows) || rows.length === 0) {
+      logger.warn('[science-routing] lab-experiments-export returned 0 rows — falling back to Excel');
+      return null;
+    }
+
+    // Build CSV from canonical rows
+    const cols = ['experiment_id', 'project_id', 'APP', 'PER', 'MEL', 'APP:PER', 'IFR',
+                  'Nanoclay', 'expansion_ratio', 'char_quality', 'adhesion', 'viscosity', 'status', 'formula'];
+    const header = cols.join(',');
+
+    // ── DIAGNOSTIC: log CSV headers ──────────────────────────────────────────
+    console.log("CSV HEADERS:", header);
+    // ────────────────────────────────────────────────────────────────────────
+
+    const escapeVal = v => {
+      if (v == null) return '';
+      const s = String(v);
+      return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const lines = [header, ...rows.map(r => cols.map(c => escapeVal(r[c])).join(','))];
+    const csv = lines.join('\n');
+
+    // ── DIAGNOSTIC: log normalized rows before writing CSV ───────────────────
+    console.log("NORMALIZED:", rows.length);
+    console.log("NORMALIZED SAMPLE:", JSON.stringify(rows[0]));
+    const nullExpCount = rows.filter(r => r.expansion_ratio == null).length;
+    const nullAppCount = rows.filter(r => r.APP == null).length;
+    console.log(`NORMALIZED — expansion_ratio nulls: ${nullExpCount}/${rows.length}, APP nulls: ${nullAppCount}/${rows.length}`);
+    // ─────────────────────────────────────────────────────────────────────────
+
+    const csvPath = join(_labDataDir, `supabase_export_${Date.now()}.csv`);
+    writeFileSync(csvPath, csv, 'utf8');
+    logger.info(`[science-routing] fetched ${rows.length} rows from Supabase → ${csvPath}`);
+    console.log("CSV PATH:", csvPath);
+    return csvPath;
+  } catch (e) {
+    logger.warn(`[science-routing] fetchLabDataFromManagementApi failed: ${e.message} — falling back to Excel`);
+    return null;
+  }
+}
+
+/**
+ * GET /api/lab/debug
+ * Diagnostic endpoint: runs full Supabase→CSV→Python pipeline and reports at each step.
+ * Returns rows_before, rows_after, columns, expansion_ratio stats, and sample row.
+ */
+app.get('/api/lab/debug', requireAuth, async (req, res) => {
+  const report = { steps: [] };
+  const step = (name, data) => { report.steps.push({ step: name, ...data }); };
+
+  // Step 1: fetch from managment-back export
+  const managementBase = settings.MATRIYA_MANAGEMENT_API_URL || '';
+  step('1_config', { management_base: managementBase || 'NOT SET', active_excel: _activeLabExcel || 'none' });
+
+  let rows = [];
+  if (managementBase) {
+    try {
+      const resp = await axios.get(`${managementBase}/api/matriya/lab-experiments-export`, {
+        headers: {
+          'Accept': 'application/json',
+          ...(settings.MATRIYA_MANAGEMENT_MATERIALS_KEY
+            ? { 'X-Matriya-Materials-Key': settings.MATRIYA_MANAGEMENT_MATERIALS_KEY }
+            : {}),
+        },
+        timeout: 15000,
+      });
+      rows = resp.data?.experiments || [];
+      const nullExp = rows.filter(r => r.expansion_ratio == null).length;
+      const nullApp = rows.filter(r => r.APP == null).length;
+      const nullAppPer = rows.filter(r => r['APP:PER'] == null).length;
+      step('2_supabase_fetch', {
+        rows_fetched: rows.length,
+        source: resp.data?.source || 'unknown',
+        expansion_ratio_nulls: `${nullExp}/${rows.length}`,
+        APP_nulls: `${nullApp}/${rows.length}`,
+        'APP:PER_nulls': `${nullAppPer}/${rows.length}`,
+        sample_row: rows[0] || null,
+      });
+    } catch (e) {
+      step('2_supabase_fetch', { error: e.message, rows_fetched: 0 });
+    }
+  } else {
+    step('2_supabase_fetch', { skipped: 'MATRIYA_MANAGEMENT_API_URL not set' });
+  }
+
+  // Step 2: build CSV and count non-empty expansion_ratio values
+  if (rows.length > 0) {
+    const cols = ['experiment_id','project_id','APP','PER','MEL','APP:PER','IFR',
+                  'Nanoclay','expansion_ratio','char_quality','adhesion','viscosity','status','formula'];
+    const escapeVal = v => { if (v == null) return ''; const s = String(v); return s.includes(',') || s.includes('"') ? `"${s.replace(/"/g,'""')}"` : s; };
+    const csvLines = [cols.join(','), ...rows.map(r => cols.map(c => escapeVal(r[c])).join(','))];
+    const csvPreview = csvLines.slice(0, 4).join('\n');
+    const nonEmptyExp = rows.filter(r => r.expansion_ratio != null && !isNaN(Number(r.expansion_ratio))).length;
+    step('3_csv_build', {
+      rows_in_csv: rows.length,
+      expansion_ratio_with_value: nonEmptyExp,
+      expansion_ratio_empty: rows.length - nonEmptyExp,
+      csv_header: csvLines[0],
+      csv_preview_3_rows: csvPreview,
+    });
+  }
+
+  // Step 3: run Python pipeline with test query
+  if (rows.length > 0 || _activeLabExcel) {
+    try {
+      const csvPath = await fetchLabDataFromManagementApi();
+      const dataFile = csvPath || _activeLabExcel;
+      if (dataFile) {
+        const pyResult = await runSciencePython(['query', dataFile, 'expansion_ratio >= 0', 'Formulation Data', 'DEBUG-001']);
+        if (csvPath) { try { unlinkSync(csvPath); } catch (_) {} }
+        step('4_python_query', {
+          test_query: 'expansion_ratio >= 0',
+          decision: pyResult.decision,
+          matched_rows: pyResult.evidence?.matched_rows,
+          total_rows: pyResult.evidence?.total_rows,
+          columns_detected: pyResult.evidence?.columns_returned,
+          filters_applied: pyResult.evidence?.filters_applied,
+          filters_failed: pyResult.evidence?.filters_failed,
+          sample_result: (pyResult.evidence?.result_preview || [])[0] || null,
+          warnings: pyResult.warnings,
+        });
+      } else {
+        step('4_python_query', { skipped: 'no data file available' });
+      }
+    } catch (e) {
+      step('4_python_query', { error: e.message });
+    }
+  }
+
+  return res.json({
+    ok: true,
+    summary: {
+      rows_from_supabase: rows.length,
+      expansion_ratio_populated: rows.filter(r => r.expansion_ratio != null).length,
+      active_excel: _activeLabExcel || null,
+      management_api_configured: !!managementBase,
+    },
+    steps: report.steps,
+  });
+});
+
+/**
+ * Runs the science query pipeline (Python table_query_engine_final.py) and
+ * formats the result as a MATRIYA-compatible search response for the frontend.
+ *
+ * Data source priority:
+ *  1. Supabase lab_experiments (same data as Lab Decision Board) — fetched live
+ *  2. _activeLabExcel (Excel file uploaded via /ingest/excel)
+ */
+/**
+ * Determine the standard response mode for a given Python decision string.
+ * validation → filter → aggregation layer naming:
+ *   "error"       : query rejected before or during execution (no data returned)
+ *   "filter"      : boolean-mask filter ran (0 or more matching rows)
+ *   "aggregation" : idxmax / idxmin / nlargest post-processing ran
+ */
+function _scienceMode(decision) {
+  if (decision === 'AGGREGATION_RESULT')                        return 'aggregation';
+  if (decision === 'MATCHES_FOUND' || decision === 'NO_MATCHES') return 'filter';
+  return 'error'; // INVALID_QUERY | AMBIGUOUS_QUERY | INSUFFICIENT_DATA | unknown
+}
+
+/**
+ * Build the standard data payload for each mode.
+ * All fields are optional-safe — missing values become null / [] / {}.
+ */
+function _scienceData(mode, decision, evidence, extraFields) {
+  if (mode === 'aggregation') {
+    const ev = evidence || {};
+    return {
+      rows:                ev.result_preview     || [],
+      matched_rows:        ev.matched_rows        ?? null,
+      total_rows:          ev.total_rows          ?? null,
+      agg_type:            ev.agg_type            || null,
+      agg_column:          ev.agg_column          || null,
+      agg_n:               ev.agg_n               ?? null,
+      best_value:          ev.best_value          ?? null,
+      best_experiment_id:  ev.best_experiment_id  || null,
+      summary:             ev.summary             || null,
+      columns:             ev.columns_returned    || [],
+    };
+  }
+  if (mode === 'filter') {
+    const ev = evidence || {};
+    return {
+      rows:             ev.result_preview    || [],
+      matched_rows:     ev.matched_rows       ?? null,
+      total_rows:       ev.total_rows         ?? null,
+      columns:          ev.columns_returned   || [],
+      filters_applied:  ev.filters_applied    || [],
+      count_result:     ev.count_result       ?? null,
+    };
+  }
+  // error
+  return {
+    decision,
+    reason:   (evidence || {}).reason || (extraFields && extraFields.warnings && extraFields.warnings[0]) || null,
+    warnings: (extraFields && extraFields.warnings) || [],
+    evidence: evidence || {},
+  };
+}
+
+async function handleScienceQueryFlow(req, res, { query }) {
+  try {
+    // Try to get live Supabase data first (same source as Lab Decision Board)
+    let dataFile = await fetchLabDataFromManagementApi();
+    const dataSource = dataFile ? 'SUPABASE_LIVE' : 'EXCEL_FALLBACK';
+    if (!dataFile) {
+      dataFile = _activeLabExcel;
+    }
+    // ── STEP TRACKING ────────────────────────────────────────────────────────
+    console.log(`[LAB PIPELINE] STEP-A: data_source=${dataSource} | file=${dataFile || 'NULL'}`);
+    console.log(`[LAB PIPELINE] STEP-B: query="${query}"`);
+    if (!dataFile) {
+      console.log('[LAB PIPELINE] STEP-A FAIL: no data file — both Supabase and Excel fallback are null');
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
+    const result = await runSciencePython([
+      'query',
+      dataFile,
+      query,
+      'Formulation Data',
+      `QUERY-${Date.now()}`
+    ]);
+
+    // Clean up temp CSV after query (keep disk tidy)
+    if (dataSource === 'SUPABASE_LIVE') {
+      try { unlinkSync(dataFile); } catch (_) {}
+    }
+
+    // ── STEP TRACKING ────────────────────────────────────────────────────────
+    console.log(`[LAB PIPELINE] STEP-C: python_decision=${result.decision}`);
+    console.log(`[LAB PIPELINE] STEP-C: matched_rows=${result.evidence?.matched_rows} total_rows=${result.evidence?.total_rows}`);
+    console.log(`[LAB PIPELINE] STEP-C: result_preview_length=${(result.evidence?.result_preview || []).length}`);
+    console.log(`[LAB PIPELINE] STEP-C: warnings=${JSON.stringify(result.warnings || [])}`);
+    // ────────────────────────────────────────────────────────────────────────
+
+    logger.info(`[science-routing] query="${query}" decision=${result.decision}`);
+
+    // ── LAYER 1 RESULT: Invalid query (caught by validate_query before filter) ──
+    if (result.decision === 'INVALID_QUERY') {
+      const invalidAnswer = `Invalid query: ${result.evidence?.reason || result.warnings?.[0] || 'malformed expression'}.\n` +
+        `Please check the syntax. Example: "expansion_ratio > 15" or "highest expansion_ratio".`;
+      const _mode = _scienceMode('INVALID_QUERY');
+      return res.status(200).json({
+        mode: _mode,
+        data: _scienceData(_mode, 'INVALID_QUERY', result.evidence, { warnings: result.warnings || [] }),
+        query,
+        flow: 'science',
+        routing: 'SCIENCE_QUERY_ENGINE',
+        data_source: 'NONE',
+        decision: 'INVALID_QUERY',
+        answer: invalidAnswer,
+        reply: invalidAnswer,
+        evidence: result.evidence || {},
+        warnings: result.warnings || [],
+        sources: [],
+        results: [],
+        results_count: 0,
+      });
+    }
+
+    // ── LAYER 2 RESULT: Aggregation (highest/lowest/top-N) ────────────────────
+    if (result.decision === 'AGGREGATION_RESULT') {
+      const ev = result.evidence || {};
+      const aggRows = ev.result_preview || [];
+      const summary = ev.summary || '';
+
+      // Priority-ordered field display (same contract as MATCHES_FOUND)
+      const PRIORITY_COLS_AGG = ['experiment_id', 'expansion_ratio', 'adhesion', 'viscosity',
+                                  'char_quality', 'APP:PER', 'IFR', 'APP', 'PER', 'MEL', 'Nanoclay', 'status'];
+      const fmtAggRow = (r) => {
+        const pri = PRIORITY_COLS_AGG
+          .filter(k => r[k] != null)
+          .map(k => { const v = r[k]; return `${k}: ${typeof v === 'number' ? Number(v.toFixed(4)).toString() : v}`; });
+        const rest = Object.entries(r)
+          .filter(([k, v]) => v != null && !PRIORITY_COLS_AGG.includes(k) && k !== 'project_id')
+          .map(([k, v]) => `${k}: ${typeof v === 'number' ? Number(v.toFixed(4)).toString() : v}`);
+        return [...pri, ...rest].join(' | ');
+      };
+
+      const rowLines = aggRows.map((r, i) => `  [${i + 1}] ${fmtAggRow(r)}`).join('\n');
+      const aggAnswer = summary + (rowLines ? `\n\nDetails:\n${rowLines}` : '');
+
+      // Log each aggregation result row
+      aggRows.forEach((r, i) => console.log(`[science] agg_row[${i}]:`, JSON.stringify(r)));
+
+      const _aggMode = _scienceMode('AGGREGATION_RESULT');
+      return res.status(200).json({
+        mode: _aggMode,
+        data: _scienceData(_aggMode, 'AGGREGATION_RESULT', ev),
+        query,
+        flow: 'science',
+        routing: 'SCIENCE_QUERY_ENGINE',
+        data_source: 'DB_COMPUTED',
+        decision: 'AGGREGATION_RESULT',
+        answer: aggAnswer,
+        reply: aggAnswer,
+        matched_rows: ev.matched_rows,
+        total_rows: ev.total_rows,
+        agg_type: ev.agg_type,
+        agg_column: ev.agg_column,
+        best_value: ev.best_value,
+        best_experiment_id: ev.best_experiment_id,
+        rows: aggRows,
+        columns: ev.columns_returned || [],
+        warnings: result.warnings || [],
+        sources: aggRows.map(r => ({
+          content: fmtAggRow(r),
+          metadata: { source: 'lab_data', routing: 'science_query_engine', experiment_id: r.experiment_id || null },
+          score: 1.0,
+        })),
+        results: aggRows.map(r => ({
+          content: fmtAggRow(r),
+          metadata: { source: 'lab_data', routing: 'science_query_engine' },
+          score: 1.0,
+        })),
+        results_count: ev.matched_rows ?? aggRows.length,
+        lab_bridge_invoked: true,
+        document_rag_invoked: false,
+        tag: 'computed',
+      });
+    }
+
+    if (result.decision === 'AMBIGUOUS_QUERY') {
+      const ambigAnswer = `Ambiguous query — please specify the exact column name. ${
+        (result.evidence?.ambiguous_items || []).map(a => `"${a.term}" could mean: ${a.candidates?.join(', ')}`).join('; ')
+      }`;
+      const _ambigMode = _scienceMode('AMBIGUOUS_QUERY');
+      return res.status(200).json({
+        mode: _ambigMode,
+        data: _scienceData(_ambigMode, 'AMBIGUOUS_QUERY', result.evidence, { warnings: result.warnings || [] }),
+        query,
+        flow: 'science',
+        routing: 'SCIENCE_QUERY_ENGINE',
+        data_source: 'NONE',
+        decision: 'AMBIGUOUS_QUERY',
+        answer: ambigAnswer,
+        reply: ambigAnswer,
+        evidence: result.evidence || {},
+        warnings: result.warnings || [],
+        sources: [],
+        results: [],
+        results_count: 0,
+      });
+    }
+
+    if (result.decision === 'INSUFFICIENT_DATA' || result.decision === 'NO_MATCHES') {
+      const matched = result.evidence?.matched_rows ?? 0;
+      const noMatchAnswer = result.decision === 'NO_MATCHES'
+        ? `No experiments matched the query: "${query}". The dataset exists but no rows satisfy this filter.`
+        : `Insufficient data to execute the query. ${result.evidence?.error || ''}`;
+      const _noMatchMode = _scienceMode(result.decision);
+      return res.status(200).json({
+        mode: _noMatchMode,
+        data: _scienceData(_noMatchMode, result.decision, result.evidence, { warnings: result.warnings || [] }),
+        query,
+        flow: 'science',
+        routing: 'SCIENCE_QUERY_ENGINE',
+        data_source: 'DB_COMPUTED',
+        decision: result.decision,
+        answer: noMatchAnswer,
+        reply: noMatchAnswer,
+        evidence: result.evidence || {},
+        warnings: result.warnings || [],
+        sources: [],
+        results: [],
+        results_count: 0,
+        tag: 'computed',
+      });
+    }
+
+    // MATCHES_FOUND — format rows for frontend
+    const evidence = result.evidence || {};
+    const rows = evidence.result_preview || [];
+    const matchedRows = evidence.matched_rows ?? rows.length;
+
+    // ── DIAGNOSTIC ───────────────────────────────────────────────────────────
+    console.log("[science] decision:", result.decision,
+                "| matched:", matchedRows, "| preview_rows:", rows.length);
+    // Log every row object so field presence can be verified in Railway logs
+    rows.forEach((r, i) => console.log(`[science] row[${i}]:`, JSON.stringify(r)));
+    // ────────────────────────────────────────────────────────────────────────
+    const countResult = evidence.count_result;
+    const isCount = countResult !== undefined && countResult !== null;
+
+    // Build human-readable answer — shown as the assistant message in the chat.
+    // COLUMN ORDER: result_preview rows come from Python in CSV column order:
+    // experiment_id(0) project_id(1) APP(2) PER(3) MEL(4) APP:PER(5) IFR(6) Nanoclay(7) expansion_ratio(8) ...
+    // We must NOT slice by position — always show ALL non-null fields.
+    // Priority columns appear first so key results are never cut off.
+    const PRIORITY_COLS = ['experiment_id', 'expansion_ratio', 'adhesion', 'viscosity',
+                           'char_quality', 'APP:PER', 'IFR', 'APP', 'PER', 'MEL', 'Nanoclay', 'status'];
+    const formatRow = (r) => {
+      const prioritized = PRIORITY_COLS
+        .filter(k => r[k] != null)
+        .map(k => {
+          const v = r[k];
+          return `${k}: ${typeof v === 'number' ? Number(v.toFixed(4)).toString() : v}`;
+        });
+      const rest = Object.entries(r)
+        .filter(([k, v]) => v != null && !PRIORITY_COLS.includes(k) && k !== 'project_id')
+        .map(([k, v]) => `${k}: ${typeof v === 'number' ? Number(v.toFixed(4)).toString() : v}`);
+      return [...prioritized, ...rest].join(' | ');
+    };
+
+    let answer;
+    if (isCount) {
+      answer = `Found ${countResult} experiment${countResult !== 1 ? 's' : ''} matching: "${query}".`;
+    } else if (rows.length === 0) {
+      answer = `No rows matched the query "${query}". Filters were applied but returned 0 results.\n` +
+        `Warnings: ${(result.warnings || []).join('; ') || 'none'}\n` +
+        `Filters applied: ${(evidence.filters_applied || []).map(f => `${f.column} ${f.operator} ${f.value}`).join(', ') || 'none'}\n` +
+        `Filters failed: ${(evidence.filters_failed || []).map(f => `${f.column}: ${f.error}`).join(', ') || 'none'}`;
+    } else {
+      const colList = (evidence.columns_returned || [])
+        .filter(c => c !== 'project_id')
+        .join(', ');
+      const rowLines = rows.slice(0, 10).map((r, i) =>
+        `  [${i + 1}] ${formatRow(r)}`
+      ).join('\n');
+      answer = `Found ${matchedRows} experiment${matchedRows !== 1 ? 's' : ''}` +
+        `${evidence.total_rows ? ` out of ${evidence.total_rows} total` : ''} matching: "${query}"\n` +
+        `Columns: ${colList || 'see rows below'}\n\n` +
+        `Results:\n${rowLines}`;
+    }
+
+    // Post-response guard on science answer (blocks ML metrics in experiment outputs)
+    const sciGuard = guardResponseText(answer);
+    if (sciGuard.contaminated) {
+      logger.warn(`[document-guard] Science answer contamination: ${sciGuard.violations.slice(0, 3).join(', ')} — sanitizing`);
+      answer = sciGuard.sanitized_text;
+    }
+
+    const _filterMode = _scienceMode(result.decision);
+    return res.status(200).json({
+      mode: _filterMode,
+      data: _scienceData(_filterMode, result.decision, evidence),
+      query,
+      flow: 'science',
+      routing: 'SCIENCE_QUERY_ENGINE',
+      data_source: 'DB_COMPUTED',
+      tag: 'computed',
+      decision: result.decision,
+      answer,
+      reply: answer,
+      matched_rows: matchedRows,
+      total_rows: evidence.total_rows,
+      count_result: countResult,
+      // Full unmodified result rows — ground truth from the Python engine
+      rows,
+      columns: evidence.columns_returned || [],
+      parse_confidence: result.parse_confidence,
+      filters_applied: evidence.filters_applied || [],
+      audit_trace: result.audit_trace || {},
+      warnings: result.warnings || [],
+      sources: rows.map(r => ({
+        content: formatRow(r),
+        metadata: { source: 'lab_data', routing: 'science_query_engine', experiment_id: r.experiment_id || null },
+        score: 1.0,
+      })),
+      results: rows.map(r => ({
+        content: formatRow(r),
+        metadata: { source: 'lab_data', routing: 'science_query_engine' },
+        score: 1.0,
+      })),
+      results_count: matchedRows,
+      lab_bridge_invoked: true,
+      document_rag_invoked: false,
+      guard_action: sciGuard.action,
+    });
+  } catch (e) {
+    logger.error(`[science-routing] error: ${e.message}`);
+    return res.status(500).json({ error: e.message, routing: 'SCIENCE_QUERY_ENGINE' });
+  }
 }
 
 function isSystemMetadataQuestion(query) {
@@ -1498,6 +2405,9 @@ async function handleMatriyaSearch(req, res) {
     return res.status(400).json({ error: "query parameter is required" });
   }
 
+  // ── DEBUG LOGGING (David request) ──────────────────────────────────────
+  console.log("QUERY RECEIVED:", query);
+
   // ─── SOURCE GUARD: runs at absolute entry, before ANY retrieval, DB call, or user lookup ───
   // David requirement: log "[ENTRY] guard check starting" at the very top.
   const flowRawEarly = String(req.body?.flow ?? req.query.flow ?? '').toLowerCase().trim();
@@ -1508,6 +2418,20 @@ async function handleMatriyaSearch(req, res) {
     const userEarly = await getCurrentUser(req);
     return await handleLabBridgeFlow(req, res, { query, userId: userEarly?.id ?? null });
   }
+
+  // ── SCIENCE QUERY ROUTING ────────────────────────────────────────────────
+  // Detect NL queries about experiment data with numeric conditions and route
+  // them to the Lab Query Engine (Python science pipeline, not document RAG).
+  // flow=science: explicit override. flow=document: skip this routing.
+  const scienceDetected = isScienceQueryQuestion(query);
+  if (flowRawEarly === 'science' || (flowRawEarly !== 'document' && scienceDetected)) {
+    console.log("ROUTING TO LAB");
+    logger.info(`[science-routing] detected lab data query → science pipeline. query="${query}"`);
+    return await handleScienceQueryFlow(req, res, { query });
+  } else {
+    console.log("ROUTING TO RAG", `(flow=${flowRawEarly || 'none'} scienceDetected=${scienceDetected})`);
+  }
+  // ────────────────────────────────────────────────────────────────────────
 
   const labIntentDetected = isLabEngineQuestion(query);
   logger.warn(`[source-guard] lab_intent_detected=${labIntentDetected} query="${query}"`);

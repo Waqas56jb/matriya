@@ -47,9 +47,15 @@ const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.en
 const MATRIYA_BACK_URL = (process.env.MATRIYA_BACK_URL || '').replace(/\/$/, '');
 /** Optional: same value as MATRIYA_MANAGEMENT_MATERIALS_KEY on Matriya back — allows GET /api/matriya/projects-with-materials-summary without user JWT (server / curl / local dev). */
 const MANEGER_MATERIALS_SUMMARY_SERVER_KEY = (process.env.MANEGER_MATERIALS_SUMMARY_SERVER_KEY || '').trim();
-const SHAREPOINT_TENANT_ID = process.env.SHAREPOINT_TENANT_ID || '';
-const SHAREPOINT_CLIENT_ID = process.env.SHAREPOINT_CLIENT_ID || '';
-const SHAREPOINT_CLIENT_SECRET = process.env.SHAREPOINT_CLIENT_SECRET || '';
+// SharePoint / Microsoft Graph credentials.
+// Accepts both SHAREPOINT_* (legacy) and MICROSOFT_* (David M3 naming) env var conventions.
+const SHAREPOINT_TENANT_ID = process.env.SHAREPOINT_TENANT_ID || process.env.MICROSOFT_TENANT_ID || '';
+const SHAREPOINT_CLIENT_ID = process.env.SHAREPOINT_CLIENT_ID || process.env.MICROSOFT_CLIENT_ID || '';
+const SHAREPOINT_CLIENT_SECRET = process.env.SHAREPOINT_CLIENT_SECRET || process.env.MICROSOFT_CLIENT_SECRET || '';
+// Default SharePoint site for the /api/sharepoint/files listing endpoint.
+// Set SHAREPOINT_SITE_URL (e.g. https://tenant.sharepoint.com/sites/MySite) or SHAREPOINT_SITE_ID in Railway.
+const SHAREPOINT_SITE_URL = (process.env.SHAREPOINT_SITE_URL || '').trim();
+const SHAREPOINT_SITE_ID  = (process.env.SHAREPOINT_SITE_ID  || '').trim();
 const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || '').trim();
 const OPENAI_API_BASE = 'https://api.openai.com/v1';
 /** Model for GPT RAG (Responses API + file_search). */
@@ -137,6 +143,23 @@ function replyToAddressForProject(projectId) {
   const id = String(projectId).trim().toLowerCase();
   if (!UUID_IN_TEXT_RE.test(id)) return null;
   return `${id}@${RESEND_REPLY_DOMAIN}`;
+}
+
+/** Build reply-to using project NAME (slugified) instead of raw UUID for a friendlier display. */
+async function replyToAddressForProjectByName(projectId) {
+  if (!projectId || !RESEND_REPLY_DOMAIN || RESEND_REPLY_DOMAIN.includes('resend.dev')) return null;
+  try {
+    const { data } = await supabase.from('projects').select('name').eq('id', projectId).single();
+    if (data?.name) {
+      const slug = String(data.name)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 40);
+      if (slug) return `${slug}@${RESEND_REPLY_DOMAIN}`;
+    }
+  } catch (_) { /* fallback to UUID */ }
+  return replyToAddressForProject(projectId);
 }
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
@@ -909,6 +932,162 @@ const emailAttachImportSchema = z.object({
   destination: z.enum(['project_files', 'lab'])
 });
 
+/**
+ * Download one attachment from Resend receiving API, save to project_files + storage,
+ * and index the content into MATRIYA RAG (local + OpenAI vector store + /ingest/file).
+ * No user context required — runs in background from the inbound webhook.
+ */
+async function _ingestInboundAttachment(projectId, emailId, attachment) {
+  // Bug fix: the attachment object carries _content (underscore prefix), not content.
+  const { id: attachmentId, filename, content_type: contentType, _content: rawContent } = attachment;
+  if (!filename) return;
+
+  try {
+    let buffer;
+
+    // 1. Use pre-fetched base64 content if Resend included it inline
+    if (rawContent) {
+      buffer = Buffer.from(rawContent, 'base64');
+      console.info(`[email-attachment] using inline content for ${filename} (${buffer.length} bytes)`);
+    } else if (attachmentId && RESEND_API_KEY) {
+      // 2. Fetch attachment binary from Resend receiving API
+      const url = `https://api.resend.com/emails/receiving/${emailId}/attachments/${attachmentId}`;
+      console.info(`[email-attachment] fetching from Resend: ${url}`);
+      let r;
+      try {
+        r = await fetch(url, {
+          headers: { Authorization: `Bearer ${RESEND_API_KEY}` },
+          signal: AbortSignal.timeout(30000),
+        });
+      } catch (fetchErr) {
+        console.error(`[email-attachment] fetch error for ${filename}: ${fetchErr.message}`);
+        return;
+      }
+      if (!r.ok) {
+        const body = await r.text().catch(() => '');
+        console.warn(`[email-attachment] Resend returned ${r.status} for ${filename}: ${body.slice(0, 200)}`);
+        return;
+      }
+      const arrayBuf = await r.arrayBuffer();
+      buffer = Buffer.from(arrayBuf);
+    } else {
+      console.warn(`[email-attachment] no content and no attachment id for: ${filename} — skipping`);
+      return;
+    }
+
+    if (!buffer || buffer.length === 0) {
+      console.warn(`[email-attachment] empty buffer for: ${filename} — skipping`);
+      return;
+    }
+
+    const safeName = filename.replace(/[^a-z0-9\-_.]/gi, '_');
+    const mime = contentType || 'application/octet-stream';
+
+    // Insert project_files row (try with source_email_id first, fall back without it)
+    let fileRow = null;
+    const { data: r1, error: e1 } = await supabase.from('project_files').insert({
+      project_id: projectId,
+      original_name: filename,
+      folder_display_name: 'Email Attachments',
+      source_email_id: emailId,
+    }).select().single();
+
+    if (e1) {
+      const { data: r2, error: e2 } = await supabase.from('project_files').insert({
+        project_id: projectId,
+        original_name: filename,
+        folder_display_name: 'Email Attachments',
+      }).select().single();
+      if (e2 || !r2) {
+        console.error('[email-attachment] project_files insert failed:', e2?.message || e1?.message);
+        return;
+      }
+      fileRow = r2;
+    } else {
+      fileRow = r1;
+    }
+
+    if (!fileRow) return;
+    await _saveAttachmentRow(projectId, emailId, fileRow, buffer, safeName, mime, filename);
+  } catch (e) {
+    console.error('[email-attachment] _ingestInboundAttachment failed:', e.message);
+  }
+}
+
+/**
+ * Uploads attachment to Supabase Storage, indexes it in managment-back's local RAG,
+ * schedules OpenAI vector sync, AND POSTs to MATRIYA /ingest/file so the content
+ * is available when MATRIYA answers questions ("what does the attached document say?").
+ */
+async function _saveAttachmentRow(projectId, emailId, fileRow, buffer, safeName, mime, originalName) {
+  try {
+    await ensureManualBucketExists();
+    const relativeKey = `${PROJECT_PREFIX}${projectId}/${fileRow.id}/${safeStorageKeySegment(safeName)}`;
+    const storage_path = `${MANUAL_PREFIX}/${relativeKey}`;
+
+    const { error: upErr } = await supabase.storage.from(MANUAL_BUCKET).upload(relativeKey, buffer, {
+      contentType: mime,
+      upsert: false,
+    });
+    if (upErr) {
+      await supabase.from('project_files').delete().eq('id', fileRow.id);
+      console.error('[email-attachment] Supabase storage upload failed:', upErr.message);
+      return;
+    }
+
+    await supabase.from('project_files').update({ storage_path }).eq('id', fileRow.id);
+
+    // ── Index in managment-back local RAG ───────────────────────────────────
+    if (hasLocalRag()) ingestFileInBackground(projectId, fileRow.id, buffer, originalName);
+
+    // ── Schedule OpenAI vector store sync ──────────────────────────────────
+    scheduleOpenAiVectorSyncForProject(projectId, 'email/attachment', fileRow.id);
+
+    // ── Route to MATRIYA based on file type (David M3 requirement) ─────────
+    // Excel / CSV → /ingest/excel  (lab pipeline + schema normalisation)
+    // Documents   → /ingest/file   (RAG text chunking)
+    if (MATRIYA_BACK_URL) {
+      setImmediate(async () => {
+        try {
+          const ext = (originalName || '').split('.').pop().toLowerCase();
+          const isLabFile = ['xlsx', 'xls', 'csv'].includes(ext);
+          const endpoint  = isLabFile ? '/ingest/excel' : '/ingest/file';
+
+          const fd = new FormData();
+          fd.append('file', new Blob([buffer], { type: mime }), originalName);
+          // Pass project_id so matriya-back can sync Excel rows into Supabase experiments table
+          if (isLabFile && projectId) fd.append('project_id', String(projectId));
+          const r = await fetch(`${MATRIYA_BACK_URL}${endpoint}`, {
+            method: 'POST',
+            body: fd,
+            signal: AbortSignal.timeout(90000),
+          });
+          if (r.ok) {
+            const result = await r.json().catch(() => ({}));
+            if (isLabFile) {
+              console.info(`[email-attachment] MATRIYA /ingest/excel OK: ${originalName} rows=${result.rows_valid ?? '?'} schema_valid=${result.schema_valid}`);
+            } else {
+              console.info(`[email-attachment] MATRIYA /ingest/file OK: ${originalName} chunks=${result.chunks_stored ?? '?'}`);
+            }
+          } else {
+            const errBody = await r.text().catch(() => '');
+            console.warn(`[email-attachment] MATRIYA ${endpoint} ${r.status} for ${originalName}: ${errBody.slice(0, 200)}`);
+          }
+        } catch (e) {
+          console.warn(`[email-attachment] MATRIYA ingest error: ${e.message}`);
+        }
+      });
+    } else {
+      console.warn('[email-attachment] MATRIYA_BACK_URL not set — skipping ingest call');
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
+    console.info(`[email-attachment] saved & queued: ${originalName} (${buffer.length} bytes) → project ${projectId}`);
+  } catch (e) {
+    console.error('[email-attachment] _saveAttachmentRow failed:', e.message);
+  }
+}
+
 /** Save inbound email as a .txt project file so it is indexed in local RAG + OpenAI vector store. */
 async function _ingestInboundEmailToRag(projectId, emailId, fromEmail, subject, bodyText) {
   try {
@@ -952,7 +1131,7 @@ async function _ingestInboundEmailToRag(projectId, emailId, fromEmail, subject, 
 }
 
 /** Resend Inbound: after email.received, fetch full body and store under matched project (UUID in To address). */
-app.post('/api/webhooks/resend-inbound', async (req, res) => {
+async function handleResendInboundWebhook(req, res) {
   try {
     if (RESEND_INBOUND_WEBHOOK_SECRET) {
       const q = req.query.secret;
@@ -993,19 +1172,25 @@ app.post('/api/webhooks/resend-inbound', async (req, res) => {
     const subject = String(full.subject || '');
     const bodyText = full.text != null ? String(full.text) : null;
     const bodyHtml = full.html != null ? String(full.html) : null;
-    const attachments = Array.isArray(full.attachments)
-      ? full.attachments.map(a => {
-        const id = a.id || a.attachment_id || a.attachmentId;
-        return {
-          id,
-          attachment_id: id,
-          filename: a.filename,
-          content_type: a.content_type,
-          content_disposition: a.content_disposition,
-          content_id: a.content_id
-        };
-      })
-      : [];
+    // Keep full attachment objects (with content if Resend includes it) for RAG ingestion.
+    // Strip large base64 content from the metadata stored in project_emails.attachments.
+    const attachmentsFull = Array.isArray(full.attachments) ? full.attachments : [];
+    const attachments = attachmentsFull.map(a => {
+      const id = a.id || a.attachment_id || a.attachmentId;
+      return {
+        id,
+        attachment_id: id,
+        filename: a.filename,
+        content_type: a.content_type,
+        content_disposition: a.content_disposition,
+        content_id: a.content_id,
+        // store content separately; do NOT persist raw base64 in project_emails row
+        _content: a.content || null,
+      };
+    });
+
+    // Strip internal _content field before storing in DB
+    const attachmentsForDb = attachments.map(({ _content, ...meta }) => meta);
 
     const insertPayload = {
       project_id: projectId,
@@ -1018,7 +1203,7 @@ app.post('/api/webhooks/resend-inbound', async (req, res) => {
       resend_email_id: emailId,
       sent_by_user_id: null,
       sent_by_username: null,
-      attachments
+      attachments: attachmentsForDb
     };
     const { error: insErr } = await supabase.from('project_emails').insert(insertPayload);
     if (insErr) {
@@ -1032,7 +1217,7 @@ app.post('/api/webhooks/resend-inbound', async (req, res) => {
     }
     auditLog(projectId, null, 'inbound', 'create', 'project_email', emailId, { subject, from: fromEmail }, req.requestId);
 
-    // ── Auto-index inbound email into RAG + notify MATRIYA ──────────────────
+    // ── Auto-index email body into RAG + notify MATRIYA ────────────────────
     const emailBodyText = bodyText || (bodyHtml ? bodyHtml.replace(/<[^>]+>/g, ' ') : null);
     if (emailBodyText && emailBodyText.trim().length > 10) {
       setImmediate(() => _ingestInboundEmailToRag(projectId, emailId, fromEmail, subject, emailBodyText));
@@ -1049,13 +1234,37 @@ app.post('/api/webhooks/resend-inbound', async (req, res) => {
         }, { timeout: 15000 }).catch(e => console.warn('[email-inbound] MATRIYA notify failed:', e.message));
       });
     }
+
+    // ── Auto-index every attachment into RAG ────────────────────────────────
+    const ingestableAttachments = attachments.filter(a => a.filename &&
+      /\.(pdf|docx?|txt|md|xlsx?|csv|pptx?|png|jpg|jpeg)$/i.test(a.filename));
+    if (ingestableAttachments.length > 0) {
+      console.info(`[resend-inbound] queuing ${ingestableAttachments.length} attachment(s) for RAG indexing`);
+      setImmediate(() => {
+        for (const att of ingestableAttachments) {
+          _ingestInboundAttachment(projectId, emailId, att).catch(e =>
+            console.warn('[email-attachment] background ingest error:', e.message)
+          );
+        }
+      });
+    }
     // ────────────────────────────────────────────────────────────────────────
 
-    return res.status(201).json({ ok: true, project_id: projectId });
+    return res.status(201).json({
+      ok: true,
+      project_id: projectId,
+      attachments_queued: ingestableAttachments.length,
+    });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
-});
+}
+
+// Register handler on both URL paths:
+// - /api/webhooks/resend-inbound  (original, kept for backward compat)
+// - /api/webhooks/email/inbound   (David's configured Resend webhook URL)
+app.post('/api/webhooks/resend-inbound', handleResendInboundWebhook);
+app.post('/api/webhooks/email/inbound',  handleResendInboundWebhook);
 
 app.get('/api/projects/:projectId/emails', async (req, res) => {
   try {
@@ -1131,7 +1340,7 @@ app.post('/api/projects/:projectId/emails/send', limiterEmail, async (req, res) 
     const payload = { from: fromFormatted, to: toArr, subject };
     if (text) payload.text = text;
     if (html) payload.html = html;
-    const projectReplyTo = replyToAddressForProject(projectId);
+    const projectReplyTo = await replyToAddressForProjectByName(projectId);
     const replyToAddr = projectReplyTo || RESEND_REPLY_TO || null;
     if (replyToAddr) payload.reply_to = [replyToAddr];
     let attachmentMeta = [];
@@ -2248,6 +2457,9 @@ app.post('/api/projects/:projectId/import/sharepoint-file', async (req, res) => 
     for (const exp of experiments) {
       const eid = exp.experiment_id != null ? String(exp.experiment_id) : null;
       if (!eid) { errCount++; details.errors.push({ item: exp, reason: 'experiment_id required' }); continue; }
+      const _toNum = v => { const n = parseFloat(v); return Number.isNaN(n) ? null : n; };
+      // Extract expansion_ratio from exp.results object or exp direct field
+      const _expResults = (() => { try { return typeof exp.results === 'string' ? JSON.parse(exp.results) : (exp.results || {}); } catch (_) { return {}; } })();
       const payload = {
         project_id: projectId,
         experiment_id: eid,
@@ -2261,7 +2473,12 @@ app.post('/api/projects/:projectId/import/sharepoint-file', async (req, res) => 
         is_production_formula: !!exp.is_production_formula,
         source_file_reference,
         research_session_id: exp.research_session_id || null,
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
+        // Structured result metrics — direct columns for reliable querying
+        expansion_ratio: _toNum(exp.expansion_ratio ?? _expResults.expansion_ratio ?? _expResults.expansion),
+        char_quality:    exp.char_quality || _expResults.char_quality || null,
+        adhesion:        _toNum(exp.adhesion  ?? _expResults.adhesion),
+        viscosity:       _toNum(exp.viscosity ?? _expResults.viscosity),
       };
       const { data: existing } = await supabase.from('lab_experiments').select('id, experiment_version').eq('project_id', projectId).eq('experiment_id', eid).single();
       if (existing) {
@@ -2394,10 +2611,93 @@ app.get('/api/projects/:projectId/experiments', async (req, res) => {
     const ctx = await requireProjectMember(req, res, req.params.projectId);
     if (!ctx) return;
     const { limit, offset } = parsePagination(req);
+    // Read from canonical experiments table first, fall back to lab_experiments
+    const { data: canonData, error: canonError } = await supabase
+      .from('experiments')
+      .select('*')
+      .eq('project_id', req.params.projectId)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1);
+    if (!canonError && canonData && canonData.length > 0) {
+      return res.json({ experiments: canonData, limit, offset, source: 'experiments' });
+    }
     const { data, error } = await supabase.from('lab_experiments').select('*').eq('project_id', req.params.projectId).order('updated_at', { ascending: false }).range(offset, offset + limit - 1);
     if (error) throw error;
-    res.json({ experiments: data || [], limit, offset });
+    res.json({ experiments: data || [], limit, offset, source: 'lab_experiments' });
   } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * POST /api/projects/:projectId/experiments
+ * Save a new experiment with dedicated formulation fields (APP, PER, MEL, Nanoclay, IFR, etc.)
+ * and results (expansion_ratio, char_quality, adhesion, viscosity).
+ * Upserts into the canonical `experiments` table.
+ */
+app.post('/api/projects/:projectId/experiments', async (req, res) => {
+  try {
+    const ctx = await requireProjectMember(req, res, req.params.projectId);
+    if (!ctx) return;
+    const projectId = req.params.projectId;
+    const body = req.body || {};
+
+    // Build experiment_id
+    const experimentId = body.experiment_id
+      ? String(body.experiment_id).trim()
+      : `exp-${crypto.randomUUID().slice(0, 8)}`;
+
+    // Build formulation JSONB from individual fields
+    const formulation = {};
+    if (body.APP != null && body.APP !== '') formulation.APP = parseFloat(body.APP);
+    if (body.PER != null && body.PER !== '') formulation.PER = parseFloat(body.PER);
+    if (body.MEL != null && body.MEL !== '') formulation.MEL = parseFloat(body.MEL);
+    if (body.Nanoclay != null && body.Nanoclay !== '') formulation.Nanoclay = parseFloat(body.Nanoclay);
+    if (body.notes) formulation.notes = String(body.notes).trim();
+
+    // Compute APP:PER if APP and PER provided
+    if (formulation.APP != null && formulation.PER != null && formulation.PER !== 0) {
+      formulation['APP:PER'] = parseFloat((formulation.APP / formulation.PER).toFixed(3));
+    } else if (body['APP:PER'] != null && body['APP:PER'] !== '') {
+      formulation['APP:PER'] = parseFloat(body['APP:PER']);
+    }
+
+    // Build results JSONB from individual fields
+    const results = {};
+    if (body.IFR != null && body.IFR !== '') results.IFR = parseFloat(body.IFR);
+    if (body.expansion_ratio != null && body.expansion_ratio !== '') results.expansion_ratio = parseFloat(body.expansion_ratio);
+    if (body.char_quality != null && body.char_quality !== '') results.char_quality = String(body.char_quality).trim();
+    if (body.adhesion != null && body.adhesion !== '') results.adhesion = parseFloat(body.adhesion);
+    if (body.viscosity != null && body.viscosity !== '') results.viscosity = parseFloat(body.viscosity);
+
+    const status = body.status ? String(body.status).trim().toUpperCase() : 'PENDING';
+    const validated = Boolean(body.validated);
+
+    if (Object.keys(formulation).length === 0 && Object.keys(results).length === 0) {
+      return res.status(400).json({ error: 'At least one formulation or result field is required' });
+    }
+
+    const row = {
+      experiment_id: experimentId,
+      project_id: projectId,
+      formulation,
+      results,
+      status,
+      validated,
+      source: 'manual',
+      updated_at: new Date().toISOString(),
+    };
+
+    const { data, error } = await supabase
+      .from('experiments')
+      .upsert(row, { onConflict: 'project_id,experiment_id' })
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ ok: true, experiment: data });
+  } catch (e) {
+    console.error('POST /experiments error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
@@ -2436,6 +2736,7 @@ app.post('/api/projects/:projectId/experiments/from-formulation', async (req, re
         ? String(body.source_file_reference).trim().slice(0, 500)
         : 'from-formulation';
 
+    const toNum = v => { const n = parseFloat(v); return Number.isNaN(n) ? null : n; };
     const payload = {
       project_id: projectId,
       experiment_id,
@@ -2448,7 +2749,12 @@ app.post('/api/projects/:projectId/experiments/from-formulation', async (req, re
       experiment_outcome: 'partial',
       is_production_formula: false,
       source_file_reference: sourceRef,
-      updated_at: new Date().toISOString()
+      updated_at: new Date().toISOString(),
+      // Structured result metrics — stored as typed columns
+      expansion_ratio: toNum(body.expansion_ratio),
+      char_quality:    body.char_quality != null ? String(body.char_quality) : null,
+      adhesion:        toNum(body.adhesion),
+      viscosity:       toNum(body.viscosity),
     };
 
     const { data: existing, error: exErr } = await supabase
@@ -2981,6 +3287,314 @@ app.get('/api/matriya/insights/:experimentId', async (req, res) => {
     }
 
     return res.json(payload);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * POST /api/matriya/experiments/ingest
+ * Internal endpoint called by matriya-back after Excel ingestion.
+ * Accepts an array of normalized experiment rows and upserts them into
+ * the Supabase `experiments` table (canonical lab data layer).
+ *
+ * Body: { project_id, source, rows: [{ experiment_id, formulation, results, status }] }
+ * Auth: X-Matriya-Materials-Key header (same key as other internal endpoints)
+ */
+app.post('/api/matriya/experiments/ingest', async (req, res) => {
+  try {
+    const serverKey = MANEGER_MATERIALS_SUMMARY_SERVER_KEY;
+    const reqKey = (req.headers['x-matriya-materials-key'] || '').trim();
+    if (serverKey && reqKey !== serverKey) {
+      const user = await getCurrentUser(req).catch(() => null);
+      if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const { project_id, rows, source } = req.body || {};
+    if (!project_id) return res.status(400).json({ error: 'project_id is required' });
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return res.status(400).json({ error: 'rows array is required and must not be empty' });
+    }
+
+    let inserted = 0, updated = 0, errors = [];
+    const now = new Date().toISOString();
+
+    for (const row of rows) {
+      const expId = row.experiment_id != null ? String(row.experiment_id).trim() : null;
+      if (!expId) { errors.push({ row, reason: 'experiment_id required' }); continue; }
+
+      const payload = {
+        experiment_id: expId,
+        project_id,
+        formulation:   typeof row.formulation === 'object' ? row.formulation : {},
+        results:       typeof row.results === 'object' ? row.results : {},
+        status:        row.status || 'PENDING',
+        validated:     false,
+        source:        source || 'excel_ingest',
+        updated_at:    now,
+      };
+
+      const { error } = await supabase
+        .from('experiments')
+        .upsert(payload, { onConflict: 'project_id,experiment_id' });
+
+      if (error) {
+        errors.push({ experiment_id: expId, reason: error.message });
+      } else {
+        inserted++;
+      }
+    }
+
+    res.status(201).json({
+      ok: true,
+      inserted,
+      error_count: errors.length,
+      errors: errors.length ? errors : undefined,
+      project_id,
+      source,
+    });
+  } catch (e) {
+    console.error('[experiments/ingest] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * GET /api/matriya/lab-experiments-export
+ * Internal endpoint called by matriya-back to feed the Python science query engine
+ * with the SAME data the Lab Decision Board uses (Supabase lab_experiments).
+ *
+ * Returns all lab_experiments rows across all projects, normalized to canonical
+ * columns so the Python table_query_engine_final.py can query them directly.
+ *
+ * Auth: requires X-Matriya-Materials-Key header (same key as projects-with-materials-summary)
+ * or a valid user JWT. No project restriction — returns all experiments.
+ */
+app.get('/api/matriya/lab-experiments-export', async (req, res) => {
+  try {
+    // Auth: same server-key mechanism as the materials summary endpoint
+    const serverKey = MANEGER_MATERIALS_SUMMARY_SERVER_KEY;
+    const reqKey = (req.headers['x-matriya-materials-key'] || '').trim();
+    if (serverKey && reqKey !== serverKey) {
+      // Fall back to JWT check
+      const user = await getCurrentUser(req).catch(() => null);
+      if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // Fetch both tables in parallel — choose the one with richer data
+    const [
+      { data: expRows,    error: expErr },
+      { data: legacyAll, error: legacyAllErr },
+    ] = await Promise.all([
+      supabase.from('experiments').select('experiment_id, project_id, formulation, results, status').order('created_at', { ascending: false }).limit(2000),
+      supabase.from('lab_experiments').select('experiment_id, project_id, percentages, results, experiment_outcome, formula, updated_at, expansion_ratio, char_quality, adhesion, viscosity').order('updated_at', { ascending: false }).limit(2000),
+    ]);
+
+    // "Usable" = row has at least one NUMERIC result field (expansion_ratio or adhesion).
+    // Status/outcome alone does NOT count — a row with only status="PENDING" and no
+    // numeric results is not queryable and must not cause the wrong table to be selected.
+    const isUsable = (r, isCanonical) => {
+      if (isCanonical) {
+        const res = (typeof r.results === 'object' && r.results) ? r.results : {};
+        const f   = (typeof r.formulation === 'object' && r.formulation) ? r.formulation : {};
+        // Must have actual numeric result OR real formulation data (not just status)
+        return res['expansion_ratio'] != null
+            || res['adhesion'] != null
+            || res['viscosity'] != null
+            || Object.keys(f).some(k => ['APP','PER','MEL','IFR'].includes(k.toUpperCase()));
+      }
+      // lab_experiments: usable if has numeric result column or experiment_outcome
+      return r.expansion_ratio != null || r.adhesion != null || r.experiment_outcome != null;
+    };
+
+    const expTotal      = (expRows   || []).length;
+    const legTotal      = (legacyAll || []).length;
+    const expUsable     = (expRows   || []).filter(r => isUsable(r, true)).length;
+    const legUsable     = (legacyAll || []).filter(r => isUsable(r, false)).length;
+
+    console.log(`[lab-export] TABLE=experiments    total=${expTotal}  usable_rows=${expUsable}  (numeric results or real formulation data)`);
+    console.log(`[lab-export] TABLE=lab_experiments total=${legTotal} usable_rows=${legUsable}  (expansion_ratio|adhesion|experiment_outcome != null)`);
+
+    // Use the table with more NUMERIC usable rows
+    const useCanonical = expUsable >= legUsable && expUsable > 0;
+    console.log(`[lab-export] SELECTED=${useCanonical ? 'experiments' : 'lab_experiments'} (${useCanonical ? expUsable : legUsable} usable rows)`);
+
+    let canonical = [];
+
+    if (useCanonical && !expErr && Array.isArray(expRows) && expRows.length > 0) {
+      // `experiments` table rows are already in canonical JSONB format
+      canonical = expRows.map(row => {
+        const f = (typeof row.formulation === 'object' && row.formulation) ? row.formulation : {};
+        const r = (typeof row.results === 'object' && row.results) ? row.results : {};
+        const getNum = (obj, ...keys) => {
+          for (const k of keys) {
+            for (const [ok, ov] of Object.entries(obj)) {
+              if (ok.toLowerCase().replace(/[_:]/g,'') === k.toLowerCase().replace(/[_:]/g,'')) {
+                const n = parseFloat(ov); return Number.isNaN(n) ? (typeof ov === 'string' ? ov : null) : n;
+              }
+            }
+          }
+          return null;
+        };
+        const APP  = getNum(f, 'app');
+        const PER  = getNum(f, 'per');
+        const MEL  = getNum(f, 'mel');
+        const appPer = getNum(f, 'app:per', 'appPer', 'app_per') ?? (APP != null && PER != null && PER > 0 ? parseFloat((APP / PER).toFixed(4)) : null);
+        const IFR  = getNum(f, 'ifr') ?? (APP != null && PER != null && MEL != null ? APP + PER + MEL : null);
+        return {
+          experiment_id:   row.experiment_id,
+          project_id:      row.project_id,
+          APP, PER, MEL,
+          'APP:PER':       appPer,
+          IFR,
+          Nanoclay:        getNum(f, 'nanoclay', 'cloisite', 'clay'),
+          expansion_ratio: getNum(r, 'expansion_ratio', 'expansion'),
+          char_quality:    r['char_quality'] || r['char'] || null,
+          adhesion:        getNum(r, 'adhesion'),
+          viscosity:       getNum(r, 'viscosity'),
+          status:          row.status || null,
+          formula:         f['formula'] || null,
+        };
+      });
+    } else {
+      // Use lab_experiments (already fetched above)
+      const legacyRows = legacyAll || [];
+      if (legacyAllErr) throw legacyAllErr;
+      if (legacyRows.length === 0) {
+        return res.json({ experiments: [], n_rows: 0, source: 'none' });
+      }
+
+      canonical = legacyRows.map(row => {
+        const pct = (typeof row.percentages === 'object' && row.percentages) ? row.percentages : {};
+        const getPct = (...keys) => {
+          for (const k of keys) for (const [pk, pv] of Object.entries(pct)) {
+            if (pk.toLowerCase() === k.toLowerCase()) { const n = parseFloat(pv); return Number.isNaN(n) ? null : n; }
+          }
+          return null;
+        };
+        // Also parse results TEXT as JSON for backwards compat
+        let resultsObj = {};
+        if (row.results) { try { resultsObj = typeof row.results === 'string' ? JSON.parse(row.results) : row.results; } catch (_) {} }
+        const getResult = (...keys) => {
+          for (const k of keys) for (const [rk, rv] of Object.entries(resultsObj)) {
+            if (rk.toLowerCase().replace(/[_\s]/g,'') === k.toLowerCase().replace(/[_\s]/g,'')) { const n = parseFloat(rv); return Number.isNaN(n) ? (typeof rv === 'string' ? rv : null) : n; }
+          }
+          return null;
+        };
+        const APP  = getPct('app', 'app_pct');
+        const PER  = getPct('per', 'per_pct');
+        const MEL  = getPct('mel', 'mel_pct');
+        const IFR  = getPct('ifr') ?? (APP != null && PER != null && MEL != null ? APP + PER + MEL : null);
+        const appPer = getPct('app:per', 'app_per') ?? (APP != null && PER != null && PER > 0 ? parseFloat((APP / PER).toFixed(4)) : null);
+        const outcomeMap = { success: 'PASS', failure: 'FAIL', partial: 'PARTIAL', production_formula: 'PASS' };
+        const status = outcomeMap[String(row.experiment_outcome || '').toLowerCase()] || row.experiment_outcome || null;
+        // Priority: direct numeric column > parsed results JSON > percentages JSONB
+        const expansion_ratio = row.expansion_ratio != null ? parseFloat(row.expansion_ratio)
+          : getResult('expansion_ratio', 'expansion') ?? getPct('expansion_ratio');
+        const adhesion   = row.adhesion   != null ? parseFloat(row.adhesion)   : getResult('adhesion')   ?? getPct('adhesion');
+        const viscosity  = row.viscosity  != null ? parseFloat(row.viscosity)  : getResult('viscosity')  ?? getPct('viscosity');
+        const char_quality = row.char_quality || getResult('char_quality', 'char');
+        return {
+          experiment_id: row.experiment_id, project_id: row.project_id,
+          APP, PER, MEL, 'APP:PER': appPer, IFR,
+          Nanoclay: getPct('nanoclay', 'cloisite'),
+          expansion_ratio, char_quality, adhesion, viscosity,
+          status, formula: row.formula || null,
+        };
+      });
+    }
+
+    const source = useCanonical ? 'supabase_experiments' : 'supabase_lab_experiments';
+    // withData: rows that have at least expansion_ratio, adhesion, or APP:PER (queryable)
+    const withData = canonical.filter(r => r.expansion_ratio != null || r.adhesion != null || r['APP:PER'] != null);
+
+    // ── DIAGNOSTIC LOGS ────────────────────────────────────────────────────
+    const erNulls   = canonical.filter(r => r.expansion_ratio == null).length;
+    const adhNulls  = canonical.filter(r => r.adhesion == null).length;
+    const outcNulls = canonical.filter(r => r.status == null).length;
+    console.log(`[lab-export] POST-MAP source=${source} total=${canonical.length} withData=${withData.length}`);
+    console.log(`[lab-export] expansion_ratio null: ${erNulls}/${canonical.length} | adhesion null: ${adhNulls}/${canonical.length} | status null: ${outcNulls}/${canonical.length}`);
+    if (canonical.length > 0) {
+      console.log(`[lab-export] sample[0]:`, JSON.stringify(canonical[0]));
+    } else {
+      console.log('[lab-export] WARNING: canonical empty — no rows from either table');
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
+    res.json({
+      experiments: withData.length > 0 ? withData : canonical,
+      n_rows: withData.length > 0 ? withData.length : canonical.length,
+      source,
+    });
+  } catch (e) {
+    console.error('[lab-experiments-export] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * GET /api/lab/raw-debug
+ * Returns raw Supabase rows (no transformation) from both experiments and lab_experiments tables.
+ * Use this to diagnose what data actually exists in Supabase.
+ */
+app.get('/api/lab/raw-debug', async (req, res) => {
+  try {
+    const serverKey = MANEGER_MATERIALS_SUMMARY_SERVER_KEY;
+    const reqKey = (req.headers['x-matriya-materials-key'] || '').trim();
+    if (serverKey && reqKey !== serverKey) {
+      const user = await getCurrentUser(req).catch(() => null);
+      if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const [{ data: expRows, error: expErr }, { data: legRows, error: legErr }] = await Promise.all([
+      supabase.from('experiments').select('experiment_id, project_id, formulation, results, status').limit(20),
+      supabase.from('lab_experiments').select('experiment_id, project_id, percentages, results, experiment_outcome, expansion_ratio, adhesion, viscosity').limit(20),
+    ]);
+
+    // Explicit usability definition: expansion_ratio != null OR adhesion != null OR experiment_outcome != null
+    const analyzeTable = (rows, name, isCanonical) => {
+      if (!rows || rows.length === 0) return { table: name, total: 0, usable_rows: 0, rows: [] };
+      const analyzed = rows.map(r => {
+        const formulation = isCanonical ? (r.formulation || {}) : (r.percentages || {});
+        const results = (() => { try { return typeof r.results === 'string' ? JSON.parse(r.results) : (r.results || {}); } catch (_) { return { _raw: r.results }; } })();
+        const expansion_ratio_found = isCanonical
+          ? (results['expansion_ratio'] ?? results['expansion'] ?? null)
+          : (r.expansion_ratio != null ? r.expansion_ratio : (results['expansion_ratio'] ?? null));
+        const adhesion_found = isCanonical
+          ? (results['adhesion'] ?? null)
+          : (r.adhesion != null ? r.adhesion : null);
+        const outcome_found = isCanonical ? (r.status ?? null) : (r.experiment_outcome ?? null);
+        const usable = expansion_ratio_found != null || adhesion_found != null || outcome_found != null;
+        return {
+          experiment_id: r.experiment_id,
+          expansion_ratio_found,
+          adhesion_found,
+          outcome_found,
+          APP_found: formulation['APP'] ?? formulation['app'] ?? null,
+          usable,
+        };
+      });
+      const usable_rows = analyzed.filter(r => r.usable).length;
+      return { table: name, total: rows.length, usable_rows, rows: analyzed };
+    };
+
+    const expAnalysis = analyzeTable(expRows, 'experiments', true);
+    const legAnalysis = analyzeTable(legRows, 'lab_experiments', false);
+    const selected    = expAnalysis.usable_rows >= legAnalysis.usable_rows && expAnalysis.usable_rows > 0
+      ? 'experiments' : 'lab_experiments';
+
+    res.json({
+      ok: true,
+      errors: { experiments: expErr?.message || null, lab_experiments: legErr?.message || null },
+      experiments:     expAnalysis,
+      lab_experiments: legAnalysis,
+      pipeline: {
+        selected_table:  selected,
+        selected_usable: selected === 'experiments' ? expAnalysis.usable_rows : legAnalysis.usable_rows,
+        usability_definition: 'expansion_ratio != null OR adhesion != null OR experiment_outcome != null',
+        ready_for_query: (selected === 'experiments' ? expAnalysis.usable_rows : legAnalysis.usable_rows) > 0,
+      },
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -3912,6 +4526,88 @@ app.post('/api/projects/:projectId/files/pull-sharepoint', limiterSharePoint, as
   }
 });
 
+/**
+ * GET /api/sharepoint/files
+ * List files directly from Microsoft Graph API (real SharePoint site).
+ *
+ * Credentials: SHAREPOINT_TENANT_ID + SHAREPOINT_CLIENT_ID + SHAREPOINT_CLIENT_SECRET
+ *              (also accepts MICROSOFT_TENANT_ID / MICROSOFT_CLIENT_ID / MICROSOFT_CLIENT_SECRET aliases)
+ * Default site: SHAREPOINT_SITE_URL or SHAREPOINT_SITE_ID env vars.
+ *              Override per-request via ?site_url=... or ?site_id=...
+ *
+ * Optional query params:
+ *   site_url      – full SharePoint site URL (e.g. https://tenant.sharepoint.com/sites/MySite)
+ *   site_id       – Graph site GUID
+ *   folder_path   – sub-folder path relative to drive root (e.g. "Documents/Reports")
+ *   drive_id      – specific drive GUID (defaults to the site's default drive)
+ */
+app.get('/api/sharepoint/files', requireAuth, async (req, res) => {
+  try {
+    if (!SHAREPOINT_TENANT_ID || !SHAREPOINT_CLIENT_ID || !SHAREPOINT_CLIENT_SECRET) {
+      return res.status(503).json({
+        error: 'SharePoint not configured. Add MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET, MICROSOFT_TENANT_ID (or SHAREPOINT_* equivalents) to Railway environment variables.',
+        configured: false,
+        missing: [
+          !SHAREPOINT_TENANT_ID && 'MICROSOFT_TENANT_ID (or SHAREPOINT_TENANT_ID)',
+          !SHAREPOINT_CLIENT_ID && 'MICROSOFT_CLIENT_ID (or SHAREPOINT_CLIENT_ID)',
+          !SHAREPOINT_CLIENT_SECRET && 'MICROSOFT_CLIENT_SECRET (or SHAREPOINT_CLIENT_SECRET)',
+        ].filter(Boolean),
+      });
+    }
+
+    const siteId   = (req.query.site_id    || SHAREPOINT_SITE_ID  || '').trim();
+    const siteUrl  = (req.query.site_url   || SHAREPOINT_SITE_URL || '').trim();
+    const folderPath = (req.query.folder_path || req.query.folder || '').trim();
+    const driveId  = (req.query.drive_id   || '').trim();
+
+    if (!siteId && !siteUrl) {
+      return res.status(400).json({
+        error: 'site_id or site_url is required. Provide as query param (?site_id=... or ?site_url=...) or set SHAREPOINT_SITE_ID / SHAREPOINT_SITE_URL in Railway environment variables.',
+      });
+    }
+
+    const token = await getGraphToken();
+    let resolvedSiteId = siteId;
+    if (!resolvedSiteId && siteUrl) {
+      resolvedSiteId = await getSiteIdFromUrl(siteUrl, token);
+    }
+    if (!resolvedSiteId) {
+      return res.status(400).json({ error: 'Could not resolve SharePoint site from the provided URL.' });
+    }
+
+    const drivePart = driveId
+      ? `https://graph.microsoft.com/v1.0/sites/${resolvedSiteId}/drives/${driveId}`
+      : `https://graph.microsoft.com/v1.0/sites/${resolvedSiteId}/drive`;
+    const folderPathEnc = folderPath.replace(/^\//, '').trim();
+    const listUrl = folderPathEnc
+      ? `${drivePart}/root:/${folderPathEnc}:/children`
+      : `${drivePart}/root/children`;
+
+    const listRes = await axios.get(listUrl, { headers: { Authorization: `Bearer ${token}` }, timeout: 20000 });
+    const items = listRes.data?.value || [];
+
+    const files = items.map(item => ({
+      id:           item.id,
+      name:         item.name,
+      displayName:  item.name,
+      // path format 'graph/{itemId}' is recognised by POST /files/from-bucket for download+ingest
+      path:         `graph/${item.id}`,
+      size:         item.size || 0,
+      type:         item.file ? 'file' : 'folder',
+      mimeType:     item.file?.mimeType || null,
+      lastModified: item.lastModifiedDateTime || null,
+      webUrl:       item.webUrl || null,
+      source:       'sharepoint_graph',
+    }));
+
+    return res.json({ files, site_id: resolvedSiteId, folder_path: folderPath, total: files.length, configured: true });
+  } catch (e) {
+    const msg = e.response?.data?.error?.message ?? e.message;
+    const status = e.response?.status || 500;
+    return res.status(status).json({ error: msg });
+  }
+});
+
 app.post('/api/projects/:projectId/files', limiterUpload, upload.single('file'), async (req, res) => {
   const projectId = req.params.projectId;
   const ctx = await requireProjectMember(req, res, projectId);
@@ -4298,7 +4994,39 @@ app.get('/api/projects/:projectId/files/sharepoint-bucket', async (req, res) => 
     if (dbRows.length > 0) {
       bucketListCache.byProject[projectId] = { displayNamesMap, safeDisplay, expiresAt: now + BUCKET_DISPLAY_NAMES_CACHE_TTL_MS };
     }
-    res.json({ files: withDisplay, displayNamesMap });
+
+    // Augment with live files from Microsoft Graph API (real SharePoint) when credentials + site are configured.
+    // Files appear under a top-level "graph" folder in the browser; clicking Add to Project downloads them.
+    let graphFiles = [];
+    if (SHAREPOINT_TENANT_ID && SHAREPOINT_CLIENT_ID && SHAREPOINT_CLIENT_SECRET && (SHAREPOINT_SITE_URL || SHAREPOINT_SITE_ID)) {
+      try {
+        const gToken = await getGraphToken();
+        let gSiteId = SHAREPOINT_SITE_ID;
+        if (!gSiteId && SHAREPOINT_SITE_URL) gSiteId = await getSiteIdFromUrl(SHAREPOINT_SITE_URL, gToken);
+        if (gSiteId) {
+          const gRes = await axios.get(
+            `https://graph.microsoft.com/v1.0/sites/${gSiteId}/drive/root/children`,
+            { headers: { Authorization: `Bearer ${gToken}` }, timeout: 20000 }
+          );
+          graphFiles = (gRes.data?.value || [])
+            .filter(item => item.file)
+            .map(item => ({
+              path:         `graph/${item.id}`,
+              name:         item.name,
+              displayName:  item.name,
+              size:         item.size || 0,
+              source:       'sharepoint_graph',
+              webUrl:       item.webUrl || null,
+              lastModified: item.lastModifiedDateTime || null,
+            }));
+          console.log(`[sharepoint-bucket] Graph API: ${graphFiles.length} files from site ${gSiteId}`);
+        }
+      } catch (graphErr) {
+        console.warn('[sharepoint-bucket] Graph API fetch failed (non-fatal):', graphErr.message);
+      }
+    }
+
+    res.json({ files: [...withDisplay, ...graphFiles], displayNamesMap });
   } catch (e) {
     res.status(500).json({ error: e?.message || 'Failed to list bucket' });
   }
@@ -4749,6 +5477,37 @@ app.post('/api/projects/:projectId/files/from-bucket', async (req, res) => {
     if (!ctx) return;
     const path = req.body?.path;
     if (!path || typeof path !== 'string') return res.status(400).json({ error: 'path is required' });
+
+    // Handle Graph API paths: 'graph/{itemId}' — download from Microsoft Graph, not Supabase Storage.
+    if (path.startsWith('graph/')) {
+      const itemId = path.split('/').slice(1).join('/');
+      if (!itemId) return res.status(400).json({ error: 'Invalid graph path: missing item ID' });
+      if (!SHAREPOINT_TENANT_ID || !SHAREPOINT_CLIENT_ID || !SHAREPOINT_CLIENT_SECRET) {
+        return res.status(503).json({ error: 'SharePoint credentials not configured. Set MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET, MICROSOFT_TENANT_ID in Railway.' });
+      }
+      let gSiteId = SHAREPOINT_SITE_ID;
+      if (!gSiteId && SHAREPOINT_SITE_URL) {
+        const gToken = await getGraphToken();
+        gSiteId = await getSiteIdFromUrl(SHAREPOINT_SITE_URL, gToken);
+      }
+      if (!gSiteId) {
+        return res.status(400).json({ error: 'SharePoint site not configured. Set SHAREPOINT_SITE_ID or SHAREPOINT_SITE_URL in Railway.' });
+      }
+      const gToken = await getGraphToken();
+      let displayName = req.body?.displayName || 'sharepoint_file';
+      const folderDisplayName = req.body?.folder_display_name != null ? String(req.body.folder_display_name).trim() || null : null;
+      const contentRes = await axios.get(
+        `https://graph.microsoft.com/v1.0/sites/${gSiteId}/drive/items/${itemId}/content`,
+        { headers: { Authorization: `Bearer ${gToken}` }, responseType: 'arraybuffer', timeout: 120000, maxRedirects: 5 }
+      );
+      const buffer = Buffer.from(contentRes.data);
+      const rowOut = await createProjectFileFromBuffer(projectId, ctx, buffer, displayName, folderDisplayName || 'SharePoint', req, {
+        auditSource: 'sharepoint_graph',
+        syncReason: 'sharepoint-graph-pull',
+      });
+      return res.status(201).json(rowOut);
+    }
+
     const { bucket, storagePath } = resolveBucketAndPath(path);
     let displayName = req.body?.displayName;
     if (!displayName || typeof displayName !== 'string') {

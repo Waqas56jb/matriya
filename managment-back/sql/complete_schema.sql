@@ -202,11 +202,50 @@ CREATE TABLE IF NOT EXISTS public.material_library (
   project_id       text        NOT NULL,
   name             text        NOT NULL,
   role_or_function text,
-  created_at       timestamptz NOT NULL DEFAULT now()
+  created_at       timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (project_id, name)
 );
 
 -- ─────────────────────────────────────────────
--- 16. LAB EXPERIMENTS
+-- 16. EXPERIMENTS (canonical lab data — populated from Excel after normalization)
+-- This is the primary science data layer read by the LabQueryEngine.
+-- formulation JSONB: { APP, PER, MEL, "APP:PER", IFR, Nanoclay, formula }
+-- results     JSONB: { expansion_ratio, char_quality, adhesion, viscosity, ... }
+-- status: PASS | FAIL | PARTIAL | PENDING
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS public.experiments (
+  id             uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  experiment_id  text        NOT NULL,
+  project_id     text        NOT NULL,
+  formulation    jsonb       NOT NULL DEFAULT '{}',
+  results        jsonb       NOT NULL DEFAULT '{}',
+  status         text        NOT NULL DEFAULT 'PENDING',
+  validated      boolean     NOT NULL DEFAULT false,
+  source         text,
+  created_at     timestamptz NOT NULL DEFAULT now(),
+  updated_at     timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (project_id, experiment_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_experiments_project   ON public.experiments(project_id);
+CREATE INDEX IF NOT EXISTS idx_experiments_status    ON public.experiments(status);
+CREATE INDEX IF NOT EXISTS idx_experiments_created   ON public.experiments(created_at DESC);
+
+-- ─────────────────────────────────────────────
+-- 17. RESEARCH SESSIONS (Supabase management layer)
+-- Used by managment-back /api/projects/:projectId/research-sessions
+-- Separate from matriya-back Sequelize research_sessions (FSCTM engine).
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS public.research_sessions (
+  id         uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id text        NOT NULL,
+  name       text,
+  started_at timestamptz NOT NULL DEFAULT now(),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- ─────────────────────────────────────────────
+-- 17. LAB EXPERIMENTS
 -- ─────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS public.lab_experiments (
   id                    uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -222,6 +261,11 @@ CREATE TABLE IF NOT EXISTS public.lab_experiments (
   is_production_formula boolean     NOT NULL DEFAULT false,
   source_file_reference text,
   research_session_id   text,
+  -- Structured result metrics stored as typed columns for reliable numeric queries
+  expansion_ratio       numeric,
+  char_quality          text,
+  adhesion              numeric,
+  viscosity             numeric,
   created_at            timestamptz NOT NULL DEFAULT now(),
   updated_at            timestamptz NOT NULL DEFAULT now(),
   UNIQUE (project_id, experiment_id)
@@ -293,23 +337,33 @@ CREATE TABLE IF NOT EXISTS public.whatsapp_whitelist (
 -- 22. WHATSAPP TASKS  (code uses "whatsapp_tasks" — NOT "whatsapp_task_queue")
 -- ─────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS public.whatsapp_tasks (
-  id           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-  from_number  text        NOT NULL,
-  message      text        NOT NULL,
-  status       text        NOT NULL DEFAULT 'PENDING',
-  created_at   timestamptz NOT NULL DEFAULT now(),
-  processed_at timestamptz
+  id               uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  from_number      text        NOT NULL,
+  message          text        NOT NULL,
+  status           text        NOT NULL DEFAULT 'PENDING',
+  decision         text,
+  confidence       numeric,
+  candidates       jsonb,
+  rachel_notified  boolean     NOT NULL DEFAULT false,
+  created_at       timestamptz NOT NULL DEFAULT now(),
+  processed_at     timestamptz
 );
 
 -- ─────────────────────────────────────────────
--- 23. ACCESS REQUESTS (matriya-back)
+-- 23. ACCESS REQUESTS (matriya-back WhatsApp whitelist requests)
 -- ─────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS public.access_requests (
-  id           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-  phone        text        NOT NULL,
-  status       text        NOT NULL DEFAULT 'pending',
-  created_at   timestamptz NOT NULL DEFAULT now(),
-  reviewed_at  timestamptz
+  id            uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  phone_number  text        NOT NULL,
+  first_message text,
+  request_count integer     NOT NULL DEFAULT 1,
+  first_seen    timestamptz NOT NULL DEFAULT now(),
+  last_seen     timestamptz NOT NULL DEFAULT now(),
+  status        text        NOT NULL DEFAULT 'pending',
+  reviewed_by   text,
+  reviewed_at   timestamptz,
+  note          text,
+  created_at    timestamptz NOT NULL DEFAULT now()
 );
 
 -- ─────────────────────────────────────────────
@@ -359,9 +413,13 @@ ALTER TABLE public.project_members ADD COLUMN IF NOT EXISTS role       text NOT 
 ALTER TABLE public.project_members ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now();
 
 -- project_files
-ALTER TABLE public.project_files ADD COLUMN IF NOT EXISTS file_size    integer;
-ALTER TABLE public.project_files ADD COLUMN IF NOT EXISTS storage_path text;
-ALTER TABLE public.project_files ADD COLUMN IF NOT EXISTS uploaded_by  text;
+ALTER TABLE public.project_files ADD COLUMN IF NOT EXISTS file_size          integer;
+ALTER TABLE public.project_files ADD COLUMN IF NOT EXISTS storage_path       text;
+ALTER TABLE public.project_files ADD COLUMN IF NOT EXISTS uploaded_by        text;
+ALTER TABLE public.project_files ADD COLUMN IF NOT EXISTS original_name      text;
+ALTER TABLE public.project_files ADD COLUMN IF NOT EXISTS folder_display_name text;
+ALTER TABLE public.project_files ADD COLUMN IF NOT EXISTS ingest_error       text;
+ALTER TABLE public.project_files ADD COLUMN IF NOT EXISTS source_email_id    text;
 
 -- project_emails — patch old incomplete schema
 ALTER TABLE public.project_emails ADD COLUMN IF NOT EXISTS direction        text        NOT NULL DEFAULT 'sent';
@@ -420,6 +478,21 @@ ALTER TABLE public.materials ADD COLUMN IF NOT EXISTS technology_domain text;
 -- material_library
 ALTER TABLE public.material_library ADD COLUMN IF NOT EXISTS project_id       text NOT NULL DEFAULT '';
 ALTER TABLE public.material_library ADD COLUMN IF NOT EXISTS role_or_function text;
+-- Add UNIQUE constraint required for upsert onConflict: 'project_id,name'
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'material_library_project_id_name_key'
+      AND conrelid = 'public.material_library'::regclass
+  ) THEN
+    ALTER TABLE public.material_library ADD CONSTRAINT material_library_project_id_name_key UNIQUE (project_id, name);
+  END IF;
+END $$;
+
+-- research_sessions
+ALTER TABLE public.research_sessions ADD COLUMN IF NOT EXISTS project_id text NOT NULL DEFAULT '';
+ALTER TABLE public.research_sessions ADD COLUMN IF NOT EXISTS name       text;
+ALTER TABLE public.research_sessions ADD COLUMN IF NOT EXISTS started_at timestamptz NOT NULL DEFAULT now();
 
 -- lab_experiments
 ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS experiment_version    integer     NOT NULL DEFAULT 1;
@@ -433,6 +506,11 @@ ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS is_production_formul
 ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS source_file_reference text;
 ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS research_session_id   text;
 ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS updated_at            timestamptz NOT NULL DEFAULT now();
+-- Structured result metrics — stored as direct numeric columns for reliable querying
+ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS expansion_ratio       numeric;
+ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS char_quality          text;
+ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS adhesion              numeric;
+ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS viscosity             numeric;
 
 -- runs
 ALTER TABLE public.runs ADD COLUMN IF NOT EXISTS features_core     text[] NOT NULL DEFAULT '{}';
@@ -459,6 +537,21 @@ ALTER TABLE public.finance_signals ADD COLUMN IF NOT EXISTS source          text
 ALTER TABLE public.finance_signals ADD COLUMN IF NOT EXISTS class_label     text;
 ALTER TABLE public.finance_signals ADD COLUMN IF NOT EXISTS composite_alert boolean NOT NULL DEFAULT false;
 
+-- whatsapp_tasks (extended columns from webhook handler)
+ALTER TABLE public.whatsapp_tasks ADD COLUMN IF NOT EXISTS decision         text;
+ALTER TABLE public.whatsapp_tasks ADD COLUMN IF NOT EXISTS confidence       numeric;
+ALTER TABLE public.whatsapp_tasks ADD COLUMN IF NOT EXISTS candidates       jsonb;
+ALTER TABLE public.whatsapp_tasks ADD COLUMN IF NOT EXISTS rachel_notified  boolean NOT NULL DEFAULT false;
+
+-- access_requests (extended columns from whitelist system)
+ALTER TABLE public.access_requests ADD COLUMN IF NOT EXISTS phone_number  text NOT NULL DEFAULT '';
+ALTER TABLE public.access_requests ADD COLUMN IF NOT EXISTS first_message text;
+ALTER TABLE public.access_requests ADD COLUMN IF NOT EXISTS request_count integer NOT NULL DEFAULT 1;
+ALTER TABLE public.access_requests ADD COLUMN IF NOT EXISTS first_seen    timestamptz NOT NULL DEFAULT now();
+ALTER TABLE public.access_requests ADD COLUMN IF NOT EXISTS last_seen     timestamptz NOT NULL DEFAULT now();
+ALTER TABLE public.access_requests ADD COLUMN IF NOT EXISTS reviewed_by   text;
+ALTER TABLE public.access_requests ADD COLUMN IF NOT EXISTS note          text;
+
 -- ─────────────────────────────────────────────
 -- INDEXES
 -- ─────────────────────────────────────────────
@@ -475,6 +568,8 @@ CREATE INDEX IF NOT EXISTS idx_notes_project           ON public.notes(project_i
 CREATE INDEX IF NOT EXISTS idx_audit_log_project       ON public.audit_log(project_id);
 CREATE INDEX IF NOT EXISTS idx_audit_log_created       ON public.audit_log(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_material_library_proj   ON public.material_library(project_id);
+CREATE INDEX IF NOT EXISTS idx_research_sessions_proj  ON public.research_sessions(project_id);
+CREATE INDEX IF NOT EXISTS idx_research_sessions_ts    ON public.research_sessions(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_lab_experiments_project ON public.lab_experiments(project_id);
 CREATE INDEX IF NOT EXISTS idx_lab_experiments_eid     ON public.lab_experiments(experiment_id);
 CREATE INDEX IF NOT EXISTS idx_import_log_project      ON public.import_log(project_id);

@@ -40,8 +40,9 @@ COLUMN_TYPES = {
     "MEL":             "numeric",
     "Nanoclay":        "numeric",
     "expansion_ratio": "numeric",
+    "adhesion":        "numeric",   # numeric — values like 85.0, 90.0
+    "viscosity":       "numeric",   # numeric — values like 1200.0
     "char_quality":    "categorical",
-    "adhesion":        "categorical",
     "status":          "categorical",
 }
 
@@ -60,14 +61,19 @@ COLUMN_ALIASES = {
     "nanoclay":             "Nanoclay",
     "cloisite":             "Nanoclay",
     "cloisite 30b":         "Nanoclay",
+    # expansion_ratio — exact name AND natural variants all resolve to the same column
+    "expansion_ratio":      "expansion_ratio",
     "expansion":            "expansion_ratio",
     "expansion ratio":      "expansion_ratio",
+    "er":                   "expansion_ratio",
     "char":                 "char_quality",
     "char quality":         "char_quality",
+    "char_quality":         "char_quality",
     "adhesion":             "adhesion",
     "viscosity":            "viscosity",
     "status":               "status",
     "result":               "status",
+    "outcome":              "status",
 }
 
 OPERATOR_MAP = {
@@ -255,6 +261,31 @@ def _parse_single_condition(part: str, df_columns: list) -> dict:
     """
     part = part.strip()
 
+    # IS NOT NULL / IS NULL — must be checked BEFORE the named-operator loop
+    # because "is" maps to "==" and would mis-parse "expansion_ratio is not null"
+    # as expansion_ratio == "not".
+    m_null = re.search(r"(.+?)\s+is\s+not\s+null\s*$", part, re.IGNORECASE)
+    if m_null:
+        resolved = resolve_column(m_null.group(1).strip(), df_columns)
+        if "column" in resolved:
+            return {"column": resolved["column"], "operator": "is_not_null",
+                    "value": None, "raw": part, "tag": "computed"}
+
+    m_isnull = re.search(r"(.+?)\s+is\s+null\s*$", part, re.IGNORECASE)
+    if m_isnull:
+        resolved = resolve_column(m_isnull.group(1).strip(), df_columns)
+        if "column" in resolved:
+            return {"column": resolved["column"], "operator": "is_null",
+                    "value": None, "raw": part, "tag": "computed"}
+
+    # != null / != None shorthand
+    m_notnull = re.search(r"(.+?)\s*(!=|<>)\s*(null|none)\s*$", part, re.IGNORECASE)
+    if m_notnull:
+        resolved = resolve_column(m_notnull.group(1).strip(), df_columns)
+        if "column" in resolved:
+            return {"column": resolved["column"], "operator": "is_not_null",
+                    "value": None, "raw": part, "tag": "computed"}
+
     # BETWEEN pattern
     m = re.search(
         r"(.+?)\s+between\s+([\d.]+)\s+and\s+([\d.]+)",
@@ -365,6 +396,36 @@ def detect_aggregation(query: str, df_columns: list) -> Optional[dict]:
     return None
 
 
+def detect_ranking(query: str, df_columns: list) -> Optional[dict]:
+    """
+    Detect a ranking intent: "top N by <column>".
+
+    Rule:
+      - Pattern: top <integer> by <column>
+      - The ranking column is extracted from "by <column>", NOT from filter conditions.
+
+    Returns:
+      {"n": int, "column": str, "direction": "max"}   — always descending (top = highest)
+      None — if no ranking pattern found
+
+    Examples:
+      "top 3 by expansion_ratio"  → {"n": 3, "column": "expansion_ratio", "direction": "max"}
+      "top 5 by IFR"              → {"n": 5, "column": "IFR",             "direction": "max"}
+    """
+    m = re.search(r"\btop\s+(\d+)\s+by\s+(\S+)", query, re.IGNORECASE)
+    if not m:
+        return None
+
+    n = int(m.group(1))
+    col_text = m.group(2).strip().rstrip(".,?!")
+
+    resolved = resolve_column(col_text, df_columns)
+    if "column" in resolved:
+        return {"n": n, "column": resolved["column"], "direction": "max"}
+
+    return None
+
+
 def parse_natural_language_query(query: str, df_columns: list) -> dict:
     """
     Parse NL query into structured filter list.
@@ -380,9 +441,10 @@ def parse_natural_language_query(query: str, df_columns: list) -> dict:
     """
     count_intent = detect_count_intent(query)
 
-    # ── Aggregation detection (on original query, before any stripping) ──────
-    # Must run first so we can remove the aggregation phrase before filter parsing.
+    # ── Aggregation + ranking detection (on original query, before any stripping) ──
+    # Must run first so phrases are removed before filter parsing.
     aggregation = detect_aggregation(query, df_columns)
+    ranking     = detect_ranking(query, df_columns)
 
     query_lower = query.lower().strip()
 
@@ -392,14 +454,23 @@ def parse_natural_language_query(query: str, df_columns: list) -> dict:
         agg_phrase = rf"\b{re.escape(aggregation['keyword'])}\s+\S+"
         query_lower = re.sub(agg_phrase, "", query_lower, flags=re.IGNORECASE).strip()
 
-    # Strip leading context words — repeat until stable
+    # If ranking was found, remove "top N by <column>" from the query so the
+    # ranking column never falls into the filter layer.
+    if ranking:
+        rank_phrase = rf"\btop\s+{ranking['n']}\s+by\s+\S+"
+        query_lower = re.sub(rank_phrase, "", query_lower, flags=re.IGNORECASE).strip()
+
+    # Strip leading context words — repeat until stable.
     _strip_words = sorted([
         "find", "show me", "show", "get", "filter", "select",
-        "list", "formulations", "rows", "where", "with", "have", "that",
-        "that have", "which have", "having", "all", "only",
+        "list", "formulations", "formulation", "rows", "row", "where", "with",
+        "have", "that", "that have", "which have", "having", "all", "only",
         "how many", "count of", "number of",
         "which experiment has", "which experiment", "which",
-        "experiment has", "experiment",
+        "experiment has", "experiment", "experiments",
+        "data", "results", "result",
+        "give me", "return", "display", "output",
+        "among",
     ], key=len, reverse=True)
     for _ in range(6):  # max passes
         prev = query_lower
@@ -452,6 +523,7 @@ def parse_natural_language_query(query: str, df_columns: list) -> dict:
         "count_intent":     count_intent,
         "unparsed":         " | ".join(unparsed) if unparsed else None,
         "aggregation":      aggregation,   # {"keyword", "column", "direction"} or None
+        "ranking":          ranking,       # {"n", "column", "direction"} or None
     }
 
 
@@ -496,6 +568,7 @@ def execute_query(df: pd.DataFrame, parsed: dict) -> dict:
     filters      = parsed.get("filters", [])
     count_intent = parsed.get("count_intent", False)
     aggregation  = parsed.get("aggregation")   # {"keyword", "column", "direction"} | None
+    ranking      = parsed.get("ranking")       # {"n", "column", "direction"} | None
 
     if not filters:
         return {
@@ -512,45 +585,99 @@ def execute_query(df: pd.DataFrame, parsed: dict) -> dict:
     # Type validation
     type_warnings = validate_filter_types(filters)
 
-    # Coerce numeric columns before comparison
+    # Coerce ALL numeric columns to float before any comparison.
+    # This must happen once up-front so every filter sees proper NaN (not empty strings).
     df = df.copy()
-    for f in filters:
-        col = f["column"]
-        if col in df.columns and COLUMN_TYPES.get(col) == "numeric":
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+    for col_name, col_type in COLUMN_TYPES.items():
+        if col_type == "numeric" and col_name in df.columns:
+            df[col_name] = pd.to_numeric(df[col_name], errors="coerce")
 
     mask = pd.Series([True] * len(df), index=df.index)
     applied = []
     failed = []
     execution_steps = []
 
+    import sys as _sqsys
+
+    # NULL-safety rule (mirrors SQL WHERE semantics):
+    # For any numeric comparison operator (>, <, >=, <=, between, ==, !=),
+    # a NULL (NaN) value in the column MUST evaluate to FALSE.
+    # We enforce this by applying .notna() to the column mask before the comparison.
+    NUMERIC_OPS = {">", "<", ">=", "<=", "between", "==", "!="}
+
+    # CRITICAL: if ANY filter references a column that does not exist in the DataFrame,
+    # we must NOT silently return all rows. Raise it as a hard failure so the caller
+    # returns NO_MATCHES (not MATCHES_FOUND with all rows).
+    missing_cols = [f["column"] for f in filters if f["column"] not in df.columns]
+    if missing_cols:
+        print(f"[execute_query] COLUMN NOT FOUND: {missing_cols}. DataFrame columns: {list(df.columns)}",
+              file=_sqsys.stderr, flush=True)
+        return {
+            "decision":    "NO_MATCHES",
+            "quality":     "SCHEMA_ERROR",
+            "warnings":    [f"Column(s) not found in dataset: {missing_cols}. Available: {list(df.columns)}"],
+            "evidence":    {
+                "matched_rows":     0,
+                "total_rows":       len(df),
+                "match_rate":       0.0,
+                "filters_applied":  [],
+                "filters_failed":   [{"column": c, "error": "Column not found"} for c in missing_cols],
+                "result_preview":   [],
+                "columns_returned": list(df.columns),
+            },
+            "data_source": "DB_COMPUTED",
+            "confidence":  "LOW",
+            "tag":         "computed",
+            "audit_trace": _build_trace(parsed, [], [], df.head(0)),
+            "result_df":   df.head(0),
+        }
+
     for f in filters:
         col = f["column"]
         op  = f["operator"]
         val = f["value"]
 
-        if col not in df.columns:
-            failed.append({**f, "error": f"Column '{col}' not found in DataFrame"})
+        # Log each filter step for full traceability
+        print(f"[execute_query] FILTER: {col} {op} {val} | col_in_df={col in df.columns} | "
+              f"dtype={df[col].dtype if col in df.columns else 'N/A'} | "
+              f"non_null={(df[col].notna().sum() if col in df.columns else 'N/A')}",
+              file=_sqsys.stderr, flush=True)
+
+        # col always exists here (missing_cols check above handles the case)
+        if col not in df.columns:  # defensive — should never reach here
+            failed.append({**f, "error": f"Column '{col}' not found (defensive)"})
             continue
 
         try:
             before = mask.sum()
+
+            # SQL-style NULL semantics: exclude NULL rows from ALL numeric comparisons
+            is_numeric_col = COLUMN_TYPES.get(col) == "numeric"
+            if is_numeric_col and op in NUMERIC_OPS:
+                null_mask = df[col].notna()
+                null_count = (~null_mask).sum()
+                if null_count > 0:
+                    import sys as _sys2
+                    print(f"[execute_query] NULL-safety: excluding {null_count} NULL rows from '{col} {op} {val}'",
+                          file=_sys2.stderr, flush=True)
+                mask &= null_mask  # enforce: NULL always = FALSE for numeric filters
+
             if op == "between":
                 lo, hi = val
                 mask &= (df[col] >= lo) & (df[col] <= hi)
-                step_desc = f"{col} between {lo} and {hi}"
+                step_desc = f"{col} BETWEEN {lo} AND {hi} (nulls excluded)"
             elif op == ">":
                 mask &= df[col] > val
-                step_desc = f"{col} > {val}"
+                step_desc = f"{col} > {val} (nulls excluded)"
             elif op == "<":
                 mask &= df[col] < val
-                step_desc = f"{col} < {val}"
+                step_desc = f"{col} < {val} (nulls excluded)"
             elif op == ">=":
                 mask &= df[col] >= val
-                step_desc = f"{col} >= {val}"
+                step_desc = f"{col} >= {val} (nulls excluded)"
             elif op == "<=":
                 mask &= df[col] <= val
-                step_desc = f"{col} <= {val}"
+                step_desc = f"{col} <= {val} (nulls excluded)"
             elif op == "==":
                 if isinstance(val, str):
                     mask &= df[col].astype(str).str.strip().str.lower() == val.lower()
@@ -560,6 +687,12 @@ def execute_query(df: pd.DataFrame, parsed: dict) -> dict:
             elif op == "!=":
                 mask &= df[col] != val
                 step_desc = f"{col} != {val}"
+            elif op == "is_not_null":
+                mask &= df[col].notna()
+                step_desc = f"{col} IS NOT NULL"
+            elif op == "is_null":
+                mask &= df[col].isna()
+                step_desc = f"{col} IS NULL"
             else:
                 failed.append({**f, "error": f"Unknown operator '{op}'"})
                 continue
@@ -578,30 +711,62 @@ def execute_query(df: pd.DataFrame, parsed: dict) -> dict:
         except Exception as e:
             failed.append({**f, "error": str(e)})
 
+    # ── DATASET CONSISTENCY CHECK (David request) ──────────────────────────────
+    # Verify id(df) is the same object used for filtering and for result_df.
+    # This confirms no reload or re-mapping happened between filter and return.
+    print(f"[execute_query] id(df)_before_result={id(df)} | mask_true_count={int(mask.sum())} | df_len={len(df)}",
+          file=_sqsys.stderr, flush=True)
     result_df = df[mask]
+    print(f"[execute_query] id(df)_after={id(df)} | id(result_df)={id(result_df)} | result_df_len={len(result_df)}",
+          file=_sqsys.stderr, flush=True)
+    if 'expansion_ratio' in result_df.columns:
+        er_vals = result_df['expansion_ratio'].tolist()
+        print(f"[execute_query] result_df expansion_ratio values: {er_vals}", file=_sqsys.stderr, flush=True)
+    if len(result_df) > 0:
+        print(f"[execute_query] result_df[0]: {result_df.iloc[0].to_dict()}", file=_sqsys.stderr, flush=True)
 
-    # ── Aggregation: find the single row with idxmax / idxmin ────────────────
-    # The target column was detected NEXT TO the keyword (not from filter conditions).
+    # ── Step 2: Ranking — top N by <rank_column> ─────────────────────────────
+    # "top 3 by expansion_ratio" → sort desc, keep top 3 rows.
+    rank_meta = None
+    if ranking and len(result_df) > 0:
+        rank_col = ranking["column"]
+        rank_n   = ranking["n"]
+        if rank_col in result_df.columns:
+            numeric_rank = pd.to_numeric(result_df[rank_col], errors="coerce")
+            sorted_df    = result_df.assign(_rank_col=numeric_rank).sort_values(
+                "_rank_col", ascending=False
+            ).drop(columns=["_rank_col"])
+            result_df = sorted_df.head(rank_n)
+            rank_meta = {
+                "rank_column":    rank_col,
+                "rank_n":         rank_n,
+                "rows_after_rank": len(result_df),
+            }
+            print(f"[execute_query] after ranking top {rank_n} by {rank_col}: {len(result_df)} rows",
+                  file=_sqsys.stderr, flush=True)
+
+    # ── Step 3: Aggregation — idxmax / idxmin on aggregation column ──────────
+    # Applied AFTER ranking so it operates on the ranked subset, not the full
+    # filter result.  This is the correct two-step pipeline:
+    #   filter → rank → aggregate
     agg_meta = None
-    if aggregation and result_df is not None and len(result_df) > 0:
+    if aggregation and len(result_df) > 0:
         agg_col = aggregation["column"]
         agg_dir = aggregation["direction"]
         if agg_col in result_df.columns:
             numeric_col = pd.to_numeric(result_df[agg_col], errors="coerce")
             if not numeric_col.isna().all():
-                if agg_dir == "max":
-                    best_idx = numeric_col.idxmax()
-                else:
-                    best_idx = numeric_col.idxmin()
+                best_idx = numeric_col.idxmax() if agg_dir == "max" else numeric_col.idxmin()
                 best_row = result_df.loc[[best_idx]]
                 agg_meta = {
-                    "aggregation_column": agg_col,
+                    "aggregation_column":    agg_col,
                     "aggregation_direction": agg_dir,
-                    "aggregation_keyword": aggregation["keyword"],
-                    "aggregation_value": float(numeric_col.loc[best_idx]),
-                    "best_row": best_row.to_dict(orient="records"),
+                    "aggregation_keyword":   aggregation["keyword"],
+                    "aggregation_value":     float(numeric_col.loc[best_idx]),
+                    "applied_on":            "ranked_result" if rank_meta else "filtered_result",
+                    "best_row":              best_row.to_dict(orient="records"),
                 }
-                result_df = best_row   # narrow result to the single best row
+                result_df = best_row   # narrow to the single best row
 
     matched = len(result_df)
     total = len(df)
@@ -619,6 +784,8 @@ def execute_query(df: pd.DataFrame, parsed: dict) -> dict:
         "filters_applied": applied,
         "filters_failed":  failed,
     }
+    if rank_meta:
+        evidence["ranking"] = rank_meta
     if agg_meta:
         evidence["aggregation"] = agg_meta
 
@@ -626,7 +793,9 @@ def execute_query(df: pd.DataFrame, parsed: dict) -> dict:
         evidence["count_result"] = matched
         evidence["count_note"] = f"{matched} rows match the query out of {total} total"
     else:
-        evidence["result_preview"] = result_df.head(10).to_dict(orient="records")
+        # Full result rows — no positional cap. The Node.js layer is responsible
+        # for display limits; the data contract requires unmodified rows here.
+        evidence["result_preview"] = result_df.to_dict(orient="records")
         evidence["columns_returned"] = list(result_df.columns)
 
     return {
