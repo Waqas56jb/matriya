@@ -334,44 +334,47 @@ def handle_rank_then_aggregate(df: pd.DataFrame, query: str) -> Dict[str, Any]:
     return result
 
 
+def is_composite_query(query: str) -> bool:
+    """Alias: composite rank-then-aggregate pattern (must route before all other intent)."""
+    return is_composite_rank_then_aggregate_query(query)
+
+
+def execute_composite_query(df: pd.DataFrame, query: str) -> Dict[str, Any]:
+    """Alias: filter → rank (top N by) → final aggregation on ranked rows."""
+    return handle_rank_then_aggregate(df, query)
+
+
 # ============================================================
 # MAIN ENTRY POINT
 # ============================================================
 
 def answer_query(df: pd.DataFrame, query: str) -> Dict[str, Any]:
-    """
-    Main orchestration entry.
-    Composite queries are intercepted first and executed in strict order.
-    Existing filter / sort / aggregation logic is left intact.
-    """
-    if is_composite_rank_then_aggregate_query(query):
-        return handle_rank_then_aggregate(df, query)
+    """Main orchestration. Composite queries MUST run first — no other branch before that."""
+    if is_composite_query(query):
+        return execute_composite_query(df, query)
 
     intent = classify_intent(query)
 
     if intent == "INVALID":
-        return {"error": "INVALID_QUERY", "message": "Query not recognized"}
+        return {"error": "INVALID_QUERY"}
 
     if intent == "FILTER":
         return handle_filter(df, query)
 
     if intent == "AGGREGATION":
         base_q, where = extract_where_condition(query)
+        filtered = df
         if where:
             try:
-                # Change 2: normalise before querying
                 filtered = df.query(normalize_condition(where))
             except Exception as e:
-                # Change 1: explicit error — no silent fallback
-                return {"error": "INVALID_QUERY", "reason": f"bad where condition: {e}"}
-        else:
-            filtered = df
+                return {"error": "INVALID_QUERY", "reason": str(e)}
         return handle_aggregation(filtered, base_q)
 
     if intent == "SORT":
         return handle_sort(df, query)
 
-    return {"error": "INVALID_QUERY", "message": "Unhandled intent"}
+    return {"error": "INVALID_QUERY"}
 
 
 # ============================================================
