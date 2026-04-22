@@ -65,6 +65,7 @@ COLUMN_ALIASES = {
     "char":                 "char_quality",
     "char quality":         "char_quality",
     "adhesion":             "adhesion",
+    "viscosity":            "viscosity",
     "status":               "status",
     "result":               "status",
 }
@@ -105,6 +106,24 @@ COUNT_TRIGGERS = [
     "how many", "count", "number of", "total number",
     "quantity of", "sum of rows", "rows count"
 ]
+
+# Aggregation keywords → direction
+# Rule: column that appears IMMEDIATELY AFTER these words is the aggregation target.
+# Columns in filter conditions (where/and/>/<) are NEVER the target.
+AGGREGATION_KEYWORDS = {
+    "highest":  "max",
+    "maximum":  "max",
+    "max":      "max",
+    "best":     "max",
+    "largest":  "max",
+    "greatest": "max",
+    "lowest":   "min",
+    "minimum":  "min",
+    "min":      "min",
+    "smallest": "min",
+    "worst":    "min",
+    "least":    "min",
+}
 
 
 # ─────────────────────────────────────────────────────────
@@ -292,6 +311,60 @@ def _parse_single_condition(part: str, df_columns: list) -> dict:
     return None
 
 
+def detect_aggregation(query: str, df_columns: list) -> Optional[dict]:
+    """
+    Find an aggregation keyword and extract the column name IMMEDIATELY after it.
+
+    Rule:
+      - Aggregation target = column that appears right after the keyword
+        (highest/lowest/maximum/minimum/best/worst …)
+      - Columns that appear in filter conditions (where X > N, and Y < N)
+        are NEVER the aggregation target.
+
+    Returns:
+      {"keyword": str, "column": str, "direction": "max"|"min"}  — on success
+      None — if no aggregation keyword is found or column cannot be resolved
+
+    Example:
+      "highest viscosity where expansion_ratio > 15"
+       → {"keyword": "highest", "column": "viscosity", "direction": "max"}
+      NOT expansion_ratio (that is a filter condition after 'where').
+    """
+    q_lower = query.lower()
+
+    # Sort longest-first so "maximum" is matched before "max"
+    for keyword in sorted(AGGREGATION_KEYWORDS, key=len, reverse=True):
+        # Match: <keyword> <column-phrase> <stop: where | with | , | end-of-string>
+        pattern = rf"\b{re.escape(keyword)}\s+(.+?)(?=\s+where\b|\s+with\b|\s*,|\s*$)"
+        m = re.search(pattern, q_lower, re.IGNORECASE)
+        if not m:
+            continue
+
+        candidate_phrase = m.group(1).strip()
+
+        # Try to resolve the candidate phrase as a column (alias or exact/partial match)
+        resolved = resolve_column(candidate_phrase, df_columns)
+        if "column" in resolved:
+            return {
+                "keyword":   keyword,
+                "column":    resolved["column"],
+                "direction": AGGREGATION_KEYWORDS[keyword],
+            }
+
+        # Candidate phrase may have extra words (e.g. "viscosity value").
+        # Try each token in the phrase from left to right.
+        for token in candidate_phrase.split():
+            resolved = resolve_column(token, df_columns)
+            if "column" in resolved:
+                return {
+                    "keyword":   keyword,
+                    "column":    resolved["column"],
+                    "direction": AGGREGATION_KEYWORDS[keyword],
+                }
+
+    return None
+
+
 def parse_natural_language_query(query: str, df_columns: list) -> dict:
     """
     Parse NL query into structured filter list.
@@ -306,7 +379,18 @@ def parse_natural_language_query(query: str, df_columns: list) -> dict:
     }
     """
     count_intent = detect_count_intent(query)
+
+    # ── Aggregation detection (on original query, before any stripping) ──────
+    # Must run first so we can remove the aggregation phrase before filter parsing.
+    aggregation = detect_aggregation(query, df_columns)
+
     query_lower = query.lower().strip()
+
+    # If aggregation was found, remove "keyword <column>" from the query so the
+    # aggregation target never falls into the filter layer.
+    if aggregation:
+        agg_phrase = rf"\b{re.escape(aggregation['keyword'])}\s+\S+"
+        query_lower = re.sub(agg_phrase, "", query_lower, flags=re.IGNORECASE).strip()
 
     # Strip leading context words — repeat until stable
     _strip_words = sorted([
@@ -314,6 +398,8 @@ def parse_natural_language_query(query: str, df_columns: list) -> dict:
         "list", "formulations", "rows", "where", "with", "have", "that",
         "that have", "which have", "having", "all", "only",
         "how many", "count of", "number of",
+        "which experiment has", "which experiment", "which",
+        "experiment has", "experiment",
     ], key=len, reverse=True)
     for _ in range(6):  # max passes
         prev = query_lower
@@ -365,6 +451,7 @@ def parse_natural_language_query(query: str, df_columns: list) -> dict:
         "parse_confidence": confidence,
         "count_intent":     count_intent,
         "unparsed":         " | ".join(unparsed) if unparsed else None,
+        "aggregation":      aggregation,   # {"keyword", "column", "direction"} or None
     }
 
 
@@ -406,8 +493,9 @@ def execute_query(df: pd.DataFrame, parsed: dict) -> dict:
 
     Returns full MATRIYA-compatible response with audit trace.
     """
-    filters = parsed.get("filters", [])
+    filters      = parsed.get("filters", [])
     count_intent = parsed.get("count_intent", False)
+    aggregation  = parsed.get("aggregation")   # {"keyword", "column", "direction"} | None
 
     if not filters:
         return {
@@ -491,6 +579,30 @@ def execute_query(df: pd.DataFrame, parsed: dict) -> dict:
             failed.append({**f, "error": str(e)})
 
     result_df = df[mask]
+
+    # ── Aggregation: find the single row with idxmax / idxmin ────────────────
+    # The target column was detected NEXT TO the keyword (not from filter conditions).
+    agg_meta = None
+    if aggregation and result_df is not None and len(result_df) > 0:
+        agg_col = aggregation["column"]
+        agg_dir = aggregation["direction"]
+        if agg_col in result_df.columns:
+            numeric_col = pd.to_numeric(result_df[agg_col], errors="coerce")
+            if not numeric_col.isna().all():
+                if agg_dir == "max":
+                    best_idx = numeric_col.idxmax()
+                else:
+                    best_idx = numeric_col.idxmin()
+                best_row = result_df.loc[[best_idx]]
+                agg_meta = {
+                    "aggregation_column": agg_col,
+                    "aggregation_direction": agg_dir,
+                    "aggregation_keyword": aggregation["keyword"],
+                    "aggregation_value": float(numeric_col.loc[best_idx]),
+                    "best_row": best_row.to_dict(orient="records"),
+                }
+                result_df = best_row   # narrow result to the single best row
+
     matched = len(result_df)
     total = len(df)
 
@@ -507,6 +619,8 @@ def execute_query(df: pd.DataFrame, parsed: dict) -> dict:
         "filters_applied": applied,
         "filters_failed":  failed,
     }
+    if agg_meta:
+        evidence["aggregation"] = agg_meta
 
     if count_intent:
         evidence["count_result"] = matched
@@ -672,6 +786,46 @@ def run_tests():
             print(f"   Got:      {f[0] if f else 'NO FILTERS'}")
 
     print(f"\n{'✅' if failed == 0 else '❌'} Unit tests: {passed}/{len(unit_tests)} passed")
+
+    # ── Aggregation target column detection test ──
+    agg_columns = ["APP:PER", "IFR", "APP", "PER", "MEL",
+                   "Nanoclay", "expansion_ratio", "viscosity", "char_quality", "adhesion", "status"]
+    agg_tests = [
+        (
+            "Which experiment has the highest viscosity where expansion_ratio > 15 and adhesion > 85?",
+            "viscosity", "max"
+        ),
+        (
+            "find the lowest IFR where APP:PER > 3",
+            "IFR", "min"
+        ),
+        (
+            "highest APP:PER where expansion ratio > 10",
+            "APP:PER", "max"
+        ),
+    ]
+    agg_passed = agg_failed = 0
+    for q, exp_col, exp_dir in agg_tests:
+        r = parse_natural_language_query(q, agg_columns)
+        agg = r.get("aggregation")
+        # Verify: aggregation target is correct AND that column is NOT in filters
+        filter_cols = [f["column"] for f in r.get("filters", [])]
+        ok = (
+            agg is not None
+            and agg["column"] == exp_col
+            and agg["direction"] == exp_dir
+            and exp_col not in filter_cols
+        )
+        if ok:
+            agg_passed += 1
+        else:
+            agg_failed += 1
+            print(f"\n❌ AGG FAIL: '{q}'")
+            print(f"   Expected agg: col={exp_col}, dir={exp_dir}")
+            print(f"   Got agg:      {agg}")
+            print(f"   Filter cols:  {filter_cols}")
+    print(f"{'✅' if agg_failed == 0 else '❌'} Aggregation target detection: "
+          f"{agg_passed}/{len(agg_tests)} passed")
 
     # ── COUNT intent test ──
     count_tests = [
