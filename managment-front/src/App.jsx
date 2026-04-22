@@ -1299,6 +1299,10 @@ function LabTab({ projectId }) {
   const [compareResult, setCompareResult] = React.useState(null);
   const [compareLoading, setCompareLoading] = React.useState(false);
   const [compareError, setCompareError] = React.useState(null);
+  // Dedicated experiment add form
+  const [expForm, setExpForm] = React.useState({ experiment_id: '', APP: '', PER: '', MEL: '', Nanoclay: '', IFR: '', expansion_ratio: '', char_quality: '', adhesion: '', viscosity: '', status: 'PENDING' });
+  const [expFormLoading, setExpFormLoading] = React.useState(false);
+  const [expFormFeedback, setExpFormFeedback] = React.useState(null);
 
   /** After "ייבא למעבדה" from email: use server-parsed text if present, else fetch file + parse. */
   React.useEffect(() => {
@@ -1932,10 +1936,117 @@ function LabTab({ projectId }) {
 
       {activeSection === 'experiments' && !experimentContext.trim() && (
         <section className="rag-section">
-          <p>{t.labExperimentsCount(experiments.length)}</p>
-          <p className="muted">{t.labSessionsCount(sessions.length)} {t.labMaterialsCount(materials.length)}</p>
+          <h4 style={{ fontSize: '1rem', marginBottom: 12 }}>Add Experiment</h4>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 10, marginBottom: 12 }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.82rem', marginBottom: 3, color: 'var(--muted)' }}>Experiment ID (optional)</label>
+              <input type="text" className="form-control" dir="ltr" placeholder="exp-001" value={expForm.experiment_id} onChange={e => setExpForm(f => ({ ...f, experiment_id: e.target.value }))} />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.82rem', marginBottom: 3, color: 'var(--muted)' }}>APP (%)</label>
+              <input type="number" className="form-control" dir="ltr" step="0.1" placeholder="e.g. 30" value={expForm.APP} onChange={e => setExpForm(f => ({ ...f, APP: e.target.value }))} />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.82rem', marginBottom: 3, color: 'var(--muted)' }}>PER (%)</label>
+              <input type="number" className="form-control" dir="ltr" step="0.1" placeholder="e.g. 15" value={expForm.PER} onChange={e => setExpForm(f => ({ ...f, PER: e.target.value }))} />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.82rem', marginBottom: 3, color: 'var(--muted)' }}>MEL (%)</label>
+              <input type="number" className="form-control" dir="ltr" step="0.1" placeholder="e.g. 10" value={expForm.MEL} onChange={e => setExpForm(f => ({ ...f, MEL: e.target.value }))} />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.82rem', marginBottom: 3, color: 'var(--muted)' }}>Nanoclay (%)</label>
+              <input type="number" className="form-control" dir="ltr" step="0.01" placeholder="e.g. 2.5" value={expForm.Nanoclay} onChange={e => setExpForm(f => ({ ...f, Nanoclay: e.target.value }))} />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.82rem', marginBottom: 3, color: 'var(--muted)' }}>IFR</label>
+              <input type="number" className="form-control" dir="ltr" step="1" placeholder="e.g. 42" value={expForm.IFR} onChange={e => setExpForm(f => ({ ...f, IFR: e.target.value }))} />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.82rem', marginBottom: 3, color: 'var(--muted)' }}>Expansion Ratio</label>
+              <input type="number" className="form-control" dir="ltr" step="0.1" placeholder="e.g. 18.5" value={expForm.expansion_ratio} onChange={e => setExpForm(f => ({ ...f, expansion_ratio: e.target.value }))} />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.82rem', marginBottom: 3, color: 'var(--muted)' }}>Char Quality</label>
+              <select className="form-control" value={expForm.char_quality} onChange={e => setExpForm(f => ({ ...f, char_quality: e.target.value }))}>
+                <option value="">— select —</option>
+                <option value="good">good</option>
+                <option value="acceptable">acceptable</option>
+                <option value="poor">poor</option>
+                <option value="cracked">cracked</option>
+                <option value="failed">failed</option>
+              </select>
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.82rem', marginBottom: 3, color: 'var(--muted)' }}>Adhesion</label>
+              <input type="number" className="form-control" dir="ltr" step="0.1" placeholder="e.g. 4.2" value={expForm.adhesion} onChange={e => setExpForm(f => ({ ...f, adhesion: e.target.value }))} />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.82rem', marginBottom: 3, color: 'var(--muted)' }}>Viscosity</label>
+              <input type="number" className="form-control" dir="ltr" step="1" placeholder="e.g. 1200" value={expForm.viscosity} onChange={e => setExpForm(f => ({ ...f, viscosity: e.target.value }))} />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.82rem', marginBottom: 3, color: 'var(--muted)' }}>Status</label>
+              <select className="form-control" value={expForm.status} onChange={e => setExpForm(f => ({ ...f, status: e.target.value }))}>
+                <option value="PENDING">PENDING</option>
+                <option value="PASS">PASS</option>
+                <option value="FAIL">FAIL</option>
+                <option value="PARTIAL">PARTIAL</option>
+              </select>
+            </div>
+          </div>
+          {expForm.APP && expForm.PER && parseFloat(expForm.PER) !== 0 && (
+            <p className="muted" style={{ marginBottom: 8, fontSize: '0.85rem' }}>
+              APP:PER = {(parseFloat(expForm.APP) / parseFloat(expForm.PER)).toFixed(3)} (auto-computed)
+            </p>
+          )}
+          <button
+            type="button"
+            disabled={expFormLoading}
+            onClick={async () => {
+              setExpFormLoading(true);
+              setExpFormFeedback(null);
+              try {
+                const result = await labApi.addExperiment(projectId, expForm);
+                setExpFormFeedback({ ok: true, msg: `Saved: ${result.experiment?.experiment_id || 'experiment'}` });
+                setExpForm({ experiment_id: '', APP: '', PER: '', MEL: '', Nanoclay: '', IFR: '', expansion_ratio: '', char_quality: '', adhesion: '', viscosity: '', status: 'PENDING' });
+                load();
+              } catch (err) {
+                setExpFormFeedback({ ok: false, msg: err?.response?.data?.error || err.message || 'Save failed' });
+              } finally {
+                setExpFormLoading(false);
+              }
+            }}
+          >
+            {expFormLoading ? 'Saving…' : 'Save Experiment'}
+          </button>
+          {expFormFeedback && (
+            <p style={{ marginTop: 8, color: expFormFeedback.ok ? 'var(--success, #2e7d32)' : 'var(--error, #c62828)' }}>
+              {expFormFeedback.msg}
+            </p>
+          )}
+          <hr style={{ margin: '16px 0', borderColor: 'var(--border)' }} />
+          <p style={{ marginBottom: 6 }}>{t.labExperimentsCount(experiments.length)}</p>
           <button type="button" className="secondary" onClick={load} style={{ marginBottom: 8 }}>{t.refresh}</button>
-          <ul style={{ margin: 0, paddingRight: 20, maxHeight: 300, overflow: 'auto' }}>{experiments.slice(0, 50).map(e => <li key={e.id}>{e.experiment_id} — {e.technology_domain} — {e.experiment_outcome} {e.formula ? `(${String(e.formula).slice(0, 30)}…)` : ''}</li>)}</ul>
+          <ul style={{ margin: 0, paddingRight: 20, maxHeight: 260, overflow: 'auto', fontSize: '0.88rem' }}>
+            {experiments.slice(0, 50).map(e => {
+              const fm = e.formulation || {};
+              const rs = e.results || {};
+              const appPer = fm['APP:PER'] ?? rs['APP:PER'];
+              const expRatio = rs.expansion_ratio ?? e.expansion_ratio;
+              return (
+                <li key={e.id || e.experiment_id} style={{ padding: '4px 0', borderBottom: '1px solid var(--border)' }}>
+                  <strong>{e.experiment_id}</strong>
+                  {fm.APP != null ? ` · APP ${fm.APP}%` : ''}
+                  {fm.PER != null ? ` · PER ${fm.PER}%` : ''}
+                  {appPer != null ? ` · APP:PER ${appPer}` : ''}
+                  {rs.IFR != null ? ` · IFR ${rs.IFR}` : ''}
+                  {expRatio != null ? ` · ER ${expRatio}` : ''}
+                  {(e.status || e.experiment_outcome) ? ` — ${e.status || e.experiment_outcome}` : ''}
+                </li>
+              );
+            })}
+          </ul>
           {experiments.length > 50 && <p className="muted">{t.labShowingFirst(50)}</p>}
         </section>
       )}

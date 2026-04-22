@@ -332,23 +332,33 @@ CREATE TABLE IF NOT EXISTS public.whatsapp_whitelist (
 -- 22. WHATSAPP TASKS  (code uses "whatsapp_tasks" — NOT "whatsapp_task_queue")
 -- ─────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS public.whatsapp_tasks (
-  id           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-  from_number  text        NOT NULL,
-  message      text        NOT NULL,
-  status       text        NOT NULL DEFAULT 'PENDING',
-  created_at   timestamptz NOT NULL DEFAULT now(),
-  processed_at timestamptz
+  id               uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  from_number      text        NOT NULL,
+  message          text        NOT NULL,
+  status           text        NOT NULL DEFAULT 'PENDING',
+  decision         text,
+  confidence       numeric,
+  candidates       jsonb,
+  rachel_notified  boolean     NOT NULL DEFAULT false,
+  created_at       timestamptz NOT NULL DEFAULT now(),
+  processed_at     timestamptz
 );
 
 -- ─────────────────────────────────────────────
--- 23. ACCESS REQUESTS (matriya-back)
+-- 23. ACCESS REQUESTS (matriya-back WhatsApp whitelist requests)
 -- ─────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS public.access_requests (
-  id           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-  phone        text        NOT NULL,
-  status       text        NOT NULL DEFAULT 'pending',
-  created_at   timestamptz NOT NULL DEFAULT now(),
-  reviewed_at  timestamptz
+  id            uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  phone_number  text        NOT NULL,
+  first_message text,
+  request_count integer     NOT NULL DEFAULT 1,
+  first_seen    timestamptz NOT NULL DEFAULT now(),
+  last_seen     timestamptz NOT NULL DEFAULT now(),
+  status        text        NOT NULL DEFAULT 'pending',
+  reviewed_by   text,
+  reviewed_at   timestamptz,
+  note          text,
+  created_at    timestamptz NOT NULL DEFAULT now()
 );
 
 -- ─────────────────────────────────────────────
@@ -516,6 +526,21 @@ ALTER TABLE public.finance_signals ADD COLUMN IF NOT EXISTS trigger_type    text
 ALTER TABLE public.finance_signals ADD COLUMN IF NOT EXISTS source          text;
 ALTER TABLE public.finance_signals ADD COLUMN IF NOT EXISTS class_label     text;
 ALTER TABLE public.finance_signals ADD COLUMN IF NOT EXISTS composite_alert boolean NOT NULL DEFAULT false;
+
+-- whatsapp_tasks (extended columns from webhook handler)
+ALTER TABLE public.whatsapp_tasks ADD COLUMN IF NOT EXISTS decision         text;
+ALTER TABLE public.whatsapp_tasks ADD COLUMN IF NOT EXISTS confidence       numeric;
+ALTER TABLE public.whatsapp_tasks ADD COLUMN IF NOT EXISTS candidates       jsonb;
+ALTER TABLE public.whatsapp_tasks ADD COLUMN IF NOT EXISTS rachel_notified  boolean NOT NULL DEFAULT false;
+
+-- access_requests (extended columns from whitelist system)
+ALTER TABLE public.access_requests ADD COLUMN IF NOT EXISTS phone_number  text NOT NULL DEFAULT '';
+ALTER TABLE public.access_requests ADD COLUMN IF NOT EXISTS first_message text;
+ALTER TABLE public.access_requests ADD COLUMN IF NOT EXISTS request_count integer NOT NULL DEFAULT 1;
+ALTER TABLE public.access_requests ADD COLUMN IF NOT EXISTS first_seen    timestamptz NOT NULL DEFAULT now();
+ALTER TABLE public.access_requests ADD COLUMN IF NOT EXISTS last_seen     timestamptz NOT NULL DEFAULT now();
+ALTER TABLE public.access_requests ADD COLUMN IF NOT EXISTS reviewed_by   text;
+ALTER TABLE public.access_requests ADD COLUMN IF NOT EXISTS note          text;
 
 -- ─────────────────────────────────────────────
 -- INDEXES

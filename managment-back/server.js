@@ -145,6 +145,23 @@ function replyToAddressForProject(projectId) {
   return `${id}@${RESEND_REPLY_DOMAIN}`;
 }
 
+/** Build reply-to using project NAME (slugified) instead of raw UUID for a friendlier display. */
+async function replyToAddressForProjectByName(projectId) {
+  if (!projectId || !RESEND_REPLY_DOMAIN || RESEND_REPLY_DOMAIN.includes('resend.dev')) return null;
+  try {
+    const { data } = await supabase.from('projects').select('name').eq('id', projectId).single();
+    if (data?.name) {
+      const slug = String(data.name)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 40);
+      if (slug) return `${slug}@${RESEND_REPLY_DOMAIN}`;
+    }
+  } catch (_) { /* fallback to UUID */ }
+  return replyToAddressForProject(projectId);
+}
+
 if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
   console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
   process.exit(1);
@@ -1323,7 +1340,7 @@ app.post('/api/projects/:projectId/emails/send', limiterEmail, async (req, res) 
     const payload = { from: fromFormatted, to: toArr, subject };
     if (text) payload.text = text;
     if (html) payload.html = html;
-    const projectReplyTo = replyToAddressForProject(projectId);
+    const projectReplyTo = await replyToAddressForProjectByName(projectId);
     const replyToAddr = projectReplyTo || RESEND_REPLY_TO || null;
     if (replyToAddr) payload.reply_to = [replyToAddr];
     let attachmentMeta = [];
@@ -2586,10 +2603,93 @@ app.get('/api/projects/:projectId/experiments', async (req, res) => {
     const ctx = await requireProjectMember(req, res, req.params.projectId);
     if (!ctx) return;
     const { limit, offset } = parsePagination(req);
+    // Read from canonical experiments table first, fall back to lab_experiments
+    const { data: canonData, error: canonError } = await supabase
+      .from('experiments')
+      .select('*')
+      .eq('project_id', req.params.projectId)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1);
+    if (!canonError && canonData && canonData.length > 0) {
+      return res.json({ experiments: canonData, limit, offset, source: 'experiments' });
+    }
     const { data, error } = await supabase.from('lab_experiments').select('*').eq('project_id', req.params.projectId).order('updated_at', { ascending: false }).range(offset, offset + limit - 1);
     if (error) throw error;
-    res.json({ experiments: data || [], limit, offset });
+    res.json({ experiments: data || [], limit, offset, source: 'lab_experiments' });
   } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * POST /api/projects/:projectId/experiments
+ * Save a new experiment with dedicated formulation fields (APP, PER, MEL, Nanoclay, IFR, etc.)
+ * and results (expansion_ratio, char_quality, adhesion, viscosity).
+ * Upserts into the canonical `experiments` table.
+ */
+app.post('/api/projects/:projectId/experiments', async (req, res) => {
+  try {
+    const ctx = await requireProjectMember(req, res, req.params.projectId);
+    if (!ctx) return;
+    const projectId = req.params.projectId;
+    const body = req.body || {};
+
+    // Build experiment_id
+    const experimentId = body.experiment_id
+      ? String(body.experiment_id).trim()
+      : `exp-${crypto.randomUUID().slice(0, 8)}`;
+
+    // Build formulation JSONB from individual fields
+    const formulation = {};
+    if (body.APP != null && body.APP !== '') formulation.APP = parseFloat(body.APP);
+    if (body.PER != null && body.PER !== '') formulation.PER = parseFloat(body.PER);
+    if (body.MEL != null && body.MEL !== '') formulation.MEL = parseFloat(body.MEL);
+    if (body.Nanoclay != null && body.Nanoclay !== '') formulation.Nanoclay = parseFloat(body.Nanoclay);
+    if (body.notes) formulation.notes = String(body.notes).trim();
+
+    // Compute APP:PER if APP and PER provided
+    if (formulation.APP != null && formulation.PER != null && formulation.PER !== 0) {
+      formulation['APP:PER'] = parseFloat((formulation.APP / formulation.PER).toFixed(3));
+    } else if (body['APP:PER'] != null && body['APP:PER'] !== '') {
+      formulation['APP:PER'] = parseFloat(body['APP:PER']);
+    }
+
+    // Build results JSONB from individual fields
+    const results = {};
+    if (body.IFR != null && body.IFR !== '') results.IFR = parseFloat(body.IFR);
+    if (body.expansion_ratio != null && body.expansion_ratio !== '') results.expansion_ratio = parseFloat(body.expansion_ratio);
+    if (body.char_quality != null && body.char_quality !== '') results.char_quality = String(body.char_quality).trim();
+    if (body.adhesion != null && body.adhesion !== '') results.adhesion = parseFloat(body.adhesion);
+    if (body.viscosity != null && body.viscosity !== '') results.viscosity = parseFloat(body.viscosity);
+
+    const status = body.status ? String(body.status).trim().toUpperCase() : 'PENDING';
+    const validated = Boolean(body.validated);
+
+    if (Object.keys(formulation).length === 0 && Object.keys(results).length === 0) {
+      return res.status(400).json({ error: 'At least one formulation or result field is required' });
+    }
+
+    const row = {
+      experiment_id: experimentId,
+      project_id: projectId,
+      formulation,
+      results,
+      status,
+      validated,
+      source: 'manual',
+      updated_at: new Date().toISOString(),
+    };
+
+    const { data, error } = await supabase
+      .from('experiments')
+      .upsert(row, { onConflict: 'project_id,experiment_id' })
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ ok: true, experiment: data });
+  } catch (e) {
+    console.error('POST /experiments error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
