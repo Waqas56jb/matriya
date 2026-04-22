@@ -3390,17 +3390,27 @@ app.get('/api/matriya/lab-experiments-export', async (req, res) => {
       supabase.from('lab_experiments').select('experiment_id, project_id, percentages, results, experiment_outcome, formula, updated_at, expansion_ratio, char_quality, adhesion, viscosity').order('updated_at', { ascending: false }).limit(2000),
     ]);
 
-    // Count rows that have at least one numeric value we can query on
-    const expWithData  = (expRows    || []).filter(r => { const f = r.formulation || {}; const res = r.results || {}; return Object.keys(f).length > 0 || Object.keys(res).length > 0; }).length;
-    const legWithData  = (legacyAll  || []).filter(r => r.expansion_ratio != null || (r.percentages && Object.keys(r.percentages).length > 0)).length;
+    // "Usable" = row has at least one of: expansion_ratio, adhesion, experiment_outcome
+    // This is the explicit definition used for table selection and logging.
+    const isUsable = (r, isCanonical) => {
+      if (isCanonical) {
+        const res = (typeof r.results === 'object' && r.results) ? r.results : {};
+        return res['expansion_ratio'] != null || res['adhesion'] != null || r.status != null;
+      }
+      return r.expansion_ratio != null || r.adhesion != null || r.experiment_outcome != null;
+    };
 
-    console.log(`[lab-export] experiments table: ${(expRows||[]).length} rows, ${expWithData} with data`);
-    console.log(`[lab-export] lab_experiments table: ${(legacyAll||[]).length} rows, ${legWithData} with expansion_ratio/percentages`);
+    const expTotal      = (expRows   || []).length;
+    const legTotal      = (legacyAll || []).length;
+    const expUsable     = (expRows   || []).filter(r => isUsable(r, true)).length;
+    const legUsable     = (legacyAll || []).filter(r => isUsable(r, false)).length;
 
-    // Prefer lab_experiments if it has more usable rows (seed data lives there)
-    const useCanonical = expWithData >= legWithData && expWithData > 0;
-    const useRows = useCanonical ? expRows : legacyAll;
-    console.log(`[lab-export] using table: ${useCanonical ? 'experiments' : 'lab_experiments'} (${(useRows||[]).length} rows)`);
+    console.log(`[lab-export] TABLE=experiments    total=${expTotal}  usable_rows=${expUsable}  (usable: expansion_ratio|adhesion|status != null)`);
+    console.log(`[lab-export] TABLE=lab_experiments total=${legTotal} usable_rows=${legUsable}  (usable: expansion_ratio|adhesion|experiment_outcome != null)`);
+
+    // Use the table with more usable rows — lab_experiments wins when seed data is there
+    const useCanonical = expUsable >= legUsable && expUsable > 0;
+    console.log(`[lab-export] SELECTED=${useCanonical ? 'experiments' : 'lab_experiments'} (${useCanonical ? expUsable : legUsable} usable rows)`);
 
     let canonical = [];
 
@@ -3488,22 +3498,19 @@ app.get('/api/matriya/lab-experiments-export', async (req, res) => {
     }
 
     const source = useCanonical ? 'supabase_experiments' : 'supabase_lab_experiments';
-    const withData = canonical.filter(r => r.APP != null || r['APP:PER'] != null || r.expansion_ratio != null);
+    // withData: rows that have at least expansion_ratio, adhesion, or APP:PER (queryable)
+    const withData = canonical.filter(r => r.expansion_ratio != null || r.adhesion != null || r['APP:PER'] != null);
 
     // ── DIAGNOSTIC LOGS ────────────────────────────────────────────────────
-    console.log(`[lab-export] source=${source} canonical=${canonical.length} withData=${withData.length}`);
+    const erNulls   = canonical.filter(r => r.expansion_ratio == null).length;
+    const adhNulls  = canonical.filter(r => r.adhesion == null).length;
+    const outcNulls = canonical.filter(r => r.status == null).length;
+    console.log(`[lab-export] POST-MAP source=${source} total=${canonical.length} withData=${withData.length}`);
+    console.log(`[lab-export] expansion_ratio null: ${erNulls}/${canonical.length} | adhesion null: ${adhNulls}/${canonical.length} | status null: ${outcNulls}/${canonical.length}`);
     if (canonical.length > 0) {
-      const expNulls = canonical.filter(r => r.expansion_ratio == null).length;
-      const appNulls = canonical.filter(r => r.APP == null).length;
-      console.log(`[lab-export] expansion_ratio nulls: ${expNulls}/${canonical.length} | APP nulls: ${appNulls}/${canonical.length}`);
-      console.log(`[lab-export] sample canonical row:`, JSON.stringify(canonical[0]));
-      if (source === 'supabase_experiments' && Array.isArray(expRows) && expRows.length > 0) {
-        console.log(`[lab-export] raw experiments[0].formulation:`, JSON.stringify(expRows[0].formulation));
-        console.log(`[lab-export] raw experiments[0].results:`, JSON.stringify(expRows[0].results));
-      }
+      console.log(`[lab-export] sample[0]:`, JSON.stringify(canonical[0]));
     } else {
-      console.log('[lab-export] WARNING: canonical is empty — no rows from either experiments or lab_experiments table');
-      if (expErr) console.log('[lab-export] experiments table error:', expErr.message || expErr);
+      console.log('[lab-export] WARNING: canonical empty — no rows from either table');
     }
     // ────────────────────────────────────────────────────────────────────────
 
@@ -3533,41 +3540,52 @@ app.get('/api/lab/raw-debug', async (req, res) => {
     }
 
     const [{ data: expRows, error: expErr }, { data: legRows, error: legErr }] = await Promise.all([
-      supabase.from('experiments').select('experiment_id, project_id, formulation, results, status').limit(10),
-      supabase.from('lab_experiments').select('experiment_id, project_id, percentages, results, experiment_outcome').limit(10),
+      supabase.from('experiments').select('experiment_id, project_id, formulation, results, status').limit(20),
+      supabase.from('lab_experiments').select('experiment_id, project_id, percentages, results, experiment_outcome, expansion_ratio, adhesion, viscosity').limit(20),
     ]);
 
-    const analyzeTable = (rows, name) => {
-      if (!rows || rows.length === 0) return { table: name, count: 0, rows: [] };
+    // Explicit usability definition: expansion_ratio != null OR adhesion != null OR experiment_outcome != null
+    const analyzeTable = (rows, name, isCanonical) => {
+      if (!rows || rows.length === 0) return { table: name, total: 0, usable_rows: 0, rows: [] };
       const analyzed = rows.map(r => {
-        const formulation = r.formulation || r.percentages || {};
+        const formulation = isCanonical ? (r.formulation || {}) : (r.percentages || {});
         const results = (() => { try { return typeof r.results === 'string' ? JSON.parse(r.results) : (r.results || {}); } catch (_) { return { _raw: r.results }; } })();
+        const expansion_ratio_found = isCanonical
+          ? (results['expansion_ratio'] ?? results['expansion'] ?? null)
+          : (r.expansion_ratio != null ? r.expansion_ratio : (results['expansion_ratio'] ?? null));
+        const adhesion_found = isCanonical
+          ? (results['adhesion'] ?? null)
+          : (r.adhesion != null ? r.adhesion : null);
+        const outcome_found = isCanonical ? (r.status ?? null) : (r.experiment_outcome ?? null);
+        const usable = expansion_ratio_found != null || adhesion_found != null || outcome_found != null;
         return {
           experiment_id: r.experiment_id,
-          formulation_keys: Object.keys(formulation),
-          formulation_values: formulation,
-          results_keys: Object.keys(results),
-          results_values: results,
-          expansion_ratio_found: results['expansion_ratio'] ?? results['expansion'] ?? formulation['expansion_ratio'] ?? null,
+          expansion_ratio_found,
+          adhesion_found,
+          outcome_found,
           APP_found: formulation['APP'] ?? formulation['app'] ?? null,
+          usable,
         };
       });
-      return { table: name, count: rows.length, rows: analyzed };
+      const usable_rows = analyzed.filter(r => r.usable).length;
+      return { table: name, total: rows.length, usable_rows, rows: analyzed };
     };
+
+    const expAnalysis = analyzeTable(expRows, 'experiments', true);
+    const legAnalysis = analyzeTable(legRows, 'lab_experiments', false);
+    const selected    = expAnalysis.usable_rows >= legAnalysis.usable_rows && expAnalysis.usable_rows > 0
+      ? 'experiments' : 'lab_experiments';
 
     res.json({
       ok: true,
-      experiments_error: expErr?.message || null,
-      lab_experiments_error: legErr?.message || null,
-      experiments: analyzeTable(expRows, 'experiments'),
-      lab_experiments: analyzeTable(legRows, 'lab_experiments'),
-      diagnosis: {
-        experiments_empty: !expRows || expRows.length === 0,
-        lab_experiments_empty: !legRows || legRows.length === 0,
-        all_empty: (!expRows || expRows.length === 0) && (!legRows || legRows.length === 0),
-        advice: (!expRows || expRows.length === 0) && (!legRows || legRows.length === 0)
-          ? 'Both tables are empty. Add experiments via the management UI or ingest an Excel file.'
-          : 'Check expansion_ratio_found — if null for all rows, results JSONB field is empty. Update experiments with results via the form.',
+      errors: { experiments: expErr?.message || null, lab_experiments: legErr?.message || null },
+      experiments:     expAnalysis,
+      lab_experiments: legAnalysis,
+      pipeline: {
+        selected_table:  selected,
+        selected_usable: selected === 'experiments' ? expAnalysis.usable_rows : legAnalysis.usable_rows,
+        usability_definition: 'expansion_ratio != null OR adhesion != null OR experiment_outcome != null',
+        ready_for_query: (selected === 'experiments' ? expAnalysis.usable_rows : legAnalysis.usable_rows) > 0,
       },
     });
   } catch (e) {
