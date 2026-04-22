@@ -3176,6 +3176,118 @@ app.get('/api/matriya/insights/:experimentId', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/matriya/lab-experiments-export
+ * Internal endpoint called by matriya-back to feed the Python science query engine
+ * with the SAME data the Lab Decision Board uses (Supabase lab_experiments).
+ *
+ * Returns all lab_experiments rows across all projects, normalized to canonical
+ * columns so the Python table_query_engine_final.py can query them directly.
+ *
+ * Auth: requires X-Matriya-Materials-Key header (same key as projects-with-materials-summary)
+ * or a valid user JWT. No project restriction — returns all experiments.
+ */
+app.get('/api/matriya/lab-experiments-export', async (req, res) => {
+  try {
+    // Auth: same server-key mechanism as the materials summary endpoint
+    const serverKey = MANEGER_MATERIALS_SUMMARY_SERVER_KEY;
+    const reqKey = (req.headers['x-matriya-materials-key'] || '').trim();
+    if (serverKey && reqKey !== serverKey) {
+      // Fall back to JWT check
+      const user = await getCurrentUser(req).catch(() => null);
+      if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const { data: rows, error } = await supabase
+      .from('lab_experiments')
+      .select('experiment_id, project_id, percentages, results, experiment_outcome, materials, formula, updated_at')
+      .order('updated_at', { ascending: false })
+      .limit(2000);
+
+    if (error) throw error;
+    if (!rows || rows.length === 0) {
+      return res.json({ experiments: [], n_rows: 0 });
+    }
+
+    // Normalize each row into canonical columns for the Python query engine
+    const canonical = rows.map(row => {
+      const pct = (typeof row.percentages === 'object' && row.percentages) ? row.percentages : {};
+
+      // Helper: case-insensitive key lookup in percentages object
+      const getPct = (...keys) => {
+        for (const k of keys) {
+          for (const [pk, pv] of Object.entries(pct)) {
+            if (pk.toLowerCase() === k.toLowerCase()) {
+              const n = parseFloat(pv);
+              return Number.isNaN(n) ? null : n;
+            }
+          }
+        }
+        return null;
+      };
+
+      // Parse results field (may be JSON string or plain text)
+      let resultsObj = {};
+      if (row.results) {
+        try { resultsObj = typeof row.results === 'string' ? JSON.parse(row.results) : row.results; }
+        catch (_) { resultsObj = {}; }
+      }
+      const getResult = (...keys) => {
+        for (const k of keys) {
+          for (const [rk, rv] of Object.entries(resultsObj)) {
+            if (rk.toLowerCase().replace(/[_\s]/g, '') === k.toLowerCase().replace(/[_\s]/g, '')) {
+              const n = parseFloat(rv);
+              return Number.isNaN(n) ? (typeof rv === 'string' ? rv : null) : n;
+            }
+          }
+        }
+        return null;
+      };
+
+      const APP  = getPct('app', 'app_pct', 'APP');
+      const PER  = getPct('per', 'per_pct', 'PER');
+      const MEL  = getPct('mel', 'mel_pct', 'MEL');
+      const IFR  = getPct('ifr', 'IFR') ?? (APP != null && PER != null && MEL != null ? APP + PER + MEL : null);
+      const appPer = getPct('app:per', 'app_per', 'APP:PER') ?? (APP != null && PER != null && PER > 0 ? parseFloat((APP / PER).toFixed(4)) : null);
+
+      // Map experiment_outcome → status
+      const outcomeMap = { success: 'PASS', failure: 'FAIL', partial: 'PARTIAL', production_formula: 'PASS' };
+      const status = outcomeMap[String(row.experiment_outcome || '').toLowerCase()] || row.experiment_outcome || null;
+
+      return {
+        experiment_id:   row.experiment_id,
+        project_id:      row.project_id,
+        APP:             APP,
+        PER:             PER,
+        MEL:             MEL,
+        'APP:PER':       appPer,
+        IFR:             IFR,
+        Nanoclay:        getPct('nanoclay', 'cloisite', 'clay'),
+        expansion_ratio: getResult('expansion_ratio', 'expansion', 'expansionratio') ?? getPct('expansion_ratio'),
+        char_quality:    getResult('char_quality', 'char', 'charquality'),
+        adhesion:        getResult('adhesion') ?? getPct('adhesion'),
+        viscosity:       getResult('viscosity') ?? getPct('viscosity'),
+        status:          status,
+        formula:         row.formula || null,
+      };
+    });
+
+    // Filter out rows with no science data at all
+    const withData = canonical.filter(r =>
+      r.APP != null || r['APP:PER'] != null || r.expansion_ratio != null
+    );
+
+    res.json({
+      experiments: withData.length > 0 ? withData : canonical,
+      n_rows: withData.length > 0 ? withData.length : canonical.length,
+      source: 'supabase_lab_experiments',
+    });
+  } catch (e) {
+    console.error('[lab-experiments-export] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/projects/:projectId/analysis/contradictions', async (req, res) => {
   try {
     const ctx = await requireProjectMember(req, res, req.params.projectId);

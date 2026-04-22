@@ -969,6 +969,8 @@ let _activeLabExcel = (() => {
   } catch (_) {}
   return _builtinExcel;
 })();
+console.log("ACTIVE DATASET:", _activeLabExcel);
+logger.info(`[lab-data] active dataset on startup: ${_activeLabExcel}`);
 
 /**
  * Spawn Python science runner and resolve with parsed JSON output.
@@ -1591,18 +1593,84 @@ function isScienceQueryQuestion(query) {
 }
 
 /**
+ * Fetch all lab experiments from managment-back (same source as Lab Decision Board)
+ * and write them as a CSV file into _labDataDir so the Python query engine can read them.
+ *
+ * Returns the path to the CSV file, or null if the fetch fails.
+ * The CSV uses canonical column names (APP, PER, MEL, APP:PER, IFR, expansion_ratio, …).
+ */
+async function fetchLabDataFromManagementApi() {
+  const managementBase = settings.MATRIYA_MANAGEMENT_API_URL || '';
+  if (!managementBase) return null;
+  try {
+    const resp = await axios.get(`${managementBase}/api/matriya/lab-experiments-export`, {
+      headers: {
+        'Accept': 'application/json',
+        ...(settings.MATRIYA_MANAGEMENT_MATERIALS_KEY
+          ? { 'X-Matriya-Materials-Key': settings.MATRIYA_MANAGEMENT_MATERIALS_KEY }
+          : {}),
+      },
+      timeout: 20000,
+    });
+
+    const rows = resp.data?.experiments;
+    if (!Array.isArray(rows) || rows.length === 0) {
+      logger.warn('[science-routing] lab-experiments-export returned 0 rows — falling back to Excel');
+      return null;
+    }
+
+    // Build CSV from canonical rows
+    const cols = ['experiment_id', 'project_id', 'APP', 'PER', 'MEL', 'APP:PER', 'IFR',
+                  'Nanoclay', 'expansion_ratio', 'char_quality', 'adhesion', 'viscosity', 'status', 'formula'];
+    const header = cols.join(',');
+    const escapeVal = v => {
+      if (v == null) return '';
+      const s = String(v);
+      return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const lines = [header, ...rows.map(r => cols.map(c => escapeVal(r[c])).join(','))];
+    const csv = lines.join('\n');
+
+    const csvPath = join(_labDataDir, `supabase_export_${Date.now()}.csv`);
+    writeFileSync(csvPath, csv, 'utf8');
+    logger.info(`[science-routing] fetched ${rows.length} rows from Supabase → ${csvPath}`);
+    return csvPath;
+  } catch (e) {
+    logger.warn(`[science-routing] fetchLabDataFromManagementApi failed: ${e.message} — falling back to Excel`);
+    return null;
+  }
+}
+
+/**
  * Runs the science query pipeline (Python table_query_engine_final.py) and
  * formats the result as a MATRIYA-compatible search response for the frontend.
+ *
+ * Data source priority:
+ *  1. Supabase lab_experiments (same data as Lab Decision Board) — fetched live
+ *  2. _activeLabExcel (Excel file uploaded via /ingest/excel)
  */
 async function handleScienceQueryFlow(req, res, { query }) {
   try {
+    // Try to get live Supabase data first (same source as Lab Decision Board)
+    let dataFile = await fetchLabDataFromManagementApi();
+    const dataSource = dataFile ? 'SUPABASE_LIVE' : 'EXCEL_FALLBACK';
+    if (!dataFile) {
+      dataFile = _activeLabExcel;
+    }
+    console.log("ACTIVE DATASET:", dataFile, "| source:", dataSource);
+
     const result = await runSciencePython([
       'query',
-      _activeLabExcel,
+      dataFile,
       query,
       'Formulation Data',
       `QUERY-${Date.now()}`
     ]);
+
+    // Clean up temp CSV after query (keep disk tidy)
+    if (dataSource === 'SUPABASE_LIVE') {
+      try { unlinkSync(dataFile); } catch (_) {}
+    }
 
     logger.info(`[science-routing] query="${query}" decision=${result.decision}`);
 
