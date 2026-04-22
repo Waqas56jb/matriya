@@ -831,6 +831,132 @@ app.post('/integration/email-received', async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────
+// SCIENCE PIPELINE ENDPOINTS
+// Bridges Node.js → Python science/ modules via child_process
+// ─────────────────────────────────────────────────────────
+import { spawn } from 'child_process';
+
+const _scienceDir = join(dirname(fileURLToPath(import.meta.url)), 'science');
+const _defaultExcel = join(dirname(fileURLToPath(import.meta.url)), 'MATRIYA_Experiment_Template-1.xlsx');
+
+/**
+ * Spawn Python science runner and resolve with parsed JSON output.
+ * Forces UTF-8 so emoji in Python print() don't crash on Windows.
+ */
+function runSciencePython(args) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn('python', [join(_scienceDir, 'run_pipeline.py'), ...args], {
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+    });
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.on('data', d => { stdout += d.toString(); });
+    proc.stderr.on('data', d => { stderr += d.toString(); });
+    proc.on('close', code => {
+      // Extract last JSON object from stdout (module print() lines precede JSON line)
+      const jsonLine = stdout.split('\n').reverse().find(l => l.trim().startsWith('{'));
+      if (!jsonLine) {
+        return reject(new Error(`No JSON output. code=${code} stderr=${stderr.slice(0, 400)}`));
+      }
+      try {
+        resolve(JSON.parse(jsonLine));
+      } catch (e) {
+        reject(new Error(`JSON parse error: ${e.message} — line: ${jsonLine.slice(0, 200)}`));
+      }
+    });
+    proc.on('error', reject);
+  });
+}
+
+/**
+ * POST /science/query
+ * Run a natural language query against the formulations Excel dataset.
+ * Body: { query, filepath?, sheet_name?, case_id? }
+ */
+app.post('/science/query', requireAuth, async (req, res) => {
+  try {
+    const { query, filepath, sheet_name, case_id } = req.body || {};
+    if (!query || !String(query).trim()) {
+      return res.status(400).json({ error: 'query is required' });
+    }
+    const excelPath = filepath || _defaultExcel;
+    const sheet     = sheet_name || 'Formulation Data';
+    const caseId    = case_id   || `QUERY-${Date.now()}`;
+    const result    = await runSciencePython(['query', excelPath, query, sheet, caseId]);
+    logger.info(`[science/query] query="${query}" decision=${result.decision}`);
+    return res.json(result);
+  } catch (e) {
+    logger.error(`[science/query] error: ${e.message}`);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * POST /science/boundary
+ * Run the full boundary experiment pipeline (schema → score → FSCTM → priors).
+ * Body: { template_key, sweep_results, control_result, case_id?, known_facts?, involved_components?, observed_sigs? }
+ */
+app.post('/science/boundary', requireAuth, async (req, res) => {
+  try {
+    const {
+      template_key, sweep_results, control_result,
+      case_id, known_facts, involved_components, observed_sigs
+    } = req.body || {};
+    if (!template_key) return res.status(400).json({ error: 'template_key is required' });
+    if (!sweep_results || !Array.isArray(sweep_results)) return res.status(400).json({ error: 'sweep_results array is required' });
+    if (!control_result) return res.status(400).json({ error: 'control_result is required' });
+
+    const caseId = case_id || `BOUNDARY-${Date.now()}`;
+    const result = await runSciencePython([
+      'boundary',
+      template_key,
+      JSON.stringify(sweep_results),
+      JSON.stringify(control_result),
+      caseId,
+      JSON.stringify(known_facts || []),
+      JSON.stringify(involved_components || ['APP', 'PER', 'APP:PER_ratio']),
+      JSON.stringify(observed_sigs || []),
+    ]);
+    logger.info(`[science/boundary] template=${template_key} decision=${result.decision}`);
+    return res.json(result);
+  } catch (e) {
+    logger.error(`[science/boundary] error: ${e.message}`);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * GET /science/tests
+ * Run all Python module unit tests and return pass/fail report.
+ */
+app.get('/science/tests', requireAuth, async (req, res) => {
+  try {
+    const result = await runSciencePython(['test']);
+    logger.info(`[science/tests] total_passed=${result.total_passed} total_failed=${result.total_failed}`);
+    return res.json(result);
+  } catch (e) {
+    logger.error(`[science/tests] error: ${e.message}`);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * GET /science/validate
+ * Run real-file validation against the formulations Excel dataset.
+ */
+app.get('/science/validate', requireAuth, async (req, res) => {
+  try {
+    const filepath = req.query.filepath || _defaultExcel;
+    const result   = await runSciencePython(['validate', filepath, '0']);
+    logger.info(`[science/validate] tests_passed=${result.tests_passed}/${result.total_tests}`);
+    return res.json(result);
+  } catch (e) {
+    logger.error(`[science/validate] error: ${e.message}`);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 /** Logical path or basename ends with .xlsx / .xls */
 function isAskMatriyaSpreadsheetFilename(name) {
   const base = String(name || '').split(/[/\\]/).filter(Boolean).pop() || '';
