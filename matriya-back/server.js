@@ -813,6 +813,47 @@ app.post("/ingest/excel", upload.single('file'), async (req, res) => {
   try { writeFileSync(_labActiveFile, destPath, 'utf8'); } catch (_) {}
   logger.info(`[ingest/excel] activated lab dataset: ${originalFilename} | rows=${rowsValid} | schema_valid=${schemaValid} | path=${destPath}`);
 
+  // ── Push rows into Supabase experiments table ──────────────────────────────
+  // After activation, dump parsed rows and send to managment-back for storage
+  // in the canonical `experiments` table (same source as Lab Decision Board).
+  const projectId = req.body?.project_id || req.query?.project_id || null;
+  const managementBase = settings.MATRIYA_MANAGEMENT_API_URL || '';
+  if (managementBase && rowsValid > 0) {
+    setImmediate(async () => {
+      try {
+        const dumpResult = await runSciencePython(['dump_rows', destPath, '0']);
+        const rows = dumpResult?.rows;
+        if (!Array.isArray(rows) || rows.length === 0) {
+          logger.warn('[ingest/excel] dump_rows returned no rows — Supabase sync skipped');
+          return;
+        }
+        const ingestResp = await axios.post(
+          `${managementBase}/api/matriya/experiments/ingest`,
+          {
+            project_id: projectId || 'default',
+            source: `excel:${originalFilename}`,
+            rows,
+          },
+          {
+            headers: {
+              'Content-Type': 'application/json',
+              ...(settings.MATRIYA_MANAGEMENT_MATERIALS_KEY
+                ? { 'X-Matriya-Materials-Key': settings.MATRIYA_MANAGEMENT_MATERIALS_KEY }
+                : {}),
+            },
+            timeout: 30000,
+          }
+        );
+        logger.info(`[ingest/excel] Supabase experiments sync: inserted=${ingestResp.data?.inserted} errors=${ingestResp.data?.error_count}`);
+      } catch (syncErr) {
+        logger.warn(`[ingest/excel] Supabase sync failed (non-fatal): ${syncErr.message}`);
+      }
+    });
+  } else if (!managementBase) {
+    logger.warn('[ingest/excel] MATRIYA_MANAGEMENT_API_URL not set — Supabase experiments sync skipped');
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
   // Optionally index a text summary into RAG so document-mode queries are aware of the dataset.
   if (schemaValid && rowsValid > 0) {
     setImmediate(async () => {

@@ -1038,6 +1038,8 @@ async function _saveAttachmentRow(projectId, emailId, fileRow, buffer, safeName,
 
           const fd = new FormData();
           fd.append('file', new Blob([buffer], { type: mime }), originalName);
+          // Pass project_id so matriya-back can sync Excel rows into Supabase experiments table
+          if (isLabFile && projectId) fd.append('project_id', String(projectId));
           const r = await fetch(`${MATRIYA_BACK_URL}${endpoint}`, {
             method: 'POST',
             body: fd,
@@ -3177,6 +3179,73 @@ app.get('/api/matriya/insights/:experimentId', async (req, res) => {
 });
 
 /**
+ * POST /api/matriya/experiments/ingest
+ * Internal endpoint called by matriya-back after Excel ingestion.
+ * Accepts an array of normalized experiment rows and upserts them into
+ * the Supabase `experiments` table (canonical lab data layer).
+ *
+ * Body: { project_id, source, rows: [{ experiment_id, formulation, results, status }] }
+ * Auth: X-Matriya-Materials-Key header (same key as other internal endpoints)
+ */
+app.post('/api/matriya/experiments/ingest', async (req, res) => {
+  try {
+    const serverKey = MANEGER_MATERIALS_SUMMARY_SERVER_KEY;
+    const reqKey = (req.headers['x-matriya-materials-key'] || '').trim();
+    if (serverKey && reqKey !== serverKey) {
+      const user = await getCurrentUser(req).catch(() => null);
+      if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const { project_id, rows, source } = req.body || {};
+    if (!project_id) return res.status(400).json({ error: 'project_id is required' });
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return res.status(400).json({ error: 'rows array is required and must not be empty' });
+    }
+
+    let inserted = 0, updated = 0, errors = [];
+    const now = new Date().toISOString();
+
+    for (const row of rows) {
+      const expId = row.experiment_id != null ? String(row.experiment_id).trim() : null;
+      if (!expId) { errors.push({ row, reason: 'experiment_id required' }); continue; }
+
+      const payload = {
+        experiment_id: expId,
+        project_id,
+        formulation:   typeof row.formulation === 'object' ? row.formulation : {},
+        results:       typeof row.results === 'object' ? row.results : {},
+        status:        row.status || 'PENDING',
+        validated:     false,
+        source:        source || 'excel_ingest',
+        updated_at:    now,
+      };
+
+      const { error } = await supabase
+        .from('experiments')
+        .upsert(payload, { onConflict: 'project_id,experiment_id' });
+
+      if (error) {
+        errors.push({ experiment_id: expId, reason: error.message });
+      } else {
+        inserted++;
+      }
+    }
+
+    res.status(201).json({
+      ok: true,
+      inserted,
+      error_count: errors.length,
+      errors: errors.length ? errors : undefined,
+      project_id,
+      source,
+    });
+  } catch (e) {
+    console.error('[experiments/ingest] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
  * GET /api/matriya/lab-experiments-export
  * Internal endpoint called by matriya-back to feed the Python science query engine
  * with the SAME data the Lab Decision Board uses (Supabase lab_experiments).
@@ -3198,89 +3267,106 @@ app.get('/api/matriya/lab-experiments-export', async (req, res) => {
       if (!user) return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    const { data: rows, error } = await supabase
-      .from('lab_experiments')
-      .select('experiment_id, project_id, percentages, results, experiment_outcome, materials, formula, updated_at')
-      .order('updated_at', { ascending: false })
+    // Priority 1: Read from canonical `experiments` table (populated from Excel normalization)
+    const { data: expRows, error: expErr } = await supabase
+      .from('experiments')
+      .select('experiment_id, project_id, formulation, results, status')
+      .order('created_at', { ascending: false })
       .limit(2000);
 
-    if (error) throw error;
-    if (!rows || rows.length === 0) {
-      return res.json({ experiments: [], n_rows: 0 });
+    let canonical = [];
+
+    if (!expErr && Array.isArray(expRows) && expRows.length > 0) {
+      // `experiments` table rows are already in canonical JSONB format
+      canonical = expRows.map(row => {
+        const f = (typeof row.formulation === 'object' && row.formulation) ? row.formulation : {};
+        const r = (typeof row.results === 'object' && row.results) ? row.results : {};
+        const getNum = (obj, ...keys) => {
+          for (const k of keys) {
+            for (const [ok, ov] of Object.entries(obj)) {
+              if (ok.toLowerCase().replace(/[_:]/g,'') === k.toLowerCase().replace(/[_:]/g,'')) {
+                const n = parseFloat(ov); return Number.isNaN(n) ? (typeof ov === 'string' ? ov : null) : n;
+              }
+            }
+          }
+          return null;
+        };
+        const APP  = getNum(f, 'app');
+        const PER  = getNum(f, 'per');
+        const MEL  = getNum(f, 'mel');
+        const appPer = getNum(f, 'app:per', 'appPer', 'app_per') ?? (APP != null && PER != null && PER > 0 ? parseFloat((APP / PER).toFixed(4)) : null);
+        const IFR  = getNum(f, 'ifr') ?? (APP != null && PER != null && MEL != null ? APP + PER + MEL : null);
+        return {
+          experiment_id:   row.experiment_id,
+          project_id:      row.project_id,
+          APP, PER, MEL,
+          'APP:PER':       appPer,
+          IFR,
+          Nanoclay:        getNum(f, 'nanoclay', 'cloisite', 'clay'),
+          expansion_ratio: getNum(r, 'expansion_ratio', 'expansion'),
+          char_quality:    r['char_quality'] || r['char'] || null,
+          adhesion:        getNum(r, 'adhesion'),
+          viscosity:       getNum(r, 'viscosity'),
+          status:          row.status || null,
+          formula:         f['formula'] || null,
+        };
+      });
+    } else {
+      // Fallback: read from lab_experiments table (legacy data source)
+      const { data: legacyRows, error: legacyErr } = await supabase
+        .from('lab_experiments')
+        .select('experiment_id, project_id, percentages, results, experiment_outcome, formula, updated_at')
+        .order('updated_at', { ascending: false })
+        .limit(2000);
+
+      if (legacyErr) throw legacyErr;
+      if (!legacyRows || legacyRows.length === 0) {
+        return res.json({ experiments: [], n_rows: 0, source: 'none' });
+      }
+
+      canonical = legacyRows.map(row => {
+        const pct = (typeof row.percentages === 'object' && row.percentages) ? row.percentages : {};
+        const getPct = (...keys) => {
+          for (const k of keys) for (const [pk, pv] of Object.entries(pct)) {
+            if (pk.toLowerCase() === k.toLowerCase()) { const n = parseFloat(pv); return Number.isNaN(n) ? null : n; }
+          }
+          return null;
+        };
+        let resultsObj = {};
+        if (row.results) { try { resultsObj = typeof row.results === 'string' ? JSON.parse(row.results) : row.results; } catch (_) {} }
+        const getResult = (...keys) => {
+          for (const k of keys) for (const [rk, rv] of Object.entries(resultsObj)) {
+            if (rk.toLowerCase().replace(/[_\s]/g,'') === k.toLowerCase().replace(/[_\s]/g,'')) { const n = parseFloat(rv); return Number.isNaN(n) ? (typeof rv === 'string' ? rv : null) : n; }
+          }
+          return null;
+        };
+        const APP  = getPct('app', 'app_pct');
+        const PER  = getPct('per', 'per_pct');
+        const MEL  = getPct('mel', 'mel_pct');
+        const IFR  = getPct('ifr') ?? (APP != null && PER != null && MEL != null ? APP + PER + MEL : null);
+        const appPer = getPct('app:per', 'app_per') ?? (APP != null && PER != null && PER > 0 ? parseFloat((APP / PER).toFixed(4)) : null);
+        const outcomeMap = { success: 'PASS', failure: 'FAIL', partial: 'PARTIAL', production_formula: 'PASS' };
+        const status = outcomeMap[String(row.experiment_outcome || '').toLowerCase()] || row.experiment_outcome || null;
+        return {
+          experiment_id: row.experiment_id, project_id: row.project_id,
+          APP, PER, MEL, 'APP:PER': appPer, IFR,
+          Nanoclay: getPct('nanoclay', 'cloisite'),
+          expansion_ratio: getResult('expansion_ratio', 'expansion') ?? getPct('expansion_ratio'),
+          char_quality: getResult('char_quality', 'char'),
+          adhesion: getResult('adhesion') ?? getPct('adhesion'),
+          viscosity: getResult('viscosity') ?? getPct('viscosity'),
+          status, formula: row.formula || null,
+        };
+      });
     }
 
-    // Normalize each row into canonical columns for the Python query engine
-    const canonical = rows.map(row => {
-      const pct = (typeof row.percentages === 'object' && row.percentages) ? row.percentages : {};
-
-      // Helper: case-insensitive key lookup in percentages object
-      const getPct = (...keys) => {
-        for (const k of keys) {
-          for (const [pk, pv] of Object.entries(pct)) {
-            if (pk.toLowerCase() === k.toLowerCase()) {
-              const n = parseFloat(pv);
-              return Number.isNaN(n) ? null : n;
-            }
-          }
-        }
-        return null;
-      };
-
-      // Parse results field (may be JSON string or plain text)
-      let resultsObj = {};
-      if (row.results) {
-        try { resultsObj = typeof row.results === 'string' ? JSON.parse(row.results) : row.results; }
-        catch (_) { resultsObj = {}; }
-      }
-      const getResult = (...keys) => {
-        for (const k of keys) {
-          for (const [rk, rv] of Object.entries(resultsObj)) {
-            if (rk.toLowerCase().replace(/[_\s]/g, '') === k.toLowerCase().replace(/[_\s]/g, '')) {
-              const n = parseFloat(rv);
-              return Number.isNaN(n) ? (typeof rv === 'string' ? rv : null) : n;
-            }
-          }
-        }
-        return null;
-      };
-
-      const APP  = getPct('app', 'app_pct', 'APP');
-      const PER  = getPct('per', 'per_pct', 'PER');
-      const MEL  = getPct('mel', 'mel_pct', 'MEL');
-      const IFR  = getPct('ifr', 'IFR') ?? (APP != null && PER != null && MEL != null ? APP + PER + MEL : null);
-      const appPer = getPct('app:per', 'app_per', 'APP:PER') ?? (APP != null && PER != null && PER > 0 ? parseFloat((APP / PER).toFixed(4)) : null);
-
-      // Map experiment_outcome → status
-      const outcomeMap = { success: 'PASS', failure: 'FAIL', partial: 'PARTIAL', production_formula: 'PASS' };
-      const status = outcomeMap[String(row.experiment_outcome || '').toLowerCase()] || row.experiment_outcome || null;
-
-      return {
-        experiment_id:   row.experiment_id,
-        project_id:      row.project_id,
-        APP:             APP,
-        PER:             PER,
-        MEL:             MEL,
-        'APP:PER':       appPer,
-        IFR:             IFR,
-        Nanoclay:        getPct('nanoclay', 'cloisite', 'clay'),
-        expansion_ratio: getResult('expansion_ratio', 'expansion', 'expansionratio') ?? getPct('expansion_ratio'),
-        char_quality:    getResult('char_quality', 'char', 'charquality'),
-        adhesion:        getResult('adhesion') ?? getPct('adhesion'),
-        viscosity:       getResult('viscosity') ?? getPct('viscosity'),
-        status:          status,
-        formula:         row.formula || null,
-      };
-    });
-
-    // Filter out rows with no science data at all
-    const withData = canonical.filter(r =>
-      r.APP != null || r['APP:PER'] != null || r.expansion_ratio != null
-    );
+    const source = (!expErr && Array.isArray(expRows) && expRows.length > 0) ? 'supabase_experiments' : 'supabase_lab_experiments';
+    const withData = canonical.filter(r => r.APP != null || r['APP:PER'] != null || r.expansion_ratio != null);
 
     res.json({
       experiments: withData.length > 0 ? withData : canonical,
       n_rows: withData.length > 0 ? withData.length : canonical.length,
-      source: 'supabase_lab_experiments',
+      source,
     });
   } catch (e) {
     console.error('[lab-experiments-export] error:', e.message);

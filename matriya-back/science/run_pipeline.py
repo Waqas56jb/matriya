@@ -152,6 +152,90 @@ def cmd_boundary(args):
     _out(result)
 
 
+def cmd_dump_rows(args):
+    """
+    Dump parsed rows from an Excel/CSV file as a JSON array.
+    Usage: dump_rows <filepath> [sheet_index]
+
+    Returns canonical rows ready for insertion into Supabase experiments table:
+      { experiment_id, formulation: {...}, results: {...}, status }
+    """
+    if not args:
+        _out({"error": "Usage: dump_rows <filepath> [sheet_index]"})
+        sys.exit(1)
+
+    filepath    = args[0]
+    sheet_index = int(args[1]) if len(args) > 1 else 0
+
+    adapted = load_and_adapt(filepath, sheet_index)
+    if "error" in adapted:
+        _out({"error": adapted["error"], "rows": []})
+        return
+
+    df = adapted["df"]
+    if df is None or len(df) == 0:
+        _out({"rows": [], "n_rows": 0})
+        return
+
+    # Formulation columns (input parameters)
+    FORMULATION_COLS = ["APP", "PER", "MEL", "APP:PER", "IFR", "Nanoclay", "formula"]
+    # Results columns (output measurements)
+    RESULTS_COLS = ["expansion_ratio", "char_quality", "char_height_mm",
+                    "adhesion", "viscosity", "HRR_reduction_pct", "LOI",
+                    "char_cohesion_score", "residue_integrity_score"]
+    STATUS_COLS = ["status", "result_status"]
+
+    rows_out = []
+    for _, row in df.iterrows():
+        row_dict = row.where(row.notna(), None).to_dict()
+
+        # Build formulation JSONB
+        formulation = {}
+        for col in FORMULATION_COLS:
+            if col in row_dict and row_dict[col] is not None:
+                formulation[col] = row_dict[col]
+
+        # Build results JSONB
+        results = {}
+        for col in RESULTS_COLS:
+            if col in row_dict and row_dict[col] is not None:
+                results[col] = row_dict[col]
+
+        # Determine status
+        status = "PENDING"
+        for sc in STATUS_COLS:
+            if sc in row_dict and row_dict[sc] is not None:
+                raw = str(row_dict[sc]).strip().upper()
+                if raw in ("PASS", "SUCCESS", "1", "TRUE"):
+                    status = "PASS"
+                elif raw in ("FAIL", "FAILURE", "0", "FALSE"):
+                    status = "FAIL"
+                elif raw in ("PARTIAL",):
+                    status = "PARTIAL"
+                else:
+                    status = raw if raw else "PENDING"
+                break
+
+        # Experiment ID
+        exp_id = (row_dict.get("experiment_id") or
+                  row_dict.get("Experiment ID") or
+                  row_dict.get("exp_id") or
+                  f"EXP-{len(rows_out)+1:03d}")
+
+        rows_out.append({
+            "experiment_id": str(exp_id),
+            "formulation":   formulation,
+            "results":       results,
+            "status":        status,
+        })
+
+    _out({
+        "rows":              rows_out,
+        "n_rows":            len(rows_out),
+        "canonical_columns": list(df.columns),
+    })
+
+
 def cmd_guard_text(args):
     """
     Check a text string for forbidden metric contamination.
@@ -393,6 +477,7 @@ COMMANDS = {
     "sheets":       cmd_sheets,
     "guard_text":   cmd_guard_text,
     "classify_doc": cmd_classify_doc,
+    "dump_rows":    cmd_dump_rows,
 }
 
 if __name__ == "__main__":

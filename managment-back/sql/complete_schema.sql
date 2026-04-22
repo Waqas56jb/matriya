@@ -207,7 +207,32 @@ CREATE TABLE IF NOT EXISTS public.material_library (
 );
 
 -- ─────────────────────────────────────────────
--- 16. RESEARCH SESSIONS (Supabase management layer)
+-- 16. EXPERIMENTS (canonical lab data — populated from Excel after normalization)
+-- This is the primary science data layer read by the LabQueryEngine.
+-- formulation JSONB: { APP, PER, MEL, "APP:PER", IFR, Nanoclay, formula }
+-- results     JSONB: { expansion_ratio, char_quality, adhesion, viscosity, ... }
+-- status: PASS | FAIL | PARTIAL | PENDING
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS public.experiments (
+  id             uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  experiment_id  text        NOT NULL,
+  project_id     text        NOT NULL,
+  formulation    jsonb       NOT NULL DEFAULT '{}',
+  results        jsonb       NOT NULL DEFAULT '{}',
+  status         text        NOT NULL DEFAULT 'PENDING',
+  validated      boolean     NOT NULL DEFAULT false,
+  source         text,
+  created_at     timestamptz NOT NULL DEFAULT now(),
+  updated_at     timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (project_id, experiment_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_experiments_project   ON public.experiments(project_id);
+CREATE INDEX IF NOT EXISTS idx_experiments_status    ON public.experiments(status);
+CREATE INDEX IF NOT EXISTS idx_experiments_created   ON public.experiments(created_at DESC);
+
+-- ─────────────────────────────────────────────
+-- 17. RESEARCH SESSIONS (Supabase management layer)
 -- Used by managment-back /api/projects/:projectId/research-sessions
 -- Separate from matriya-back Sequelize research_sessions (FSCTM engine).
 -- ─────────────────────────────────────────────
