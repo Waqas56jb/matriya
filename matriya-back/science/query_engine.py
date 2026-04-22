@@ -264,13 +264,17 @@ def extract_top_n_by_clause(query: str) -> Tuple[Optional[int], Optional[str]]:
     Returns: (3, "viscosity")
     """
     match = re.search(
-        r'\bamong\s+top\s+(\d+)\s+by\s+([a-zA-Z_][a-zA-Z0-9_]*)',
+        r"\bamong\s+top\s+(\d+)\s+by\s+([a-zA-Z_]+)",
         query,
-        re.IGNORECASE
+        re.IGNORECASE,
     )
     if not match:
+        print("[DEBUG] extract_top_n_by_clause: NO MATCH", flush=True)
         return None, None
-    return int(match.group(1)), match.group(2)
+    n = int(match.group(1))
+    col = match.group(2)
+    print(f"[DEBUG] extracted n={n}, rank_col={col}", flush=True)
+    return n, col
 
 
 def extract_pre_among_segment(query: str) -> str:
