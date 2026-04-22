@@ -1,5 +1,4 @@
 import re
-import sys
 import pandas as pd
 from typing import Optional, Dict, Any, Literal, Tuple
 
@@ -307,13 +306,18 @@ def is_composite_rank_then_aggregate_query(query: str) -> bool:
     )
 
 
-def handle_rank_then_aggregate(df: pd.DataFrame, query: str) -> Dict[str, Any]:
+def handle_rank_then_aggregate(
+    df: pd.DataFrame, query: str, debug: bool = False
+) -> Dict[str, Any]:
     """
     Strict execution order:
       1) FILTER   — apply where clause
       2) RANK     — top N by <rank_col>
       3) AGGREGATE — lowest/highest <target_col> within ranked subset
     """
+    if debug:
+        print(f"[DEBUG] handle_rank_then_aggregate | query={query!r}", flush=True)
+
     base_q, where = extract_where_condition(query)
 
     # Step 1: FILTER
@@ -326,6 +330,9 @@ def handle_rank_then_aggregate(df: pd.DataFrame, query: str) -> Dict[str, Any]:
             return {"error": "INVALID_QUERY", "reason": f"bad condition: {e}"}
     else:
         filtered = df
+
+    if debug:
+        print(f"[DEBUG] after filter: rows={len(filtered)}", flush=True)
 
     if filtered.empty:
         return {"error": "NO_RESULTS", "reason": "no rows after filtering"}
@@ -342,6 +349,9 @@ def handle_rank_then_aggregate(df: pd.DataFrame, query: str) -> Dict[str, Any]:
         ranked = apply_ranking(filtered, f"top {n} by {rank_col}", n=n)
     except ValueError as e:
         return {"error": "INVALID_QUERY", "reason": str(e)}
+
+    if debug:
+        print(f"[DEBUG] after rank: n={n} by={rank_col!r} rows={len(ranked)}", flush=True)
 
     if ranked is None or ranked.empty:
         return {"error": "NO_RESULTS", "reason": f"ranking column '{rank_col}' has no valid numeric values"}
@@ -363,47 +373,54 @@ def is_composite_query(query: str) -> bool:
     return is_composite_rank_then_aggregate_query(query)
 
 
-def execute_composite_query(df: pd.DataFrame, query: str) -> Dict[str, Any]:
+def execute_composite_query(
+    df: pd.DataFrame, query: str, debug: bool = False
+) -> Dict[str, Any]:
     """Alias: filter → rank (top N by) → final aggregation on ranked rows."""
-    return handle_rank_then_aggregate(df, query)
+    return handle_rank_then_aggregate(df, query, debug=debug)
 
 
 # ============================================================
 # MAIN ENTRY POINT
 # ============================================================
 
-def answer_query(df: pd.DataFrame, query: str) -> Dict[str, Any]:
-    """Main orchestration. Composite queries MUST run first — no other branch before that."""
-    if is_composite_query(query):
-        return execute_composite_query(df, query)
+def answer_query(
+    df: pd.DataFrame, query: str, debug: bool = False
+) -> Dict[str, Any]:
+    print(f"[DEBUG] ENTER answer_query | query={query}", flush=True)
 
+    # שלב 1 — composite must run first
+    if is_composite_rank_then_aggregate_query(query):
+        print("[DEBUG] ROUTE = COMPOSITE", flush=True)
+        return handle_rank_then_aggregate(df, query, debug=debug)
+
+    # שלב 2 — standard intent
     intent = classify_intent(query)
-    print(
-        f"[DEBUG] query={query!r} intent={intent!r}",
-        file=sys.stderr,
-        flush=True,
-    )
+    print(f"[DEBUG] ROUTE = STANDARD | intent={intent}", flush=True)
 
     if intent == "INVALID":
-        return {"error": "INVALID_QUERY"}
+        return {"error": "INVALID_QUERY", "message": "Query not recognized"}
 
     if intent == "FILTER":
         return handle_filter(df, query)
 
     if intent == "AGGREGATION":
         base_q, where = extract_where_condition(query)
-        filtered = df
+
         if where:
             try:
                 filtered = df.query(normalize_condition(where))
             except Exception as e:
                 return {"error": "INVALID_QUERY", "reason": str(e)}
+        else:
+            filtered = df
+
         return handle_aggregation(filtered, base_q)
 
     if intent == "SORT":
         return handle_sort(df, query)
 
-    return {"error": "INVALID_QUERY"}
+    return {"error": "INVALID_QUERY", "message": "Unhandled intent"}
 
 
 # ============================================================
