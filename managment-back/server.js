@@ -911,72 +911,91 @@ const emailAttachImportSchema = z.object({
 
 /**
  * Download one attachment from Resend receiving API, save to project_files + storage,
- * and index the content into RAG (local + OpenAI vector store).
+ * and index the content into MATRIYA RAG (local + OpenAI vector store + /ingest/file).
  * No user context required — runs in background from the inbound webhook.
  */
 async function _ingestInboundAttachment(projectId, emailId, attachment) {
-  const { id: attachmentId, filename, content_type: contentType, content: rawContent } = attachment;
+  // Bug fix: the attachment object carries _content (underscore prefix), not content.
+  const { id: attachmentId, filename, content_type: contentType, _content: rawContent } = attachment;
   if (!filename) return;
 
   try {
     let buffer;
 
-    // Prefer pre-fetched base64 content; fall back to Resend attachment API
+    // 1. Use pre-fetched base64 content if Resend included it inline
     if (rawContent) {
       buffer = Buffer.from(rawContent, 'base64');
+      console.info(`[email-attachment] using inline content for ${filename} (${buffer.length} bytes)`);
     } else if (attachmentId && RESEND_API_KEY) {
+      // 2. Fetch attachment binary from Resend receiving API
       const url = `https://api.resend.com/emails/receiving/${emailId}/attachments/${attachmentId}`;
-      const r = await fetch(url, { headers: { Authorization: `Bearer ${RESEND_API_KEY}` } });
+      console.info(`[email-attachment] fetching from Resend: ${url}`);
+      let r;
+      try {
+        r = await fetch(url, {
+          headers: { Authorization: `Bearer ${RESEND_API_KEY}` },
+          signal: AbortSignal.timeout(30000),
+        });
+      } catch (fetchErr) {
+        console.error(`[email-attachment] fetch error for ${filename}: ${fetchErr.message}`);
+        return;
+      }
       if (!r.ok) {
-        console.warn(`[email-attachment] fetch failed (${r.status}) for ${filename}`);
+        const body = await r.text().catch(() => '');
+        console.warn(`[email-attachment] Resend returned ${r.status} for ${filename}: ${body.slice(0, 200)}`);
         return;
       }
       const arrayBuf = await r.arrayBuffer();
       buffer = Buffer.from(arrayBuf);
     } else {
-      console.warn(`[email-attachment] no content or id for attachment: ${filename}`);
+      console.warn(`[email-attachment] no content and no attachment id for: ${filename} — skipping`);
       return;
     }
 
     if (!buffer || buffer.length === 0) {
-      console.warn(`[email-attachment] empty content for attachment: ${filename}`);
+      console.warn(`[email-attachment] empty buffer for: ${filename} — skipping`);
       return;
     }
 
     const safeName = filename.replace(/[^a-z0-9\-_.]/gi, '_');
     const mime = contentType || 'application/octet-stream';
 
-    // Insert project_files row
-    const { data: fileRow, error: fileErr } = await supabase.from('project_files').insert({
+    // Insert project_files row (try with source_email_id first, fall back without it)
+    let fileRow = null;
+    const { data: r1, error: e1 } = await supabase.from('project_files').insert({
       project_id: projectId,
       original_name: filename,
       folder_display_name: 'Email Attachments',
       source_email_id: emailId,
     }).select().single();
 
-    if (fileErr || !fileRow) {
-      // source_email_id column may not exist yet — retry without it
-      const { data: fileRow2, error: fileErr2 } = await supabase.from('project_files').insert({
+    if (e1) {
+      const { data: r2, error: e2 } = await supabase.from('project_files').insert({
         project_id: projectId,
         original_name: filename,
         folder_display_name: 'Email Attachments',
       }).select().single();
-      if (fileErr2 || !fileRow2) {
-        console.error('[email-attachment] project_files insert failed:', fileErr2?.message || fileErr?.message);
+      if (e2 || !r2) {
+        console.error('[email-attachment] project_files insert failed:', e2?.message || e1?.message);
         return;
       }
-      // Use fallback row
-      Object.assign(fileRow || {}, fileRow2);
-      // Reassign to mutable variable for remaining logic
-      return await _saveAttachmentRow(projectId, emailId, fileRow2, buffer, safeName, mime, filename);
+      fileRow = r2;
+    } else {
+      fileRow = r1;
     }
 
+    if (!fileRow) return;
     await _saveAttachmentRow(projectId, emailId, fileRow, buffer, safeName, mime, filename);
   } catch (e) {
     console.error('[email-attachment] _ingestInboundAttachment failed:', e.message);
   }
 }
 
+/**
+ * Uploads attachment to Supabase Storage, indexes it in managment-back's local RAG,
+ * schedules OpenAI vector sync, AND POSTs to MATRIYA /ingest/file so the content
+ * is available when MATRIYA answers questions ("what does the attached document say?").
+ */
 async function _saveAttachmentRow(projectId, emailId, fileRow, buffer, safeName, mime, originalName) {
   try {
     await ensureManualBucketExists();
@@ -989,14 +1008,48 @@ async function _saveAttachmentRow(projectId, emailId, fileRow, buffer, safeName,
     });
     if (upErr) {
       await supabase.from('project_files').delete().eq('id', fileRow.id);
-      console.error('[email-attachment] storage upload failed:', upErr.message);
+      console.error('[email-attachment] Supabase storage upload failed:', upErr.message);
       return;
     }
 
     await supabase.from('project_files').update({ storage_path }).eq('id', fileRow.id);
+
+    // ── Index in managment-back local RAG ───────────────────────────────────
     if (hasLocalRag()) ingestFileInBackground(projectId, fileRow.id, buffer, originalName);
+
+    // ── Schedule OpenAI vector store sync ──────────────────────────────────
     scheduleOpenAiVectorSyncForProject(projectId, 'email/attachment', fileRow.id);
-    console.info(`[email-attachment] indexed: ${originalName} (${buffer.length} bytes) → project ${projectId}`);
+
+    // ── POST to MATRIYA /ingest/file (main RAG — David requirement) ────────
+    // This is what makes MATRIYA able to answer "what does the attached document say?"
+    if (MATRIYA_BACK_URL) {
+      setImmediate(async () => {
+        try {
+          const fd = new FormData();
+          // Node.js 18+ has native FormData + Blob
+          fd.append('file', new Blob([buffer], { type: mime }), originalName);
+          const r = await fetch(`${MATRIYA_BACK_URL}/ingest/file`, {
+            method: 'POST',
+            body: fd,
+            signal: AbortSignal.timeout(60000),
+          });
+          if (r.ok) {
+            const result = await r.json().catch(() => ({}));
+            console.info(`[email-attachment] MATRIYA /ingest/file OK: ${originalName} chunks=${result.chunks_stored ?? '?'}`);
+          } else {
+            const errBody = await r.text().catch(() => '');
+            console.warn(`[email-attachment] MATRIYA /ingest/file ${r.status} for ${originalName}: ${errBody.slice(0, 200)}`);
+          }
+        } catch (e) {
+          console.warn(`[email-attachment] MATRIYA /ingest/file error: ${e.message}`);
+        }
+      });
+    } else {
+      console.warn('[email-attachment] MATRIYA_BACK_URL not set — skipping /ingest/file call');
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
+    console.info(`[email-attachment] saved & queued: ${originalName} (${buffer.length} bytes) → project ${projectId}`);
   } catch (e) {
     console.error('[email-attachment] _saveAttachmentRow failed:', e.message);
   }
