@@ -1197,6 +1197,23 @@ app.post("/ask-matriya", requireAuth, askMatriyaMulter, async (req, res) => {
     return res.status(400).json({ error: "message is required" });
   }
 
+  // ── DEBUG LOGGING (David request) ──────────────────────────────────────
+  console.log("QUERY RECEIVED:", message);
+
+  // ── SCIENCE QUERY ROUTING for /ask-matriya ──────────────────────────────
+  // Queries referencing lab columns with numeric operators (e.g. "APP:PER > 2.5")
+  // must NOT go to document RAG — they run against the structured lab dataset.
+  // This check fires BEFORE the filenames-required guard so science queries
+  // don't need a document to be selected in the UI.
+  if (isScienceQueryQuestion(message)) {
+    console.log("ROUTING TO LAB");
+    logger.info(`[ask-matriya] science routing → Python pipeline. query="${message}"`);
+    return await handleScienceQueryFlow(req, res, { query: message });
+  } else {
+    console.log("ROUTING TO RAG");
+  }
+  // ────────────────────────────────────────────────────────────────────────
+
   // Mock fixtures removed (David M2 — all responses must come from real data, not fixtures).
 
   let history = [];
@@ -1843,6 +1860,9 @@ async function handleMatriyaSearch(req, res) {
     return res.status(400).json({ error: "query parameter is required" });
   }
 
+  // ── DEBUG LOGGING (David request) ──────────────────────────────────────
+  console.log("QUERY RECEIVED:", query);
+
   // ─── SOURCE GUARD: runs at absolute entry, before ANY retrieval, DB call, or user lookup ───
   // David requirement: log "[ENTRY] guard check starting" at the very top.
   const flowRawEarly = String(req.body?.flow ?? req.query.flow ?? '').toLowerCase().trim();
@@ -1858,9 +1878,13 @@ async function handleMatriyaSearch(req, res) {
   // Detect NL queries about experiment data with numeric conditions and route
   // them to the Lab Query Engine (Python science pipeline, not document RAG).
   // flow=science: explicit override. flow=document: skip this routing.
-  if (flowRawEarly === 'science' || (flowRawEarly !== 'document' && isScienceQueryQuestion(query))) {
+  const scienceDetected = isScienceQueryQuestion(query);
+  if (flowRawEarly === 'science' || (flowRawEarly !== 'document' && scienceDetected)) {
+    console.log("ROUTING TO LAB");
     logger.info(`[science-routing] detected lab data query → science pipeline. query="${query}"`);
     return await handleScienceQueryFlow(req, res, { query });
+  } else {
+    console.log("ROUTING TO RAG", `(flow=${flowRawEarly || 'none'} scienceDetected=${scienceDetected})`);
   }
   // ────────────────────────────────────────────────────────────────────────
 
