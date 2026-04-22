@@ -1,4 +1,5 @@
 import re
+import sys
 import pandas as pd
 from typing import Optional, Dict, Any, Literal, Tuple
 
@@ -12,11 +13,14 @@ AGG_KEYWORDS = {
 }
 
 # Change 3: regex patterns replace flat SORT_KEYWORDS list
+# Include "<context> by <column>" (e.g. "experiments by adhesion") which does NOT
+# start with the word "by" and does not use "order by" / "sort by".
 SORT_PATTERNS = [
     r'^\s*by\s+\w+',
     r'sort(?:ed)?\s+by\s+\w+',
     r'order\s+by\s+\w+',
     r'rank(?:ed)?\s+by\s+\w+',
+    r'(?:\b\w+\s+)+by\s+\w+',
 ]
 
 CONDITION_KEYWORDS = [">", "<", "=", ">=", "<=", "!=", "where", "and", "or"]
@@ -35,7 +39,8 @@ def classify_intent(query: str) -> Literal["FILTER", "AGGREGATION", "SORT", "INV
     has_sort     = any(re.search(p, q, re.IGNORECASE) for p in SORT_PATTERNS)
     has_condition = any(kw in q for kw in CONDITION_KEYWORDS)
 
-    if has_sort and not has_agg:
+    # "where …" is a filter; do not treat as pure SORT (even if " by " appears in grammar)
+    if (has_sort and not has_agg) and "where" not in q:
         return "SORT"
 
     if has_agg:
@@ -192,6 +197,9 @@ def extract_column_after_by(query: str) -> Optional[str]:
 
 
 def handle_sort(df: pd.DataFrame, query: str) -> Dict[str, Any]:
+    if df is None or len(df) == 0:
+        return {"error": "NO_RESULTS", "reason": "no rows in dataset"}
+
     col = extract_column_after_by(query)
 
     if col is None:
@@ -206,8 +214,24 @@ def handle_sort(df: pd.DataFrame, query: str) -> Dict[str, Any]:
         for w in ["descending", "highest", "top"]
     )
 
+    try:
+        # Numeric columns: sort on coerced values so string "92" / float mix works
+        series = df[col]
+        if pd.api.types.is_numeric_dtype(series):
+            key = series
+        else:
+            key = pd.to_numeric(series, errors="coerce")
+        ordered = df.assign(_sort_key=key).sort_values(
+            by="_sort_key", ascending=ascending, na_position="last"
+        ).drop(columns=["_sort_key"])
+    except Exception as e:
+        return {"error": "INVALID_QUERY", "reason": f"sort failed: {e}"}
+
     return {
-        "results": df.sort_values(by=col, ascending=ascending).to_dict("records")
+        "decision":  "MATCHES_FOUND",
+        "quality":   "COMPLETE",
+        "results":   ordered.to_dict("records"),
+        "count":     len(ordered),
     }
 
 
@@ -354,6 +378,11 @@ def answer_query(df: pd.DataFrame, query: str) -> Dict[str, Any]:
         return execute_composite_query(df, query)
 
     intent = classify_intent(query)
+    print(
+        f"[DEBUG] query={query!r} intent={intent!r}",
+        file=sys.stderr,
+        flush=True,
+    )
 
     if intent == "INVALID":
         return {"error": "INVALID_QUERY"}
@@ -461,5 +490,14 @@ if __name__ == "__main__":
     assert composite_result["_ranking_column"] == "viscosity"
     assert composite_result["_ranking_size"]   == 3
     assert composite_result["_pipeline"]       == "filter -> ranking -> aggregation"
+
+    # Sort: natural phrasing "experiments by <column>" (not only "order by" / leading "by")
+    sort_test_q = "experiments by adhesion"
+    assert classify_intent(sort_test_q) == "SORT", classify_intent(sort_test_q)
+    sort_res = answer_query(df, sort_test_q)
+    assert "results" in sort_res, sort_res
+    assert sort_res.get("count") == len(df)
+    assert sort_res["results"][0]["experiment_id"] == "EXP-010"  # lowest adhesion 88
+    assert sort_res["results"][-1]["experiment_id"] == "EXP-006"  # highest 95
 
     print("\n✅ ALL TESTS PASS")
