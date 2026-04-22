@@ -1854,16 +1854,17 @@ async function handleScienceQueryFlow(req, res, { query }) {
     logger.info(`[science-routing] query="${query}" decision=${result.decision}`);
 
     if (result.decision === 'AMBIGUOUS_QUERY') {
+      const ambigAnswer = `Ambiguous query — please specify the exact column name. ${
+        (result.evidence?.ambiguous_items || []).map(a => `"${a.term}" could mean: ${a.candidates?.join(', ')}`).join('; ')
+      }`;
       return res.status(200).json({
         query,
         flow: 'science',
         routing: 'SCIENCE_QUERY_ENGINE',
         data_source: 'NONE',
         decision: 'AMBIGUOUS_QUERY',
-        answer: `השאילתה מכילה הפניה דו-משמעית. אנא ציין את שם העמודה המדויק. ${
-          (result.evidence?.ambiguous_items || []).map(a => `"${a.term}" → ${a.candidates?.join(', ')}`).join('; ')
-        }`,
-        reply: 'AMBIGUOUS_QUERY',
+        answer: ambigAnswer,
+        reply: ambigAnswer,     // reply = what frontend displays as assistant message
         evidence: result.evidence || {},
         warnings: result.warnings || [],
         sources: [],
@@ -1874,16 +1875,17 @@ async function handleScienceQueryFlow(req, res, { query }) {
 
     if (result.decision === 'INSUFFICIENT_DATA' || result.decision === 'NO_MATCHES') {
       const matched = result.evidence?.matched_rows ?? 0;
+      const noMatchAnswer = matched === 0
+        ? `No experiments matched the query: "${query}". The dataset exists but no rows satisfy this filter.`
+        : `Insufficient data to execute the query. ${result.evidence?.error || ''}`;
       return res.status(200).json({
         query,
         flow: 'science',
         routing: 'SCIENCE_QUERY_ENGINE',
         data_source: 'DB_COMPUTED',
         decision: result.decision,
-        answer: matched === 0
-          ? `לא נמצאו ניסויים העומדים בתנאי השאילתה.`
-          : `הנתונים אינם מספיקים לביצוע השאילתה.`,
-        reply: result.decision,
+        answer: noMatchAnswer,
+        reply: noMatchAnswer,   // reply = what frontend displays as assistant message
         evidence: result.evidence || {},
         warnings: result.warnings || [],
         sources: [],
@@ -1911,19 +1913,25 @@ async function handleScienceQueryFlow(req, res, { query }) {
     const countResult = evidence.count_result;
     const isCount = countResult !== undefined && countResult !== null;
 
-    // Build human-readable answer
+    // Build human-readable answer — shown as the assistant message in the chat
     let answer;
     if (isCount) {
-      answer = `נמצאו ${countResult} ניסויים העומדים בתנאי השאילתה.`;
+      answer = `Found ${countResult} experiment${countResult !== 1 ? 's' : ''} matching: "${query}".`;
     } else if (rows.length === 0) {
-      answer = 'לא נמצאו שורות תואמות.';
+      answer = `Query matched ${matchedRows} rows but result preview is empty. Check Railway logs for pipeline details.`;
     } else {
-      const colList = (evidence.columns_returned || []).slice(0, 6).join(', ');
-      answer = `נמצאו ${matchedRows} ניסויים העונים על השאילתה${evidence.total_rows ? ` מתוך ${evidence.total_rows}` : ''}.\n` +
-        `עמודות: ${colList || 'לא צוינו'}.\n` +
-        rows.slice(0, 5).map((r, i) =>
-          `שורה ${i + 1}: ${Object.entries(r).slice(0, 6).map(([k, v]) => `${k}=${v}`).join(', ')}`
-        ).join('\n');
+      const colList = (evidence.columns_returned || []).slice(0, 8).join(', ');
+      const rowLines = rows.slice(0, 10).map((r, i) => {
+        const fields = Object.entries(r)
+          .filter(([, v]) => v != null)
+          .slice(0, 8)
+          .map(([k, v]) => `${k}: ${typeof v === 'number' ? v.toFixed(2).replace(/\.?0+$/, '') : v}`)
+          .join(' | ');
+        return `  [${i + 1}] ${fields}`;
+      }).join('\n');
+      answer = `Found ${matchedRows} experiment${matchedRows !== 1 ? 's' : ''}${evidence.total_rows ? ` out of ${evidence.total_rows} total` : ''} matching: "${query}"\n` +
+        `Columns: ${colList || 'see rows below'}\n\n` +
+        `Results:\n${rowLines}`;
     }
 
     // Post-response guard on science answer (blocks ML metrics in experiment outputs)
@@ -1941,7 +1949,7 @@ async function handleScienceQueryFlow(req, res, { query }) {
       tag: 'computed',
       decision: result.decision,
       answer,
-      reply: 'ANSWER',
+      reply: answer,            // reply = what frontend displays as assistant message
       matched_rows: matchedRows,
       total_rows: evidence.total_rows,
       count_result: countResult,
@@ -1951,9 +1959,13 @@ async function handleScienceQueryFlow(req, res, { query }) {
       filters_applied: evidence.filters_applied || [],
       audit_trace: result.audit_trace || {},
       warnings: result.warnings || [],
-      sources: [],
-      results: rows.slice(0, 5).map(r => ({
-        content: Object.entries(r).map(([k, v]) => `${k}: ${v}`).join(' | '),
+      sources: rows.slice(0, 10).map(r => ({
+        content: Object.entries(r).filter(([,v]) => v != null).map(([k, v]) => `${k}: ${v}`).join(' | '),
+        metadata: { source: 'lab_data', routing: 'science_query_engine', experiment_id: r.experiment_id || null },
+        score: 1.0,
+      })),
+      results: rows.slice(0, 10).map(r => ({
+        content: Object.entries(r).filter(([,v]) => v != null).map(([k, v]) => `${k}: ${v}`).join(' | '),
         metadata: { source: 'lab_data', routing: 'science_query_engine' },
         score: 1.0,
       })),
