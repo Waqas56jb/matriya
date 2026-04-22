@@ -1,6 +1,6 @@
 import re
 import pandas as pd
-from typing import Optional, Dict, Any, Literal
+from typing import Optional, Dict, Any, Literal, Tuple
 
 # ============================================================
 # INTENT CLASSIFICATION
@@ -11,7 +11,7 @@ AGG_KEYWORDS = {
     "min": ["lowest", "min", "minimum", "smallest", "worst"],
 }
 
-# Change 3: regex patterns instead of flat keyword list
+# Change 3: regex patterns replace flat SORT_KEYWORDS list
 SORT_PATTERNS = [
     r'^\s*by\s+\w+',
     r'sort(?:ed)?\s+by\s+\w+',
@@ -30,9 +30,9 @@ def classify_intent(query: str) -> Literal["FILTER", "AGGREGATION", "SORT", "INV
 
     # Change 4: word boundaries on all AGG keyword checks
     all_agg_kws = AGG_KEYWORDS["max"] + AGG_KEYWORDS["min"]
-    has_agg  = any(re.search(r'\b' + kw + r'\b', q) for kw in all_agg_kws)
+    has_agg      = any(re.search(r'\b' + kw + r'\b', q) for kw in all_agg_kws)
     # Change 3: regex-based sort detection
-    has_sort = any(re.search(p, q, re.IGNORECASE) for p in SORT_PATTERNS)
+    has_sort     = any(re.search(p, q, re.IGNORECASE) for p in SORT_PATTERNS)
     has_condition = any(kw in q for kw in CONDITION_KEYWORDS)
 
     if has_sort and not has_agg:
@@ -57,13 +57,11 @@ def normalize_condition(cond: str) -> str:
 
     Rules:
       1. Replace bare '=' with '==' (but leave >=, <=, != untouched).
-      2. Quote bare identifier values so pandas treats them as strings,
-         not column references.
+      2. Quote bare identifier values on the RHS of == so pandas treats
+         them as strings, not column references.
          e.g.  binder == K52  →  binder == "K52"
     """
-    # Rule 1 — bare = → == (not preceded or followed by another operator char)
     cond = re.sub(r'(?<![<>!])=(?!=)', '==', cond)
-    # Rule 2 — quote bare word on the RHS of ==
     cond = re.sub(r'(\b\w+\b\s*==\s*)([A-Za-z_]\w*)', r'\1"\2"', cond)
     return cond.strip()
 
@@ -97,6 +95,7 @@ def detect_target_column(query: str) -> Optional[str]:
 
 
 def extract_where_condition(query: str) -> tuple[str, Optional[str]]:
+    """Split into (base_query, where_clause) if 'where' exists."""
     parts = re.split(r'\bwhere\b', query, flags=re.IGNORECASE)
     if len(parts) == 1:
         return parts[0].strip(), None
@@ -153,14 +152,14 @@ def handle_filter(df: pd.DataFrame, query: str) -> Dict[str, Any]:
             # Change 2: normalise before querying
             filtered = df.query(normalize_condition(where))
         except Exception as e:
-            # Change 1: no silent fallback — explicit error
+            # Change 1: explicit error — no silent fallback
             return {"error": "INVALID_QUERY", "reason": f"bad condition: {e}"}
     else:
         try:
             # Change 2: normalise before querying
             filtered = df.query(normalize_condition(query))
         except Exception as e:
-            # Change 1: no silent fallback — explicit error
+            # Change 1: explicit error — no silent fallback
             return {"error": "INVALID_QUERY", "reason": str(e)}
 
     if filtered.empty:
@@ -168,10 +167,6 @@ def handle_filter(df: pd.DataFrame, query: str) -> Dict[str, Any]:
 
     return {"results": filtered.to_dict("records"), "count": len(filtered)}
 
-
-# ============================================================
-# SORT / RANKING
-# ============================================================
 
 def extract_column_after_by(query: str) -> Optional[str]:
     match = re.search(r'\bby\s+([a-zA-Z_][a-zA-Z0-9_]*)', query, re.IGNORECASE)
@@ -187,6 +182,7 @@ def handle_sort(df: pd.DataFrame, query: str) -> Dict[str, Any]:
     if col not in df.columns:
         return {"error": "INVALID_QUERY", "reason": f"unknown column: {col}"}
 
+    # Change 4: word boundaries for descending/highest/top check
     ascending = not any(
         re.search(r'\b' + w + r'\b', query.lower())
         for w in ["descending", "highest", "top"]
@@ -210,7 +206,7 @@ def apply_ranking(df: pd.DataFrame, query: str, n: int = 3) -> pd.DataFrame:
     if valid.empty:
         return valid
 
-    # Change 4: word boundaries for top/highest check
+    # Change 4: word boundaries
     if any(re.search(r'\b' + w + r'\b', query.lower()) for w in ["top", "highest"]):
         return valid.nlargest(n, col)
 
@@ -218,10 +214,121 @@ def apply_ranking(df: pd.DataFrame, query: str, n: int = 3) -> pd.DataFrame:
 
 
 # ============================================================
+# COMPOSITE QUERY ORCHESTRATION
+# ============================================================
+
+def extract_top_n_by_clause(query: str) -> Tuple[Optional[int], Optional[str]]:
+    """
+    Extract pattern: among top 3 by viscosity
+    Returns: (3, "viscosity")
+    """
+    match = re.search(
+        r'\bamong\s+top\s+(\d+)\s+by\s+([a-zA-Z_][a-zA-Z0-9_]*)',
+        query,
+        re.IGNORECASE
+    )
+    if not match:
+        return None, None
+    return int(match.group(1)), match.group(2)
+
+
+def extract_pre_among_segment(query: str) -> str:
+    """
+    From: 'lowest expansion_ratio among top 3 by viscosity'
+    Returns: 'lowest expansion_ratio'
+    """
+    parts = re.split(r'\bamong\s+top\b', query, flags=re.IGNORECASE)
+    return parts[0].strip()
+
+
+def detect_final_aggregation_target(query: str) -> Optional[str]:
+    return detect_target_column(extract_pre_among_segment(query))
+
+
+def detect_final_aggregation(query: str) -> Optional[str]:
+    return detect_aggregation(extract_pre_among_segment(query))
+
+
+def is_composite_rank_then_aggregate_query(query: str) -> bool:
+    """
+    Detect: lowest expansion_ratio among top 3 by viscosity where adhesion > 90
+    """
+    base_q, _ = extract_where_condition(query)
+    has_top_n_by = bool(re.search(
+        r'\bamong\s+top\s+\d+\s+by\s+[a-zA-Z_][a-zA-Z0-9_]*',
+        base_q, re.IGNORECASE
+    ))
+    return (
+        has_top_n_by
+        and detect_final_aggregation(base_q) is not None
+        and detect_final_aggregation_target(base_q) is not None
+    )
+
+
+def handle_rank_then_aggregate(df: pd.DataFrame, query: str) -> Dict[str, Any]:
+    """
+    Strict execution order:
+      1) FILTER   — apply where clause
+      2) RANK     — top N by <rank_col>
+      3) AGGREGATE — lowest/highest <target_col> within ranked subset
+    """
+    base_q, where = extract_where_condition(query)
+
+    # Step 1: FILTER
+    if where:
+        try:
+            # Change 2: normalise before querying
+            filtered = df.query(normalize_condition(where))
+        except Exception as e:
+            # Change 1: explicit error
+            return {"error": "INVALID_QUERY", "reason": f"bad condition: {e}"}
+    else:
+        filtered = df
+
+    if filtered.empty:
+        return {"error": "NO_RESULTS", "reason": "no rows after filtering"}
+
+    # Step 2: RANK
+    n, rank_col = extract_top_n_by_clause(base_q)
+    if n is None or rank_col is None:
+        return {"error": "INVALID_QUERY", "reason": "missing 'among top N by <column>' clause"}
+
+    if rank_col not in filtered.columns:
+        return {"error": "INVALID_QUERY", "reason": f"unknown ranking column: {rank_col}"}
+
+    try:
+        ranked = apply_ranking(filtered, f"top {n} by {rank_col}", n=n)
+    except ValueError as e:
+        return {"error": "INVALID_QUERY", "reason": str(e)}
+
+    if ranked is None or ranked.empty:
+        return {"error": "NO_RESULTS", "reason": f"ranking column '{rank_col}' has no valid numeric values"}
+
+    # Step 3: FINAL AGGREGATION on ranked subset only
+    result = handle_aggregation(ranked, extract_pre_among_segment(base_q))
+
+    if "error" in result:
+        return result
+
+    result["_ranking_column"] = rank_col
+    result["_ranking_size"]   = n
+    result["_pipeline"]       = "filter -> ranking -> aggregation"
+    return result
+
+
+# ============================================================
 # MAIN ENTRY POINT
 # ============================================================
 
 def answer_query(df: pd.DataFrame, query: str) -> Dict[str, Any]:
+    """
+    Main orchestration entry.
+    Composite queries are intercepted first and executed in strict order.
+    Existing filter / sort / aggregation logic is left intact.
+    """
+    if is_composite_rank_then_aggregate_query(query):
+        return handle_rank_then_aggregate(df, query)
+
     intent = classify_intent(query)
 
     if intent == "INVALID":
@@ -237,7 +344,7 @@ def answer_query(df: pd.DataFrame, query: str) -> Dict[str, Any]:
                 # Change 2: normalise before querying
                 filtered = df.query(normalize_condition(where))
             except Exception as e:
-                # Change 1: no silent fallback — explicit error
+                # Change 1: explicit error — no silent fallback
                 return {"error": "INVALID_QUERY", "reason": f"bad where condition: {e}"}
         else:
             filtered = df
@@ -247,3 +354,91 @@ def answer_query(df: pd.DataFrame, query: str) -> Dict[str, Any]:
         return handle_sort(df, query)
 
     return {"error": "INVALID_QUERY", "message": "Unhandled intent"}
+
+
+# ============================================================
+# SMOKE TESTS
+# ============================================================
+
+if __name__ == "__main__":
+    df = pd.DataFrame([
+        {
+            "experiment_id": "EXP-004",
+            "expansion_ratio": 21.3,
+            "viscosity": 1480,
+            "adhesion": 92,
+            "char_quality": "EXCELLENT",
+            "status": "PASS",
+            "formula": "Nanoclay enhanced",
+        },
+        {
+            "experiment_id": "EXP-006",
+            "expansion_ratio": 23.8,
+            "viscosity": 1560,
+            "adhesion": 95,
+            "char_quality": "EXCELLENT",
+            "status": "PASS",
+            "formula": "Optimal production",
+        },
+        {
+            "experiment_id": "EXP-009",
+            "expansion_ratio": 27.1,
+            "viscosity": 1620,
+            "adhesion": 94,
+            "char_quality": "EXCELLENT",
+            "status": "PASS",
+            "formula": "High expansion target",
+        },
+        {
+            "experiment_id": "EXP-010",
+            "expansion_ratio": 19.0,
+            "viscosity": 1400,
+            "adhesion": 88,
+            "char_quality": "GOOD",
+            "status": "PASS",
+            "formula": "Lower adhesion sample",
+        },
+    ])
+
+    tests = [
+        ("highest expansion_ratio",                    "AGGREGATION"),
+        ("lowest viscosity",                           "AGGREGATION"),
+        ("viscosity > 1400",                           "FILTER"),
+        ("by viscosity",                               "SORT"),
+        ("sort by adhesion",                           "SORT"),
+        ("highest adhesion where viscosity > 1500",    "AGGREGATION"),
+        ("expansion_ratio >",                          "INVALID"),
+        ("where binder = K52",                         "FILTER"),
+        ("order by expansion_ratio",                   "SORT"),
+        ("unknown intent",                             "INVALID"),
+    ]
+
+    for q, expected_intent in tests:
+        intent = classify_intent(q)
+        result = answer_query(df, q)
+        print(f"{q[:50]:50} | intent: {intent:12} | result: {str(result)[:80]}")
+        assert intent == expected_intent, f"Intent mismatch: {q!r} → got {intent!r}, expected {expected_intent!r}"
+
+        if intent == "INVALID":
+            assert "error" in result
+        elif intent == "AGGREGATION":
+            assert "_aggregation" in result or "error" in result
+        elif intent == "FILTER":
+            assert "results" in result or "error" in result
+        elif intent == "SORT":
+            assert "results" in result or "error" in result
+
+    composite_query = "lowest expansion_ratio among top 3 by viscosity where adhesion > 90"
+    composite_result = answer_query(df, composite_query)
+
+    print("\nComposite query result:")
+    print(composite_result)
+
+    assert composite_result["experiment_id"] == "EXP-004", composite_result
+    assert composite_result["_aggregation"]   == "min"
+    assert composite_result["_target_column"] == "expansion_ratio"
+    assert composite_result["_ranking_column"] == "viscosity"
+    assert composite_result["_ranking_size"]   == 3
+    assert composite_result["_pipeline"]       == "filter -> ranking -> aggregation"
+
+    print("\n✅ ALL TESTS PASS")
