@@ -1240,20 +1240,14 @@ app.post("/ask-matriya", requireAuth, askMatriyaMulter, async (req, res) => {
     return res.status(400).json({ error: "message is required" });
   }
 
-  // ── DEBUG LOGGING (David request) ──────────────────────────────────────
+  // ── DEBUG LOGGING ───────────────────────────────────────────────────────
   console.log("QUERY RECEIVED:", message);
+  console.log("ROUTING:", isScienceQueryQuestion(message) ? "LAB" : "RAG");
 
   // ── SCIENCE QUERY ROUTING for /ask-matriya ──────────────────────────────
-  // Queries referencing lab columns with numeric operators (e.g. "APP:PER > 2.5")
-  // must NOT go to document RAG — they run against the structured lab dataset.
-  // This check fires BEFORE the filenames-required guard so science queries
-  // don't need a document to be selected in the UI.
   if (isScienceQueryQuestion(message)) {
-    console.log("ROUTING TO LAB");
     logger.info(`[ask-matriya] science routing → Python pipeline. query="${message}"`);
     return await handleScienceQueryFlow(req, res, { query: message });
-  } else {
-    console.log("ROUTING TO RAG");
   }
   // ────────────────────────────────────────────────────────────────────────
 
@@ -1600,52 +1594,44 @@ function isScienceQueryQuestion(query) {
   const q = String(query || '').toLowerCase().trim();
   if (!q) return false;
 
-  // Known lab column names (used for equality-filter detection)
-  const LAB_COLUMNS = [
-    'experiment_id', 'app:per', 'app_per', 'app', 'per', 'mel', 'nanoclay', 'ifr',
-    'expansion_ratio', 'expansion ratio', 'char_quality', 'char quality', 'char',
-    'adhesion', 'viscosity', 'hrr', 'formulation', 'status', 'project_id',
-    'validated', 'results', 'source',
+  // ── TIER 1: Direct lab entity keywords — immediate LAB route ────────────
+  // Any query that mentions these words is a structured lab data query,
+  // not a document RAG query. No operator required.
+  const LAB_KEYWORDS = [
+    'experiment', 'experiments',
+    'formulation', 'formulations',
+    'expansion_ratio', 'expansion ratio',
+    'experiment_id', 'app:per', 'app_per',
+    'ifr', 'nanoclay', 'adhesion', 'viscosity',
+    'char_quality', 'char quality',
+    'lab data', 'lab run', 'lab runs',
   ];
+  for (const kw of LAB_KEYWORDS) {
+    if (q.includes(kw)) return true;
+  }
 
-  const hasLabColumn = LAB_COLUMNS.some(col => {
-    const escaped = col.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp(`\\b${escaped}\\b`).test(q);
-  });
+  // ── TIER 2: "show all", "list all", "get all" without a specific entity ─
+  if (/\b(show|list|get|fetch|find|count)\s+all\b/.test(q)) return true;
 
-  // Numeric operators
+  // ── TIER 3: Known lab columns + numeric operator ─────────────────────────
+  const LAB_COLUMNS = [
+    'app', 'per', 'mel', 'hrr', 'status', 'results', 'validated', 'source',
+  ];
+  const hasLabColumn = LAB_COLUMNS.some(col =>
+    new RegExp(`\\b${col}\\b`).test(q)
+  );
   const hasNumericOperator = (
     /[><]=?/.test(q) ||
     /\bbetween\s+[\d.]+\s+and\s+[\d.]+/.test(q) ||
-    /\b(greater|less|above|below|at least|at most|more than|higher|lower)\b/.test(q) ||
-    /\b(equals?|equal to|is)\s+[\d.]+/.test(q)
+    /\b(greater|less|above|below|at least|at most|more than|higher|lower)\b/.test(q)
   );
+  if (hasNumericOperator && hasLabColumn) return true;
 
-  // Equality / string filter on a known column:
-  // e.g. experiment_id = "abc", status = "PASS", experiment_id == "xyz"
-  const hasEqualityFilter = (
-    /=/.test(q) && hasLabColumn
-  );
+  // ── TIER 4: Equality filter on any lab column ────────────────────────────
+  // e.g. "status = PASS", "experiment_id = abc"
+  if (/=/.test(q) && hasLabColumn) return true;
 
-  // Standalone lab entity keywords — any mention routes to LAB
-  // "show all experiments", "list experiments", "all runs", "formulation data", etc.
-  const hasStandaloneLabEntity = (
-    /\bexperiments?\b/.test(q) ||
-    /\bformulations?\b/.test(q) ||
-    /\b(lab\s+)?runs?\b/.test(q) ||
-    /\blab\s+data\b/.test(q)
-  );
-
-  // "show raw experiments", "show experiments where ...", "list experiments", etc.
-  const hasExperimentFrame = (
-    /\b(show|list|find|filter|get|count|fetch|select)\b.*\b(experiment|formulation|row|result|run)\b/.test(q) ||
-    /\b(experiment|formulation|run)\b.*\b(where|with|having|above|below|greater|less)\b/.test(q) ||
-    /\bhow many\b.*\b(experiment|formulation|run)\b/.test(q) ||
-    /\b(experiment|formulation|run)\b.*[><]=?/.test(q) ||
-    /\bshow (all|raw)\b/.test(q)
-  );
-
-  return (hasNumericOperator && hasLabColumn) || hasEqualityFilter || hasExperimentFrame || hasStandaloneLabEntity;
+  return false;
 }
 
 /**
