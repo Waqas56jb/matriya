@@ -261,6 +261,11 @@ CREATE TABLE IF NOT EXISTS public.lab_experiments (
   is_production_formula boolean     NOT NULL DEFAULT false,
   source_file_reference text,
   research_session_id   text,
+  -- Structured result metrics stored as typed columns for reliable numeric queries
+  expansion_ratio       numeric,
+  char_quality          text,
+  adhesion              numeric,
+  viscosity             numeric,
   created_at            timestamptz NOT NULL DEFAULT now(),
   updated_at            timestamptz NOT NULL DEFAULT now(),
   UNIQUE (project_id, experiment_id)
@@ -501,6 +506,11 @@ ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS is_production_formul
 ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS source_file_reference text;
 ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS research_session_id   text;
 ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS updated_at            timestamptz NOT NULL DEFAULT now();
+-- Structured result metrics — stored as direct numeric columns for reliable querying
+ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS expansion_ratio       numeric;
+ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS char_quality          text;
+ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS adhesion              numeric;
+ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS viscosity             numeric;
 
 -- runs
 ALTER TABLE public.runs ADD COLUMN IF NOT EXISTS features_core     text[] NOT NULL DEFAULT '{}';

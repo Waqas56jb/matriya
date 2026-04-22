@@ -2457,6 +2457,9 @@ app.post('/api/projects/:projectId/import/sharepoint-file', async (req, res) => 
     for (const exp of experiments) {
       const eid = exp.experiment_id != null ? String(exp.experiment_id) : null;
       if (!eid) { errCount++; details.errors.push({ item: exp, reason: 'experiment_id required' }); continue; }
+      const _toNum = v => { const n = parseFloat(v); return Number.isNaN(n) ? null : n; };
+      // Extract expansion_ratio from exp.results object or exp direct field
+      const _expResults = (() => { try { return typeof exp.results === 'string' ? JSON.parse(exp.results) : (exp.results || {}); } catch (_) { return {}; } })();
       const payload = {
         project_id: projectId,
         experiment_id: eid,
@@ -2470,7 +2473,12 @@ app.post('/api/projects/:projectId/import/sharepoint-file', async (req, res) => 
         is_production_formula: !!exp.is_production_formula,
         source_file_reference,
         research_session_id: exp.research_session_id || null,
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
+        // Structured result metrics — direct columns for reliable querying
+        expansion_ratio: _toNum(exp.expansion_ratio ?? _expResults.expansion_ratio ?? _expResults.expansion),
+        char_quality:    exp.char_quality || _expResults.char_quality || null,
+        adhesion:        _toNum(exp.adhesion  ?? _expResults.adhesion),
+        viscosity:       _toNum(exp.viscosity ?? _expResults.viscosity),
       };
       const { data: existing } = await supabase.from('lab_experiments').select('id, experiment_version').eq('project_id', projectId).eq('experiment_id', eid).single();
       if (existing) {
@@ -2728,6 +2736,7 @@ app.post('/api/projects/:projectId/experiments/from-formulation', async (req, re
         ? String(body.source_file_reference).trim().slice(0, 500)
         : 'from-formulation';
 
+    const toNum = v => { const n = parseFloat(v); return Number.isNaN(n) ? null : n; };
     const payload = {
       project_id: projectId,
       experiment_id,
@@ -2740,7 +2749,12 @@ app.post('/api/projects/:projectId/experiments/from-formulation', async (req, re
       experiment_outcome: 'partial',
       is_production_formula: false,
       source_file_reference: sourceRef,
-      updated_at: new Date().toISOString()
+      updated_at: new Date().toISOString(),
+      // Structured result metrics — stored as typed columns
+      expansion_ratio: toNum(body.expansion_ratio),
+      char_quality:    body.char_quality != null ? String(body.char_quality) : null,
+      adhesion:        toNum(body.adhesion),
+      viscosity:       toNum(body.viscosity),
     };
 
     const { data: existing, error: exErr } = await supabase
@@ -3415,7 +3429,7 @@ app.get('/api/matriya/lab-experiments-export', async (req, res) => {
       // Fallback: read from lab_experiments table (legacy data source)
       const { data: legacyRows, error: legacyErr } = await supabase
         .from('lab_experiments')
-        .select('experiment_id, project_id, percentages, results, experiment_outcome, formula, updated_at')
+        .select('experiment_id, project_id, percentages, results, experiment_outcome, formula, updated_at, expansion_ratio, char_quality, adhesion, viscosity')
         .order('updated_at', { ascending: false })
         .limit(2000);
 
@@ -3432,6 +3446,7 @@ app.get('/api/matriya/lab-experiments-export', async (req, res) => {
           }
           return null;
         };
+        // Also parse results TEXT as JSON for backwards compat
         let resultsObj = {};
         if (row.results) { try { resultsObj = typeof row.results === 'string' ? JSON.parse(row.results) : row.results; } catch (_) {} }
         const getResult = (...keys) => {
@@ -3447,14 +3462,17 @@ app.get('/api/matriya/lab-experiments-export', async (req, res) => {
         const appPer = getPct('app:per', 'app_per') ?? (APP != null && PER != null && PER > 0 ? parseFloat((APP / PER).toFixed(4)) : null);
         const outcomeMap = { success: 'PASS', failure: 'FAIL', partial: 'PARTIAL', production_formula: 'PASS' };
         const status = outcomeMap[String(row.experiment_outcome || '').toLowerCase()] || row.experiment_outcome || null;
+        // Priority: direct numeric column > parsed results JSON > percentages JSONB
+        const expansion_ratio = row.expansion_ratio != null ? parseFloat(row.expansion_ratio)
+          : getResult('expansion_ratio', 'expansion') ?? getPct('expansion_ratio');
+        const adhesion   = row.adhesion   != null ? parseFloat(row.adhesion)   : getResult('adhesion')   ?? getPct('adhesion');
+        const viscosity  = row.viscosity  != null ? parseFloat(row.viscosity)  : getResult('viscosity')  ?? getPct('viscosity');
+        const char_quality = row.char_quality || getResult('char_quality', 'char');
         return {
           experiment_id: row.experiment_id, project_id: row.project_id,
           APP, PER, MEL, 'APP:PER': appPer, IFR,
           Nanoclay: getPct('nanoclay', 'cloisite'),
-          expansion_ratio: getResult('expansion_ratio', 'expansion') ?? getPct('expansion_ratio'),
-          char_quality: getResult('char_quality', 'char'),
-          adhesion: getResult('adhesion') ?? getPct('adhesion'),
-          viscosity: getResult('viscosity') ?? getPct('viscosity'),
+          expansion_ratio, char_quality, adhesion, viscosity,
           status, formula: row.formula || null,
         };
       });
