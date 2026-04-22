@@ -64,7 +64,14 @@ def cmd_query(args):
         })
         return
 
-    if not adapted["schema_valid"]:
+    # Relaxed schema check: allow query if ANY known lab column is present.
+    # A strict APP:PER + IFR requirement would block queries like "expansion_ratio > 0"
+    # when the data came from manually-entered experiments without APP/PER fields.
+    KNOWN_LAB_COLUMNS = {"APP:PER", "IFR", "APP", "PER", "MEL", "Nanoclay",
+                         "expansion_ratio", "char_quality", "adhesion", "viscosity", "status"}
+    available = set(adapted["canonical_columns"])
+    has_any_lab_column = bool(available & KNOWN_LAB_COLUMNS)
+    if not has_any_lab_column:
         _out({
             "decision":    "INSUFFICIENT_DATA",
             "quality":     "SCHEMA_ERROR",
@@ -78,6 +85,29 @@ def cmd_query(args):
         return
 
     df = adapted["df"]
+
+    # ── DIAGNOSTIC LOGS — printed to stderr so they appear in Railway logs ──
+    import sys as _sys
+    print("COLUMNS:", list(df.columns), file=_sys.stderr, flush=True)
+    print("DTYPES:", df.dtypes.to_dict(), file=_sys.stderr, flush=True)
+    if "expansion_ratio" in df.columns:
+        print("expansion_ratio sample:", df["expansion_ratio"].head(5).tolist(), file=_sys.stderr, flush=True)
+        print("expansion_ratio dtype:", str(df["expansion_ratio"].dtype), file=_sys.stderr, flush=True)
+        print("expansion_ratio non-null count:", df["expansion_ratio"].notna().sum(), file=_sys.stderr, flush=True)
+    else:
+        print("expansion_ratio: COLUMN NOT FOUND", file=_sys.stderr, flush=True)
+    print("ROWS IN DF:", len(df), file=_sys.stderr, flush=True)
+    if len(df) > 0:
+        print("SAMPLE ROW:", df.iloc[0].to_dict(), file=_sys.stderr, flush=True)
+    # ────────────────────────────────────────────────────────────────────────
+
+    # Explicit numeric coercion for all known numeric columns (safety net for string CSV values)
+    import pandas as _pd
+    for _col in ["APP", "PER", "MEL", "Nanoclay", "APP:PER", "IFR",
+                 "expansion_ratio", "adhesion", "viscosity", "HRR_reduction_pct"]:
+        if _col in df.columns:
+            df[_col] = _pd.to_numeric(df[_col], errors="coerce")
+
     from table_query_engine_final import (
         parse_natural_language_query, execute_query
     )
@@ -105,7 +135,40 @@ def cmd_query(args):
         })
         return
 
+    # "show all experiments" / "list experiments" — no filter means return all rows
+    SHOW_ALL_TRIGGERS = [
+        "show all", "list all", "get all", "fetch all", "find all",
+        "show experiments", "list experiments", "all experiments",
+        "show formulations", "list formulations",
+        "show runs", "list runs", "show all runs",
+    ]
+    is_show_all = any(t in query.lower() for t in SHOW_ALL_TRIGGERS)
+
     if parsed["parse_confidence"] == "LOW" and not parsed["filters"] and not parsed["count_intent"]:
+        if is_show_all:
+            # Return all rows — no filter applied
+            import pandas as _pd2
+            rows = df.head(100).to_dict(orient="records")
+            _out({
+                "decision":    "MATCHES_FOUND",
+                "quality":     "COMPLETE",
+                "warnings":    [],
+                "evidence":    {
+                    "matched_rows":     len(df),
+                    "total_rows":       len(df),
+                    "match_rate":       1.0,
+                    "filters_applied":  [],
+                    "result_preview":   rows,
+                    "columns_returned": list(df.columns),
+                    "note":             "No filter — returning all rows",
+                },
+                "data_source":  "DB_COMPUTED",
+                "confidence":   "HIGH",
+                "tag":          "computed",
+                "query":        query,
+                "computed_columns": adapted.get("computed_columns", []),
+            })
+            return
         _out({
             "decision":   "INSUFFICIENT_DATA",
             "quality":    "PARSE_FAILED",
