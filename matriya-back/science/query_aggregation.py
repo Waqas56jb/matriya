@@ -282,7 +282,7 @@ def _apply_compound_aggregation(df: pd.DataFrame, agg_intent: dict, query: str) 
 
     summary = (
         f"{('Lowest' if final_op == 'min' else 'Highest')} {final_col} among the top {len(working_df)} "
-        f"by {rank_col}: {final_val} (experiment {best_id})."
+        f"by {rank_col}: {final_val} ({best_id})."
     )
     print(f"[aggregation] compound result: {summary}", file=sys.stderr, flush=True)
 
