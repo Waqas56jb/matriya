@@ -1030,6 +1030,22 @@ function runSciencePython(args) {
     proc.stdout.on('data', d => { stdout += d.toString(); });
     proc.stderr.on('data', d => { stderr += d.toString(); });
     proc.on('close', code => {
+      // Surface Python diagnostic lines into Node logs so API verification can prove
+      // the exact aggregation path used (e.g. [aggregation] COMPOUND, [DEBUG] AGG INPUT ROWS).
+      if (stderr && stderr.trim()) {
+        const debugLines = stderr
+          .split(/\r?\n/)
+          .map(s => s.trim())
+          .filter(Boolean)
+          .filter(s =>
+            s.includes('[aggregation]') ||
+            s.includes('[DEBUG]') ||
+            s.includes('[execute_query]')
+          );
+        for (const line of debugLines) {
+          console.log(line);
+        }
+      }
       // Extract last JSON object from stdout (module print() lines precede JSON line)
       const jsonLine = stdout.split('\n').reverse().find(l => l.trim().startsWith('{'));
       if (!jsonLine) {

@@ -20,6 +20,22 @@ function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isLikelyScienceQuery(text) {
+    const q = normalizeAskQuestion(text);
+    if (!q) return false;
+    return (
+        q.includes('expansion_ratio') ||
+        q.includes('expansion ratio') ||
+        q.includes('adhesion') ||
+        q.includes('viscosity') ||
+        q.includes('app:per') ||
+        q.includes('ifr') ||
+        q.includes('experiment') ||
+        /[><]=?/.test(q) ||
+        /\b(top|bottom|highest|lowest|minimum|maximum|among)\b/.test(q)
+    );
+}
+
 /** @type {{ key: string, reply: string, sources: unknown[] } | null} */
 let askMatriyaDocumentsCache = null;
 
@@ -31,7 +47,8 @@ let askMatriyaDocumentsCache = null;
  */
 export async function runAskMatriyaDocumentsQuery(message, filenames) {
     const repeatKey = `${normalizeAskQuestion(message)}\n---\n${makeAskScopeKey(filenames)}`;
-    if (askMatriyaDocumentsCache && askMatriyaDocumentsCache.key === repeatKey) {
+    const cacheEligible = !isLikelyScienceQuery(message);
+    if (cacheEligible && askMatriyaDocumentsCache && askMatriyaDocumentsCache.key === repeatKey) {
         await sleep(3000);
         return {
             reply: askMatriyaDocumentsCache.reply,
@@ -41,7 +58,11 @@ export async function runAskMatriyaDocumentsQuery(message, filenames) {
     const res = await api.post('/ask-matriya', { message, filenames }, { timeout: 90000 });
     const reply = res.data?.reply ?? '';
     const sources = Array.isArray(res.data?.sources) ? res.data.sources : [];
-    askMatriyaDocumentsCache = { key: repeatKey, reply, sources };
+    if (cacheEligible) {
+        askMatriyaDocumentsCache = { key: repeatKey, reply, sources };
+    } else {
+        askMatriyaDocumentsCache = null; // avoid stale science results for repeated validation queries
+    }
     return { reply, sources };
 }
 
