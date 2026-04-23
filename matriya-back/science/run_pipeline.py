@@ -197,8 +197,44 @@ def cmd_query(args):
     # ═══════════════════════════════════════════════════════════════════════
     agg_intent = detect_aggregation_intent(query, list(df.columns))
     if agg_intent["has_agg"]:
-        # Parse to check for any accompanying filter conditions
-        _parsed_for_agg = parse_natural_language_query(query, list(df.columns))
+        if agg_intent.get("column_resolution_failed"):
+            print("[aggregation] compound pattern matched but final/rank columns could not be mapped to CSV",
+                  file=_sys.stderr, flush=True)
+            _out({
+                "decision":    "INSUFFICIENT_DATA",
+                "quality":     "COMPOUND_COLUMN_MAP",
+                "warnings":    [
+                    "Compound query (among top N by …) needs both rank and result columns in the lab export. "
+                    "Expected names like adhesion, expansion_ratio in the dataset.",
+                ],
+                "evidence":    {
+                    "original_query":   query,
+                    "available_columns": list(df.columns),
+                },
+                "data_source": "NONE",
+                "confidence":  "LOW",
+            })
+            return
+        # Parse filter segment: compound NL queries break the generic parser if passed whole.
+        if agg_intent.get("compound"):
+            _where = _re.search(r"\bwhere\s+(.+)$", query, _re.IGNORECASE | _re.DOTALL)
+            if _where:
+                _filter_text = _where.group(1).strip()
+                _parsed_for_agg = parse_natural_language_query(_filter_text, list(df.columns))
+                print(f"[aggregation] compound — filter text only: {_filter_text!r}",
+                      file=_sys.stderr, flush=True)
+            else:
+                _parsed_for_agg = {
+                    "filters":          [],
+                    "ambiguous_items":  [],
+                    "parse_confidence":  "HIGH",
+                    "count_intent":     False,
+                    "unparsed":         None,
+                }
+                print("[aggregation] compound — no WHERE clause; using full df",
+                      file=_sys.stderr, flush=True)
+        else:
+            _parsed_for_agg = parse_natural_language_query(query, list(df.columns))
         _parsed_for_agg["_original_query"] = query
 
         if _parsed_for_agg.get("filters"):
@@ -208,7 +244,24 @@ def cmd_query(args):
             _filter_result = execute_query(df, _parsed_for_agg)
             _agg_df = _filter_result.get("result_df")
             if _agg_df is None or len(_agg_df) == 0:
-                # Filter produced nothing — aggregate on full dataset as fallback
+                if agg_intent.get("compound"):
+                    print("[aggregation] compound — filter returned 0 rows; NO_MATCHES (no full-df fallback)",
+                          file=_sys.stderr, flush=True)
+                    _out({
+                        "decision":    "NO_MATCHES",
+                        "quality":     "FILTER_EMPTY",
+                        "warnings":    ["No rows after WHERE filter; cannot rank or aggregate."],
+                        "evidence":    {
+                            "matched_rows": 0,
+                            "total_rows":  len(df),
+                            "query":      query,
+                        },
+                        "data_source": "DB_COMPUTED",
+                        "confidence":  "HIGH",
+                        "tag":         "computed",
+                    })
+                    return
+                # Non-compound: legacy fallback
                 print("[aggregation] filter returned 0 rows — aggregating on full df",
                       file=_sys.stderr, flush=True)
                 _agg_df = df

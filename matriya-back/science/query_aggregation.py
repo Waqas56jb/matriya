@@ -48,6 +48,47 @@ _NUMERIC_AGG_COLS = {
     "APP:PER", "IFR", "APP", "PER", "MEL", "Nanoclay", "HRR_reduction_pct",
 }
 
+# "lowest X among top 3 by Y" / "highest X among top 3 by Y" [where ...]
+_COMPOUND_MIN = re.compile(
+    r'(?:^|\s)(?P<dir>lowest|minimum|min|smallest)\s+'
+    r'(?P<final>[\w: ]+?)\s+among\s+top\s+(?P<n>\d+)\s+by\s+'
+    r'(?P<rank>[\w: ]+?)(?=\s+where\b|\s*$)',
+    re.IGNORECASE,
+)
+_COMPOUND_MAX = re.compile(
+    r'(?:^|\s)(?P<dir>highest|maximum|max|largest|best)\s+'
+    r'(?P<final>[\w: ]+?)\s+among\s+top\s+(?P<n>\d+)\s+by\s+'
+    r'(?P<rank>[\w: ]+?)(?=\s+where\b|\s*$)',
+    re.IGNORECASE,
+)
+
+
+def _resolve_col_token(token: str, available_columns: list) -> str | None:
+    """Map a free-text token to a column name present in the DataFrame."""
+    if not token:
+        return None
+    raw = token.strip()
+    nkey = re.sub(r"\s+", " ", raw.lower().strip())
+    n_under = nkey.replace(" ", "_")
+    for alias, canonical in _ALIASES.items():
+        if alias == nkey or alias.replace(" ", "_") == n_under:
+            if canonical in available_columns:
+                return canonical
+    for c in available_columns:
+        if c.lower() == n_under or c.lower() == nkey.replace(" ", ""):
+            return c
+    if n_under in [x.lower() for x in available_columns]:
+        for c in available_columns:
+            if c.lower() == n_under:
+                return c
+    # Normalise APP:PER style colons / underscores — "app per" vs "app:per"
+    t_norm = n_under.replace(":", "_").replace(" ", "_")
+    for c in available_columns:
+        c_norm = c.replace(":", "_").lower()
+        if c_norm == t_norm or c.lower().replace(":", "") == n_under.replace(":", ""):
+            return c
+    return None
+
 
 def detect_aggregation_intent(query: str, available_columns: list) -> dict:
     """
@@ -67,7 +108,53 @@ def detect_aggregation_intent(query: str, available_columns: list) -> dict:
     q = query.lower().strip()
     available_lower = {c.lower(): c for c in available_columns}
 
-    # ── Determine aggregation direction and N ───────────────────────────────
+    # ── COMPOUND (checked FIRST — must beat simple "top 3" + "lowest" heuristics) ─
+    # Example: "lowest expansion_ratio among top 3 by adhesion where viscosity > 1400"
+    #   → filter → rank top 3 by adhesion → MIN(expansion_ratio) on those 3 rows
+    m_min = _COMPOUND_MIN.search(" " + q)
+    m_max = _COMPOUND_MAX.search(" " + q) if not m_min else None
+    m_c = m_min or m_max
+    if m_c:
+        final_tok = m_c.group("final").strip()
+        rank_tok = m_c.group("rank").strip()
+        n = int(m_c.group("n"))
+        final_is_max = m_max is not None
+        final_col = _resolve_col_token(final_tok, available_columns)
+        rank_col = _resolve_col_token(rank_tok, available_columns)
+        if final_col and rank_col and n > 0:
+            print(
+                f"[aggregation] COMPOUND final={'max' if final_is_max else 'min'}({final_col}) "
+                f"among top {n} by {rank_col} query={query!r}",
+                file=sys.stderr, flush=True,
+            )
+            return {
+                "has_agg":         True,
+                "compound":      True,
+                "final_agg":       "max" if final_is_max else "min",
+                "final_column":  final_col,
+                "rank_n":        n,
+                "rank_column":   rank_col,
+                "original_query": query,
+            }
+        # Pattern is clearly compound — never fall through to "top N by wrong column"
+        print(
+            f"[aggregation] COMPOUND query but column map failed: "
+            f"final_tok={final_tok!r}→{final_col!r} rank_tok={rank_tok!r}→{rank_col!r} "
+            f"available={list(available_columns)}",
+            file=sys.stderr, flush=True,
+        )
+        return {
+            "has_agg":                 True,
+            "compound":                True,
+            "column_resolution_failed": True,
+            "original_query":          query,
+        }
+
+    # ── Determine aggregation direction and N (simple / single-metric) ───────
+    # If the user said "among top … by …", do not treat as simple top_n (avoids misfire).
+    if re.search(r"among\s+top\s+\d+\s+by\s", q):
+        return {"has_agg": False}
+
     agg_type: str | None = None
     n = 1
 
@@ -126,6 +213,107 @@ def detect_aggregation_intent(query: str, available_columns: list) -> dict:
     }
 
 
+def _apply_compound_aggregation(df: pd.DataFrame, agg_intent: dict, query: str) -> dict:
+    """
+    filter (already in *df*) → nlargest(N, rank_col) → min/max on final_col over that subset.
+
+    Preserves the full ranked subset in *working_df* before the final reduce; never
+    collapses to one row until after MIN/MAX is computed over all N rows.
+    """
+    rank_col = agg_intent["rank_column"]
+    final_col = agg_intent["final_column"]
+    n = int(agg_intent["rank_n"])
+    final_op = agg_intent["final_agg"]  # "min" | "max"
+
+    for c in (rank_col, final_col):
+        if c not in df.columns:
+            return {
+                "decision":    "NO_MATCHES",
+                "quality":     "COLUMN_NOT_FOUND",
+                "warnings":    [f"Column '{c}' not found in dataset."],
+                "evidence":    {"matched_rows": 0, "result_preview": [], "columns_returned": []},
+                "data_source": "DB_COMPUTED",
+                "confidence":  "LOW",
+                "tag":         "computed",
+            }
+
+    work = df.copy()
+    work[rank_col] = pd.to_numeric(work[rank_col], errors="coerce")
+    work[final_col] = pd.to_numeric(work[final_col], errors="coerce")
+    work = work[work[rank_col].notna() & work[final_col].notna()]
+
+    if len(work) == 0:
+        return {
+            "decision":    "NO_MATCHES",
+            "quality":     "NO_NUMERIC_DATA",
+            "warnings":    [f"No numeric rows for {rank_col} and {final_col}."],
+            "evidence":    {"matched_rows": 0, "result_preview": [], "columns_returned": []},
+            "data_source": "DB_COMPUTED",
+            "confidence":  "LOW",
+            "tag":         "computed",
+        }
+
+    # Top N by rank column (largest = "top")
+    ranked = work.nlargest(n, rank_col)
+    working_df = ranked.copy()
+    print(f"[DEBUG] AGG INPUT ROWS = {len(working_df)}", file=sys.stderr, flush=True)
+
+    if len(working_df) == 0:
+        return {
+            "decision":    "NO_MATCHES",
+            "quality":     "EMPTY_RANK",
+            "warnings":    ["Ranked subset is empty after top-N."],
+            "evidence":    {"matched_rows": 0, "result_preview": [], "columns_returned": []},
+            "data_source": "DB_COMPUTED",
+            "confidence":  "LOW",
+            "tag":         "computed",
+        }
+
+    if final_op == "min":
+        final_val = float(working_df[final_col].min())
+        fin_idx = working_df[final_col].idxmin()
+    else:
+        final_val = float(working_df[final_col].max())
+        fin_idx = working_df[final_col].idxmax()
+
+    # Single answer row: the experiment that attains the final min/max (not "row 0" of rank)
+    answer_df = working_df.loc[[fin_idx]]
+    best_id = answer_df.iloc[0].get("experiment_id", "?")
+
+    summary = (
+        f"{('Lowest' if final_op == 'min' else 'Highest')} {final_col} among the top {len(working_df)} "
+        f"by {rank_col}: {final_val} (experiment {best_id})."
+    )
+    print(f"[aggregation] compound result: {summary}", file=sys.stderr, flush=True)
+
+    return {
+        "decision":    "AGGREGATION_RESULT",
+        "quality":     "COMPLETE",
+        "warnings":    [],
+        "evidence":    {
+            "matched_rows":         1,
+            "total_rows":            len(df),
+            "agg_pipeline":          "compound_rank_then_final",
+            "agg_type":              "compound",
+            "final_agg_op":          final_op,
+            "final_column":         final_col,
+            "rank_column":          rank_col,
+            "rank_n":                n,
+            "ranked_row_count":      len(working_df),
+            "best_value":            final_val,
+            "best_experiment_id":    best_id,
+            "summary":               summary,
+            "result_preview":        answer_df.to_dict(orient="records"),
+            "ranked_subset_preview": working_df.to_dict(orient="records"),
+            "columns_returned":      list(answer_df.columns),
+            "filters_applied":       [],
+        },
+        "data_source": "DB_COMPUTED",
+        "confidence":  "HIGH",
+        "tag":         "computed",
+    }
+
+
 def apply_aggregation(df: pd.DataFrame, agg_intent: dict) -> dict:
     """
     Apply aggregation to *df* according to *agg_intent*.
@@ -138,10 +326,15 @@ def apply_aggregation(df: pd.DataFrame, agg_intent: dict) -> dict:
     Returns a MATRIYA-compatible result dict (decision = "AGGREGATION_RESULT").
     Never raises — all errors are returned as structured dicts.
     """
+    query = agg_intent.get("original_query", "")
+
+    # ═══ COMPOUND: rank (top N by column A) then min/max (column B) on that subset ═══
+    if agg_intent.get("compound"):
+        return _apply_compound_aggregation(df, agg_intent, query)
+
     col      = agg_intent["column"]
     agg_type = agg_intent["type"]
     n        = agg_intent.get("n", 1)
-    query    = agg_intent.get("original_query", "")
 
     if col not in df.columns:
         return {

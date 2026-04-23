@@ -1949,7 +1949,11 @@ async function handleScienceQueryFlow(req, res, { query }) {
       };
 
       const rowLines = aggRows.map((r, i) => `  [${i + 1}] ${fmtAggRow(r)}`).join('\n');
-      const aggAnswer = summary + (rowLines ? `\n\nDetails:\n${rowLines}` : '');
+      // Compound rank→aggregate: show aggregation summary + one result row (not "Top N by X" listing)
+      const isCompoundAgg = ev.agg_type === 'compound' || ev.agg_pipeline === 'compound_rank_then_final';
+      const aggAnswer = isCompoundAgg
+        ? (summary + (rowLines ? `\n\n${rowLines}` : ''))
+        : (summary + (rowLines ? `\n\nDetails:\n${rowLines}` : ''));
 
       // Log each aggregation result row
       aggRows.forEach((r, i) => console.log(`[science] agg_row[${i}]:`, JSON.stringify(r)));
