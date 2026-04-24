@@ -113,6 +113,24 @@ COUNT_TRIGGERS = [
     "quantity of", "sum of rows", "rows count"
 ]
 
+# Aggregation keywords → direction
+# Rule: column that appears IMMEDIATELY AFTER these words is the aggregation target.
+# Columns in filter conditions (where/and/>/<) are NEVER the target.
+AGGREGATION_KEYWORDS = {
+    "highest":  "max",
+    "maximum":  "max",
+    "max":      "max",
+    "best":     "max",
+    "largest":  "max",
+    "greatest": "max",
+    "lowest":   "min",
+    "minimum":  "min",
+    "min":      "min",
+    "smallest": "min",
+    "worst":    "min",
+    "least":    "min",
+}
+
 
 # ─────────────────────────────────────────────────────────
 # STEP 1: LOAD EXCEL WITH SCHEMA VALIDATION
@@ -324,6 +342,90 @@ def _parse_single_condition(part: str, df_columns: list) -> dict:
     return None
 
 
+def detect_aggregation(query: str, df_columns: list) -> Optional[dict]:
+    """
+    Find an aggregation keyword and extract the column name IMMEDIATELY after it.
+
+    Rule:
+      - Aggregation target = column that appears right after the keyword
+        (highest/lowest/maximum/minimum/best/worst …)
+      - Columns that appear in filter conditions (where X > N, and Y < N)
+        are NEVER the aggregation target.
+
+    Returns:
+      {"keyword": str, "column": str, "direction": "max"|"min"}  — on success
+      None — if no aggregation keyword is found or column cannot be resolved
+
+    Example:
+      "highest viscosity where expansion_ratio > 15"
+       → {"keyword": "highest", "column": "viscosity", "direction": "max"}
+      NOT expansion_ratio (that is a filter condition after 'where').
+    """
+    q_lower = query.lower()
+
+    # Sort longest-first so "maximum" is matched before "max"
+    for keyword in sorted(AGGREGATION_KEYWORDS, key=len, reverse=True):
+        # Match: <keyword> <column-phrase> <stop: where | with | , | end-of-string>
+        pattern = rf"\b{re.escape(keyword)}\s+(.+?)(?=\s+where\b|\s+with\b|\s*,|\s*$)"
+        m = re.search(pattern, q_lower, re.IGNORECASE)
+        if not m:
+            continue
+
+        candidate_phrase = m.group(1).strip()
+
+        # Try to resolve the candidate phrase as a column (alias or exact/partial match)
+        resolved = resolve_column(candidate_phrase, df_columns)
+        if "column" in resolved:
+            return {
+                "keyword":   keyword,
+                "column":    resolved["column"],
+                "direction": AGGREGATION_KEYWORDS[keyword],
+            }
+
+        # Candidate phrase may have extra words (e.g. "viscosity value").
+        # Try each token in the phrase from left to right.
+        for token in candidate_phrase.split():
+            resolved = resolve_column(token, df_columns)
+            if "column" in resolved:
+                return {
+                    "keyword":   keyword,
+                    "column":    resolved["column"],
+                    "direction": AGGREGATION_KEYWORDS[keyword],
+                }
+
+    return None
+
+
+def detect_ranking(query: str, df_columns: list) -> Optional[dict]:
+    """
+    Detect a ranking intent: "top N by <column>".
+
+    Rule:
+      - Pattern: top <integer> by <column>
+      - The ranking column is extracted from "by <column>", NOT from filter conditions.
+
+    Returns:
+      {"n": int, "column": str, "direction": "max"}   — always descending (top = highest)
+      None — if no ranking pattern found
+
+    Examples:
+      "top 3 by expansion_ratio"  → {"n": 3, "column": "expansion_ratio", "direction": "max"}
+      "top 5 by IFR"              → {"n": 5, "column": "IFR",             "direction": "max"}
+    """
+    m = re.search(r"\btop\s+(\d+)\s+by\s+(\S+)", query, re.IGNORECASE)
+    if not m:
+        return None
+
+    n = int(m.group(1))
+    col_text = m.group(2).strip().rstrip(".,?!")
+
+    resolved = resolve_column(col_text, df_columns)
+    if "column" in resolved:
+        return {"n": n, "column": resolved["column"], "direction": "max"}
+
+    return None
+
+
 def parse_natural_language_query(query: str, df_columns: list) -> dict:
     """
     Parse NL query into structured filter list.
@@ -338,17 +440,37 @@ def parse_natural_language_query(query: str, df_columns: list) -> dict:
     }
     """
     count_intent = detect_count_intent(query)
+
+    # ── Aggregation + ranking detection (on original query, before any stripping) ──
+    # Must run first so phrases are removed before filter parsing.
+    aggregation = detect_aggregation(query, df_columns)
+    ranking     = detect_ranking(query, df_columns)
+
     query_lower = query.lower().strip()
 
+    # If aggregation was found, remove "keyword <column>" from the query so the
+    # aggregation target never falls into the filter layer.
+    if aggregation:
+        agg_phrase = rf"\b{re.escape(aggregation['keyword'])}\s+\S+"
+        query_lower = re.sub(agg_phrase, "", query_lower, flags=re.IGNORECASE).strip()
+
+    # If ranking was found, remove "top N by <column>" from the query so the
+    # ranking column never falls into the filter layer.
+    if ranking:
+        rank_phrase = rf"\btop\s+{ranking['n']}\s+by\s+\S+"
+        query_lower = re.sub(rank_phrase, "", query_lower, flags=re.IGNORECASE).strip()
+
     # Strip leading context words — repeat until stable.
-    # "experiments" / "experiment" added to handle framing like "show all experiments with X > Y".
     _strip_words = sorted([
         "find", "show me", "show", "get", "filter", "select",
         "list", "formulations", "formulation", "rows", "row", "where", "with",
         "have", "that", "that have", "which have", "having", "all", "only",
         "how many", "count of", "number of",
-        "experiments", "experiment", "data", "results", "result",
+        "which experiment has", "which experiment", "which",
+        "experiment has", "experiment", "experiments",
+        "data", "results", "result",
         "give me", "return", "display", "output",
+        "among",
     ], key=len, reverse=True)
     for _ in range(6):  # max passes
         prev = query_lower
@@ -400,6 +522,8 @@ def parse_natural_language_query(query: str, df_columns: list) -> dict:
         "parse_confidence": confidence,
         "count_intent":     count_intent,
         "unparsed":         " | ".join(unparsed) if unparsed else None,
+        "aggregation":      aggregation,   # {"keyword", "column", "direction"} or None
+        "ranking":          ranking,       # {"n", "column", "direction"} or None
     }
 
 
@@ -441,8 +565,10 @@ def execute_query(df: pd.DataFrame, parsed: dict) -> dict:
 
     Returns full MATRIYA-compatible response with audit trace.
     """
-    filters = parsed.get("filters", [])
+    filters      = parsed.get("filters", [])
     count_intent = parsed.get("count_intent", False)
+    aggregation  = parsed.get("aggregation")   # {"keyword", "column", "direction"} | None
+    ranking      = parsed.get("ranking")       # {"n", "column", "direction"} | None
 
     if not filters:
         return {
@@ -593,14 +719,54 @@ def execute_query(df: pd.DataFrame, parsed: dict) -> dict:
     result_df = df[mask]
     print(f"[execute_query] id(df)_after={id(df)} | id(result_df)={id(result_df)} | result_df_len={len(result_df)}",
           file=_sqsys.stderr, flush=True)
-    # Log actual expansion_ratio values in result_df to confirm filter correctness
     if 'expansion_ratio' in result_df.columns:
         er_vals = result_df['expansion_ratio'].tolist()
         print(f"[execute_query] result_df expansion_ratio values: {er_vals}", file=_sqsys.stderr, flush=True)
-    # Log first result row completely
     if len(result_df) > 0:
         print(f"[execute_query] result_df[0]: {result_df.iloc[0].to_dict()}", file=_sqsys.stderr, flush=True)
-    # ────────────────────────────────────────────────────────────────────────────
+
+    # ── Step 2: Ranking — top N by <rank_column> ─────────────────────────────
+    # "top 3 by expansion_ratio" → sort desc, keep top 3 rows.
+    rank_meta = None
+    if ranking and len(result_df) > 0:
+        rank_col = ranking["column"]
+        rank_n   = ranking["n"]
+        if rank_col in result_df.columns:
+            numeric_rank = pd.to_numeric(result_df[rank_col], errors="coerce")
+            sorted_df    = result_df.assign(_rank_col=numeric_rank).sort_values(
+                "_rank_col", ascending=False
+            ).drop(columns=["_rank_col"])
+            result_df = sorted_df.head(rank_n)
+            rank_meta = {
+                "rank_column":    rank_col,
+                "rank_n":         rank_n,
+                "rows_after_rank": len(result_df),
+            }
+            print(f"[execute_query] after ranking top {rank_n} by {rank_col}: {len(result_df)} rows",
+                  file=_sqsys.stderr, flush=True)
+
+    # ── Step 3: Aggregation — idxmax / idxmin on aggregation column ──────────
+    # Applied AFTER ranking so it operates on the ranked subset, not the full
+    # filter result.  This is the correct two-step pipeline:
+    #   filter → rank → aggregate
+    agg_meta = None
+    if aggregation and len(result_df) > 0:
+        agg_col = aggregation["column"]
+        agg_dir = aggregation["direction"]
+        if agg_col in result_df.columns:
+            numeric_col = pd.to_numeric(result_df[agg_col], errors="coerce")
+            if not numeric_col.isna().all():
+                best_idx = numeric_col.idxmax() if agg_dir == "max" else numeric_col.idxmin()
+                best_row = result_df.loc[[best_idx]]
+                agg_meta = {
+                    "aggregation_column":    agg_col,
+                    "aggregation_direction": agg_dir,
+                    "aggregation_keyword":   aggregation["keyword"],
+                    "aggregation_value":     float(numeric_col.loc[best_idx]),
+                    "applied_on":            "ranked_result" if rank_meta else "filtered_result",
+                    "best_row":              best_row.to_dict(orient="records"),
+                }
+                result_df = best_row   # narrow to the single best row
 
     matched = len(result_df)
     total = len(df)
@@ -618,6 +784,10 @@ def execute_query(df: pd.DataFrame, parsed: dict) -> dict:
         "filters_applied": applied,
         "filters_failed":  failed,
     }
+    if rank_meta:
+        evidence["ranking"] = rank_meta
+    if agg_meta:
+        evidence["aggregation"] = agg_meta
 
     if count_intent:
         evidence["count_result"] = matched
@@ -785,6 +955,46 @@ def run_tests():
             print(f"   Got:      {f[0] if f else 'NO FILTERS'}")
 
     print(f"\n{'✅' if failed == 0 else '❌'} Unit tests: {passed}/{len(unit_tests)} passed")
+
+    # ── Aggregation target column detection test ──
+    agg_columns = ["APP:PER", "IFR", "APP", "PER", "MEL",
+                   "Nanoclay", "expansion_ratio", "viscosity", "char_quality", "adhesion", "status"]
+    agg_tests = [
+        (
+            "Which experiment has the highest viscosity where expansion_ratio > 15 and adhesion > 85?",
+            "viscosity", "max"
+        ),
+        (
+            "find the lowest IFR where APP:PER > 3",
+            "IFR", "min"
+        ),
+        (
+            "highest APP:PER where expansion ratio > 10",
+            "APP:PER", "max"
+        ),
+    ]
+    agg_passed = agg_failed = 0
+    for q, exp_col, exp_dir in agg_tests:
+        r = parse_natural_language_query(q, agg_columns)
+        agg = r.get("aggregation")
+        # Verify: aggregation target is correct AND that column is NOT in filters
+        filter_cols = [f["column"] for f in r.get("filters", [])]
+        ok = (
+            agg is not None
+            and agg["column"] == exp_col
+            and agg["direction"] == exp_dir
+            and exp_col not in filter_cols
+        )
+        if ok:
+            agg_passed += 1
+        else:
+            agg_failed += 1
+            print(f"\n❌ AGG FAIL: '{q}'")
+            print(f"   Expected agg: col={exp_col}, dir={exp_dir}")
+            print(f"   Got agg:      {agg}")
+            print(f"   Filter cols:  {filter_cols}")
+    print(f"{'✅' if agg_failed == 0 else '❌'} Aggregation target detection: "
+          f"{agg_passed}/{len(agg_tests)} passed")
 
     # ── COUNT intent test ──
     count_tests = [

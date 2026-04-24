@@ -244,6 +244,7 @@ def cmd_query(args):
             _filter_result = execute_query(df, _parsed_for_agg)
             _agg_df = _filter_result.get("result_df")
             if _agg_df is None or len(_agg_df) == 0:
+<<<<<<< HEAD
                 if agg_intent.get("compound"):
                     print("[aggregation] compound — filter returned 0 rows; NO_MATCHES (no full-df fallback)",
                           file=_sys.stderr, flush=True)
@@ -263,8 +264,26 @@ def cmd_query(args):
                     return
                 # Non-compound: legacy fallback
                 print("[aggregation] filter returned 0 rows — aggregating on full df",
+=======
+                # No silent fallback — surface the empty result explicitly
+                print("[aggregation] filter returned 0 rows — returning NO_MATCHES",
+>>>>>>> a72049c0ddfed5d0f6585ce8f1ebb96670aa02d3
                       file=_sys.stderr, flush=True)
-                _agg_df = df
+                _out({
+                    "error":       "INVALID_QUERY",
+                    "reason":      "Filter conditions matched 0 rows — cannot aggregate on an empty result set.",
+                    "decision":    "NO_MATCHES",
+                    "quality":     "EMPTY_FILTER_RESULT",
+                    "warnings":    ["No rows matched the filter conditions. Aggregation was not applied."],
+                    "evidence":    {
+                        "original_query":  query,
+                        "filters_applied": _parsed_for_agg.get("filters", []),
+                        "matched_rows":    0,
+                    },
+                    "data_source": "DB_COMPUTED",
+                    "confidence":  "LOW",
+                })
+                return
         else:
             # Pure aggregation query — use the full dataset directly
             print("[aggregation] no filters — aggregating on full df",
