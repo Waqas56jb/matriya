@@ -57,24 +57,48 @@ export async function runAskMatriyaDocumentsQuery(message, filenames) {
     }
     const res = await api.post('/ask-matriya', { message, filenames }, { timeout: 90000 });
     const body = res.data || {};
-    // Contract: { mode, data: { rows, columns }, meta: { presentation: { text }, sources }, repro }.
-    // Legacy: top-level reply; transitional: data.answer.
-    const reply =
-        (typeof body.meta?.presentation?.text === 'string' && body.meta.presentation.text)
-            ? body.meta.presentation.text
-            : (typeof body.data?.answer === 'string' && body.data.answer
-                ? body.data.answer
-                : (typeof body.reply === 'string' ? body.reply : ''));
-    const sources = Array.isArray(body.meta?.sources)
+    const mode = body.mode;
+    const dataRows = body.data?.rows;
+    const rowCount = typeof body.meta?.row_count === 'number' ? body.meta.row_count : (Array.isArray(dataRows) ? dataRows.length : 0);
+    const filtersApplied = Boolean(body.meta?.filters_applied);
+    // Clean contract: prefer meta.message; then mandatory empty-filter line for filter+0+filters.
+    let reply = '';
+    if (typeof body.meta?.message === 'string' && body.meta.message.trim()) {
+        reply = body.meta.message.trim();
+    } else if (mode === 'filter' && rowCount === 0 && filtersApplied) {
+        reply = 'No matching results found for the given criteria.';
+    } else if (typeof body.meta?.presentation?.text === 'string' && body.meta.presentation.text) {
+        reply = body.meta.presentation.text;
+    } else if (typeof body.data?.answer === 'string' && body.data.answer) {
+        reply = body.data.answer;
+    } else if (typeof body.reply === 'string') {
+        reply = body.reply;
+    }
+    let sources = Array.isArray(body.meta?.sources)
         ? body.meta.sources
         : (Array.isArray(body.data?.sources)
             ? body.data.sources
             : (Array.isArray(body.sources) ? body.sources : []));
+    if (
+        (!sources || sources.length === 0) &&
+        Array.isArray(dataRows) &&
+        dataRows.length > 0 &&
+        (mode === 'filter' || mode === 'ranking' || mode === 'aggregation')
+    ) {
+        sources = dataRows.map((r) => ({
+            content: Object.entries(r || {})
+                .filter(([k, v]) => v != null && k !== 'project_id')
+                .map(([k, v]) => `${k}: ${v}`)
+                .join(' | '),
+            metadata: { source: 'lab_data', experiment_id: r?.experiment_id ?? null },
+            score: 1
+        }));
+    }
     if (process.env.NODE_ENV === 'development') {
         console.log('[ask-matriya] parsed', {
             mode: body.mode,
-            dataRows: body.data?.rows?.length,
-            metaQuery: body.meta?.query
+            row_count: body.meta?.row_count,
+            filters_applied: body.meta?.filters_applied
         });
     }
     if (cacheEligible) {

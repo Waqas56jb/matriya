@@ -1334,7 +1334,7 @@ app.post("/ask-matriya", requireAuth, askMatriyaMulter, async (req, res) => {
           historyForMaterials
         );
         return res.json(
-          buildAskMatriyaLlmContract({ message, text: replyMat, askMode: 'materials_library' })
+          buildAskMatriyaLlmContract({ message, text: replyMat })
         );
       } catch (e) {
         logger.error(
@@ -1483,12 +1483,7 @@ ${fileContext}`
     // ─────────────────────────────────────────────────────────────────────────
 
     return res.json(
-      buildAskMatriyaLlmContract({
-        message,
-        text: reply,
-        askMode: 'documents',
-        guardAction: guardResult.action
-      })
+      buildAskMatriyaLlmContract({ message, text: reply })
     );
   } catch (e) {
     const upstream = e.response?.status;
@@ -1858,27 +1853,42 @@ function _scienceApiMode(decision, evidence) {
   return 'error';
 }
 
+/** Canonical column list when the engine returns no row to infer keys from. */
+const DEFAULT_LAB_TABLE_COLUMNS = [
+  'experiment_id', 'project_id', 'APP', 'PER', 'MEL', 'APP:PER', 'IFR',
+  'Nanoclay', 'expansion_ratio', 'char_quality', 'adhesion', 'viscosity', 'status', 'formula'
+];
+
+function reproSelectedValueNumeric(v) {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 /**
- * Single contract for science responses: { mode, data, meta, repro }.
- * - Tabular truth: data.rows + data.columns only (no result_preview, no top-level rows).
- * - Human-readable copy: meta.presentation.text (separate from data).
- * - Citations: meta.sources.
+ * Science API: { mode, data, meta, repro } — clean contract (David).
+ * - data: only { rows, columns } (single source of truth for tabular data).
+ * - meta: row_count, query, filters_applied, optional ranking, optional message (short; no row dump).
+ * - repro: always includes pipeline, filters, ranking, aggregation, subset_ids, selected_id, selected_value.
  */
 function buildScienceContract({
   mode,
   query,
-  decision,
-  answerText,
   evidence,
   warnings = [],
-  sources = [],
-  extraMeta = {}
+  message = null
 }) {
   const ev = evidence || {};
   const rows = Array.isArray(ev.result_preview) ? ev.result_preview : [];
   const n = rows.length;
   const fa = ev.filters_applied;
   const filtersApplied = Array.isArray(fa) && fa.length > 0;
+
+  let cols = Array.isArray(ev.columns_returned) && ev.columns_returned.length
+    ? ev.columns_returned
+    : (n > 0 && rows[0] && typeof rows[0] === 'object' ? Object.keys(rows[0]) : DEFAULT_LAB_TABLE_COLUMNS);
+  if (!Array.isArray(cols) || cols.length === 0) cols = DEFAULT_LAB_TABLE_COLUMNS;
 
   let metaRanking = null;
   if (mode === 'ranking' && ev.agg_column) {
@@ -1933,13 +1943,11 @@ function buildScienceContract({
   let reproAggregation = null;
   if (ev.agg_type === 'compound' || ev.agg_pipeline === 'compound_rank_then_final') {
     reproAggregation = {
-      type:     'compound',
-      column:   ev.final_column != null ? ev.final_column : null,
-      n:        ev.rank_n != null ? ev.rank_n : null,
-      pipeline: ev.agg_pipeline || 'compound_rank_then_final',
+      type:   'compound',
+      column: ev.final_column != null ? ev.final_column : null,
+      n:      ev.rank_n != null ? ev.rank_n : null,
       rank_column: ev.rank_column != null ? ev.rank_column : null,
-      final_op:    ev.final_agg_op != null ? ev.final_agg_op : null,
-      ranked_row_count: ev.ranked_row_count != null ? ev.ranked_row_count : null
+      final_op:    ev.final_agg_op != null ? ev.final_agg_op : null
     };
   } else if (mode === 'aggregation' && (ev.agg_type || ev.agg_column)) {
     reproAggregation = {
@@ -1955,6 +1963,8 @@ function buildScienceContract({
     reproAggregation = null;
   }
 
+  const bestVal = reproSelectedValueNumeric(ev.best_value);
+
   const repro = {
     pipeline,
     filters:        Array.isArray(fa) ? fa : [],
@@ -1962,46 +1972,33 @@ function buildScienceContract({
     aggregation:    reproAggregation,
     subset_ids:     subsetIds,
     selected_id:    ev.best_experiment_id != null ? String(ev.best_experiment_id) : (subsetIds[0] || null),
-    selected_value: ev.best_value !== undefined && ev.best_value !== null ? ev.best_value : null
+    selected_value: bestVal
   };
 
   const meta = {
-    rows:              n,
+    row_count:         n,
     query:             String(query || ''),
-    presentation:      { text: String(answerText || '') },
-    sources:             Array.isArray(sources) ? sources : [],
-    filters_applied:   filtersApplied,
-    ranking:           metaRanking,
-    decision:          decision || null,
-    warnings:          warnings.length ? warnings : [],
-    routing:           'SCIENCE_QUERY_ENGINE',
-    total_rows:        ev.total_rows != null ? ev.total_rows : null,
-    matched_rows_hint: ev.matched_rows != null ? ev.matched_rows : n,
-    ...extraMeta
+    filters_applied:   filtersApplied
   };
+  if (metaRanking) meta.ranking = metaRanking;
+  if (warnings && warnings.length) meta.warnings = warnings;
+  if (message != null && String(message).trim()) meta.message = String(message).trim();
 
-  const data = {
-    rows,
-    columns: Array.isArray(ev.columns_returned) ? ev.columns_returned : []
-  };
+  const data = { rows, columns: cols };
 
   return { mode, data, meta, repro };
 }
 
-/** LLM (documents / materials) /ask-matriya — same envelope, no tabular rows. */
-function buildAskMatriyaLlmContract({ message, text, askMode, guardAction = null }) {
+/** LLM (documents / materials) — same top-level shape; text in meta.message only. */
+function buildAskMatriyaLlmContract({ message, text }) {
   return {
     mode: 'llm',
     data: { rows: [], columns: [] },
     meta: {
-      query:         String(message || ''),
-      rows:          0,
-      presentation:  { text: String(text || '') },
-      sources:       [],
-      ask_mode:      askMode || 'documents',
-      guard_action:  guardAction,
-      filters_applied: false,
-      ranking:         null
+      row_count:         0,
+      query:             String(message || ''),
+      message:           String(text || ''),
+      filters_applied:   false
     },
     repro: {
       pipeline:        ['llm'],
@@ -2055,18 +2052,16 @@ async function handleScienceQueryFlow(req, res, { query }) {
 
     // ── LAYER 1 RESULT: Invalid query (caught by validate_query before filter) ──
     if (result.decision === 'INVALID_QUERY') {
-      const invalidAnswer = `Invalid query: ${result.evidence?.reason || result.warnings?.[0] || 'malformed expression'}.\n` +
-        `Please check the syntax. Example: "expansion_ratio > 15" or "highest expansion_ratio".`;
+      const invalidMsg = `Invalid query: ${result.evidence?.reason || result.warnings?.[0] || 'malformed expression'}. ` +
+        `Example: "expansion_ratio > 15" or "highest expansion_ratio".`;
       const ev = { ...(result.evidence || {}), result_preview: [], columns_returned: (result.evidence && result.evidence.columns_returned) || [] };
+      if (!ev.columns_returned || ev.columns_returned.length === 0) ev.columns_returned = DEFAULT_LAB_TABLE_COLUMNS;
       return res.status(200).json(buildScienceContract({
         mode:     'error',
         query,
-        decision: 'INVALID_QUERY',
-        answerText: invalidAnswer,
-        evidence:   ev,
-        warnings:   result.warnings || [],
-        sources:    [],
-        extraMeta:  { data_source: 'NONE' }
+        message:  invalidMsg,
+        evidence: ev,
+        warnings: result.warnings || []
       }));
     }
 
@@ -2090,65 +2085,60 @@ async function handleScienceQueryFlow(req, res, { query }) {
       };
 
       const rowLines = aggRows.map((r, i) => `  [${i + 1}] ${fmtAggRow(r)}`).join('\n');
-      // Compound rank→aggregate: show aggregation summary + one result row (not "Top N by X" listing)
-      const isCompoundAgg = ev.agg_type === 'compound' || ev.agg_pipeline === 'compound_rank_then_final';
-      const aggAnswer = isCompoundAgg
-        ? (summary + (rowLines ? `\n\n${rowLines}` : ''))
-        : (summary + (rowLines ? `\n\nDetails:\n${rowLines}` : ''));
-
       // Log each aggregation result row
       aggRows.forEach((r, i) => console.log(`[science] agg_row[${i}]:`, JSON.stringify(r)));
+      if (rowLines) console.log(`[science] agg detail lines:\n${rowLines}`);
 
       const aggApiMode = _scienceApiMode('AGGREGATION_RESULT', ev);
-      const aggSources = aggRows.map((r) => ({
-        content:  fmtAggRow(r),
-        metadata: { source: 'lab_data', routing: 'science_query_engine', experiment_id: r.experiment_id || null },
-        score:    1.0
-      }));
+      const aggMsg = String(summary || '').trim() ||
+        (aggRows.length ? `Aggregated result (${aggRows.length} row(s)).` : 'Aggregated result.');
       return res.status(200).json(buildScienceContract({
-        mode:       aggApiMode,
+        mode:     aggApiMode,
         query,
-        decision:   'AGGREGATION_RESULT',
-        answerText: aggAnswer,
-        evidence:   ev,
-        warnings:   result.warnings || [],
-        sources:    aggSources,
-        extraMeta:  { data_source: 'DB_COMPUTED', tag: 'computed', lab_bridge_invoked: true, document_rag_invoked: false }
+        message:  aggMsg,
+        evidence: ev,
+        warnings: result.warnings || []
       }));
     }
 
     if (result.decision === 'AMBIGUOUS_QUERY') {
-      const ambigAnswer = `Ambiguous query — please specify the exact column name. ${
+      const ambigMsg = `Ambiguous query — please specify the exact column name. ${
         (result.evidence?.ambiguous_items || []).map(a => `"${a.term}" could mean: ${a.candidates?.join(', ')}`).join('; ')
       }`;
       const ev = { ...(result.evidence || {}), result_preview: [], columns_returned: [] };
+      if (!ev.columns_returned || ev.columns_returned.length === 0) ev.columns_returned = DEFAULT_LAB_TABLE_COLUMNS;
       return res.status(200).json(buildScienceContract({
-        mode:       'error',
+        mode:     'error',
         query,
-        decision:   'AMBIGUOUS_QUERY',
-        answerText: ambigAnswer,
-        evidence:   ev,
-        warnings:   result.warnings || [],
-        sources:    [],
-        extraMeta:    { data_source: 'NONE' }
+        message:  ambigMsg,
+        evidence: ev,
+        warnings: result.warnings || []
       }));
     }
 
     if (result.decision === 'INSUFFICIENT_DATA' || result.decision === 'NO_MATCHES') {
-      const noMatchAnswer = result.decision === 'NO_MATCHES'
-        ? `No experiments matched the query: "${query}". The dataset exists but no rows satisfy this filter.`
-        : `Insufficient data to execute the query. ${result.evidence?.error || ''}`;
-      const ev = result.evidence || {};
+      const ev = { ...(result.evidence || {}) };
+      if (!ev.columns_returned || ev.columns_returned.length === 0) {
+        ev.columns_returned = DEFAULT_LAB_TABLE_COLUMNS;
+      }
+      if (!Array.isArray(ev.result_preview)) ev.result_preview = [];
+      const fa = ev.filters_applied || [];
+      const hasFilters = Array.isArray(fa) && fa.length > 0;
       const noMatchMode = _scienceApiMode(result.decision, ev);
+      let msg;
+      if (result.decision === 'NO_MATCHES' && hasFilters) {
+        msg = 'No matching results found for the given criteria.';
+      } else if (result.decision === 'NO_MATCHES') {
+        msg = 'No experiments matched the query. Try filter syntax such as: expansion_ratio > 25 and adhesion < 80.';
+      } else {
+        msg = `Insufficient data: ${result.evidence?.error || 'cannot execute query'}`;
+      }
       return res.status(200).json(buildScienceContract({
-        mode:       noMatchMode,
+        mode:     noMatchMode,
         query,
-        decision:   result.decision,
-        answerText: noMatchAnswer,
-        evidence:   ev,
-        warnings:   result.warnings || [],
-        sources:    [],
-        extraMeta:    { data_source: 'DB_COMPUTED', tag: 'computed' }
+        message:  msg,
+        evidence: ev,
+        warnings: result.warnings || []
       }));
     }
 
@@ -2166,91 +2156,42 @@ async function handleScienceQueryFlow(req, res, { query }) {
     const countResult = evidence.count_result;
     const isCount = countResult !== undefined && countResult !== null;
 
-    // Build human-readable answer — shown as the assistant message in the chat.
-    // COLUMN ORDER: result_preview rows come from Python in CSV column order:
-    // experiment_id(0) project_id(1) APP(2) PER(3) MEL(4) APP:PER(5) IFR(6) Nanoclay(7) expansion_ratio(8) ...
-    // We must NOT slice by position — always show ALL non-null fields.
-    // Priority columns appear first so key results are never cut off.
-    const PRIORITY_COLS = ['experiment_id', 'expansion_ratio', 'adhesion', 'viscosity',
-                           'char_quality', 'APP:PER', 'IFR', 'APP', 'PER', 'MEL', 'Nanoclay', 'status'];
-    const formatRow = (r) => {
-      const prioritized = PRIORITY_COLS
-        .filter(k => r[k] != null)
-        .map(k => {
-          const v = r[k];
-          return `${k}: ${typeof v === 'number' ? Number(v.toFixed(4)).toString() : v}`;
-        });
-      const rest = Object.entries(r)
-        .filter(([k, v]) => v != null && !PRIORITY_COLS.includes(k) && k !== 'project_id')
-        .map(([k, v]) => `${k}: ${typeof v === 'number' ? Number(v.toFixed(4)).toString() : v}`);
-      return [...prioritized, ...rest].join(' | ');
-    };
-
-    let answer;
-    if (isCount) {
-      answer = `Found ${countResult} experiment${countResult !== 1 ? 's' : ''} matching: "${query}".`;
-    } else if (rows.length === 0) {
-      answer = `No rows matched the query "${query}". Filters were applied but returned 0 results.\n` +
-        `Warnings: ${(result.warnings || []).join('; ') || 'none'}\n` +
-        `Filters applied: ${(evidence.filters_applied || []).map(f => `${f.column} ${f.operator} ${f.value}`).join(', ') || 'none'}\n` +
-        `Filters failed: ${(evidence.filters_failed || []).map(f => `${f.column}: ${f.error}`).join(', ') || 'none'}`;
-    } else {
-      const colList = (evidence.columns_returned || [])
-        .filter(c => c !== 'project_id')
-        .join(', ');
-      const rowLines = rows.slice(0, 10).map((r, i) =>
-        `  [${i + 1}] ${formatRow(r)}`
-      ).join('\n');
-      answer = `Found ${matchedRows} experiment${matchedRows !== 1 ? 's' : ''}` +
-        `${evidence.total_rows ? ` out of ${evidence.total_rows} total` : ''} matching: "${query}"\n` +
-        `Columns: ${colList || 'see rows below'}\n\n` +
-        `Results:\n${rowLines}`;
-    }
-
-    // Post-response guard on science answer (blocks ML metrics in experiment outputs)
-    const sciGuard = guardResponseText(answer);
-    if (sciGuard.contaminated) {
-      logger.warn(`[document-guard] Science answer contamination: ${sciGuard.violations.slice(0, 3).join(', ')} — sanitizing`);
-      answer = sciGuard.sanitized_text;
-    }
-
     const filterApiMode = _scienceApiMode(result.decision, evidence);
-    const filterSources = rows.map((r) => ({
-      content:  formatRow(r),
-      metadata: { source: 'lab_data', routing: 'science_query_engine', experiment_id: r.experiment_id || null },
-      score:    1.0
-    }));
+    if (!evidence.columns_returned || evidence.columns_returned.length === 0) {
+      evidence.columns_returned = rows.length && rows[0] ? Object.keys(rows[0]) : DEFAULT_LAB_TABLE_COLUMNS;
+    }
+    let filterMsg;
+    if (isCount) {
+      filterMsg = `Found ${countResult} experiment(s) matching the query.`;
+    } else if (rows.length === 0) {
+      filterMsg = (evidence.filters_applied && evidence.filters_applied.length)
+        ? 'No matching results found for the given criteria.'
+        : `No rows matched. ${(result.warnings || []).join('; ') || ''}`.trim();
+    } else {
+      filterMsg = `Found ${matchedRows} matching row(s).`;
+    }
+    const sciGuard = guardResponseText(filterMsg);
+    if (sciGuard.contaminated) {
+      logger.warn(`[document-guard] Science short message: ${sciGuard.violations.slice(0, 3).join(', ')} — sanitizing`);
+      filterMsg = sciGuard.sanitized_text;
+    }
     return res.status(200).json(buildScienceContract({
-      mode:       filterApiMode,
+      mode:     filterApiMode,
       query,
-      decision:   result.decision,
-      answerText: answer,
+      message:  filterMsg,
       evidence,
-      warnings:   result.warnings || [],
-      sources:    filterSources,
-      extraMeta:  {
-        data_source:       'DB_COMPUTED',
-        tag:               'computed',
-        parse_confidence:  result.parse_confidence,
-        count_result:      isCount ? countResult : null,
-        audit_trace:       result.audit_trace || {},
-        guard_action:      sciGuard.action,
-        lab_bridge_invoked: true,
-        document_rag_invoked: false
-      }
+      warnings: result.warnings || []
     }));
   } catch (e) {
     logger.error(`[science-routing] error: ${e.message}`);
+    const evErr = { result_preview: [], columns_returned: DEFAULT_LAB_TABLE_COLUMNS };
     return res.status(500).json(
       buildScienceContract({
-        mode:       'error',
-        query:      String((typeof query !== 'undefined' && query) || ''),
-        decision:   'ERROR',
-        answerText: 'Server error while running the science query.',
-        evidence:   { result_preview: [], columns_returned: [] },
-        warnings:   [String(e.message || e)],
-        sources:    [],
-        extraMeta:  { routing: 'SCIENCE_QUERY_ENGINE', http_status: 500, error: String(e.message || e) }
+        mode:     'error',
+        query:    String(query != null ? query : ''),
+        message:  `Server error: ${String(e.message || e)}`,
+        evidence: evErr,
+        warnings: [String(e.message || e)]
       })
     );
   }
