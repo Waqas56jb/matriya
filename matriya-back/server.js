@@ -1280,13 +1280,23 @@ app.post("/ask-matriya", requireAuth, askMatriyaMulter, async (req, res) => {
     return res.status(400).json({ error: "message is required" });
   }
 
-  // ── DEBUG LOGGING ───────────────────────────────────────────────────────
-  console.log("QUERY RECEIVED:", message);
-  console.log("ROUTING:", isScienceQueryQuestion(message) ? "LAB" : "RAG");
+  // ── DEBUG LOGGING — full request lifecycle (David) ───────────────────────
+  const _sci = isScienceQueryQuestion(message);
+  const _expN = extractExpEntities(message).length;
+  console.log(
+    JSON.stringify({
+      tag: 'ask-matriya-lifecycle',
+      step: 'incoming',
+      query: message,
+      routing: _sci ? 'LAB' : 'RAG',
+      exp_entity_count: _expN,
+      intent_hint: _expN >= 2 ? 'comparison' : _sci ? 'lab_other' : 'documents_llm'
+    })
+  );
 
   // ── SCIENCE QUERY ROUTING for /ask-matriya ──────────────────────────────
-  if (isScienceQueryQuestion(message)) {
-    logger.info(`[ask-matriya] science routing → Python pipeline. query="${message}"`);
+  if (_sci) {
+    logger.info(`[ask-matriya] science routing → lab pipeline. query="${message}"`);
     return await handleScienceQueryFlow(req, res, { query: message });
   }
   // ────────────────────────────────────────────────────────────────────────
@@ -2194,7 +2204,12 @@ function buildScienceContract({
   };
   if (metaRanking) meta.ranking = metaRanking;
   if (warnings && warnings.length) meta.warnings = warnings;
-  if (message != null && String(message).trim()) meta.message = String(message).trim();
+  if (message != null && String(message).trim()) {
+    meta.message = String(message).trim();
+  } else if (n > 0) {
+    // Never ship tabular data without a visible line — empty meta.message breaks Ask UI clients.
+    meta.message = `Lab result: ${n} row(s) (mode: ${mode}).`;
+  }
 
   const data = { rows, columns: cols };
 

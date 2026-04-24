@@ -20,10 +20,17 @@ function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function isLikelyScienceQuery(text) {
+/**
+ * Heuristic: lab table / EXP-* / filter-style questions (aligned with matriya-back lab routing).
+ * Used to allow Ask without uploaded documents when the question is clearly lab-scoped.
+ */
+export function isLikelyScienceQuery(text) {
     const q = normalizeAskQuestion(text);
     if (!q) return false;
+    const expTokens = q.match(/\bexp-\d{2,}\b/g) || [];
+    const twoOrMoreExp = expTokens.length >= 2;
     return (
+        twoOrMoreExp ||
         q.includes('expansion_ratio') ||
         q.includes('expansion ratio') ||
         q.includes('adhesion') ||
@@ -31,6 +38,8 @@ function isLikelyScienceQuery(text) {
         q.includes('app:per') ||
         q.includes('ifr') ||
         q.includes('experiment') ||
+        q.includes('formulation') ||
+        q.includes('experiment_id') ||
         /[><]=?/.test(q) ||
         /\b(top|bottom|highest|lowest|minimum|maximum|among)\b/.test(q) ||
         /\bexp-\d{2,}\b/.test(q) ||
@@ -63,6 +72,7 @@ export async function runAskMatriyaDocumentsQuery(message, filenames) {
     const dataRows = body.data?.rows;
     const rowCount = typeof body.meta?.row_count === 'number' ? body.meta.row_count : (Array.isArray(dataRows) ? dataRows.length : 0);
     const filtersApplied = Boolean(body.meta?.filters_applied);
+    const triggerId = typeof body.trigger_id === 'string' ? body.trigger_id : '';
     // Clean contract: prefer meta.message; then mandatory empty-filter line for filter+0+filters.
     let reply = '';
     if (typeof body.meta?.message === 'string' && body.meta.message.trim()) {
@@ -76,6 +86,21 @@ export async function runAskMatriyaDocumentsQuery(message, filenames) {
     } else if (typeof body.reply === 'string') {
         reply = body.reply;
     }
+    const labModes = new Set(['comparison', 'partial', 'filter', 'ranking', 'aggregation', 'no_match', 'error']);
+    if (!reply && labModes.has(mode)) {
+        if (rowCount > 0) {
+            reply = `Lab response (${rowCount} row(s), mode: ${mode}).${triggerId ? ` Reference: ${triggerId}` : ''}`;
+        } else if (mode === 'no_match') {
+            reply = typeof body.meta?.message === 'string' && body.meta.message.trim()
+                ? body.meta.message.trim()
+                : 'No matching lab rows for this query.';
+        } else if (mode === 'error') {
+            const w = Array.isArray(body.meta?.warnings) && body.meta.warnings.length
+                ? body.meta.warnings.join(' ')
+                : '';
+            reply = w || `Lab query error.${triggerId ? ` Reference: ${triggerId}` : ''}`;
+        }
+    }
     let sources = Array.isArray(body.meta?.sources)
         ? body.meta.sources
         : (Array.isArray(body.data?.sources)
@@ -85,7 +110,7 @@ export async function runAskMatriyaDocumentsQuery(message, filenames) {
         (!sources || sources.length === 0) &&
         Array.isArray(dataRows) &&
         dataRows.length > 0 &&
-        (mode === 'filter' || mode === 'ranking' || mode === 'aggregation' || mode === 'comparison' || mode === 'partial')
+        (mode === 'filter' || mode === 'ranking' || mode === 'aggregation' || mode === 'comparison' || mode === 'partial' || mode === 'no_match')
     ) {
         sources = dataRows.map((r) => ({
             content: Object.entries(r || {})
@@ -96,6 +121,13 @@ export async function runAskMatriyaDocumentsQuery(message, filenames) {
             score: 1
         }));
     }
+    console.log('[ask-matriya] response', {
+        mode,
+        rowCount,
+        replyLength: reply.length,
+        trigger_id: triggerId || undefined,
+        hasMetaMessage: Boolean(body.meta?.message)
+    });
     if (process.env.NODE_ENV === 'development') {
         console.log('[ask-matriya] full response JSON', body);
     }

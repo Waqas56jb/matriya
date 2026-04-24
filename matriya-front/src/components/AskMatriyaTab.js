@@ -2,7 +2,11 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { HiPaperAirplane, HiChevronDown, HiChevronUp } from 'react-icons/hi2';
 import api from '../utils/api';
 import { formatApiErrorForUser } from '../utils/openAiFriendlyError';
-import { runAskMatriyaDocumentsQuery, sortFilenamesForAskMatriyaDisplay } from '../utils/askMatriyaDocumentsClient';
+import {
+    runAskMatriyaDocumentsQuery,
+    sortFilenamesForAskMatriyaDisplay,
+    isLikelyScienceQuery
+} from '../utils/askMatriyaDocumentsClient';
 import { formatBoldSegments } from '../utils/formatBold';
 import AnswerEvidenceSection from './AnswerEvidenceSection';
 import GptSyncStatusRow from './GptSyncStatusRow';
@@ -106,20 +110,23 @@ function AskMatriyaTab({ onGptSyncingChange, gptRagSyncing = false }) {
         setSending(true);
 
         try {
-            if (selectedFilenames.length === 0) {
+            const labOnly = isLikelyScienceQuery(text);
+            if (!labOnly && selectedFilenames.length === 0) {
                 setError('Select at least one document before sending a question.');
                 setMessages((prev) => prev.slice(0, -1));
                 return;
             }
-            if (filesInApiOrder.length === 0) {
+            if (!labOnly && filesInApiOrder.length === 0) {
                 setError('No documents in the system — upload documents in the Documents tab first.');
                 setMessages((prev) => prev.slice(0, -1));
                 return;
             }
-            const filenames = isAllFilesSelected
-                ? [...filesInApiOrder]
-                : filesInApiOrder.filter((f) => selectedFilenames.includes(f));
-            if (filenames.length === 0) {
+            const filenames = labOnly
+                ? []
+                : isAllFilesSelected
+                    ? [...filesInApiOrder]
+                    : filesInApiOrder.filter((f) => selectedFilenames.includes(f));
+            if (!labOnly && filenames.length === 0) {
                 setError('No documents available for query. Refresh the list and try again.');
                 setMessages((prev) => prev.slice(0, -1));
                 return;
@@ -262,7 +269,8 @@ function AskMatriyaTab({ onGptSyncingChange, gptRagSyncing = false }) {
                 <div className="ask-matriya-messages">
                     {messages.length === 0 && (
                         <div className="ask-matriya-placeholder">
-                            Select one or more documents above, then type your question below.
+                            For document questions: select files above. Lab questions (e.g. EXP-006 vs EXP-009,
+                            expansion_ratio filters) work without documents when the lab API is configured.
                         </div>
                     )}
                     <div className="ask-matriya-messages-list">
@@ -316,7 +324,8 @@ function AskMatriyaTab({ onGptSyncingChange, gptRagSyncing = false }) {
                         rows={2}
                         disabled={
                             sending || gptRagSyncing ||
-                            filesInApiOrder.length === 0 || selectedFilenames.length === 0
+                            (!isLikelyScienceQuery(input) &&
+                                (filesInApiOrder.length === 0 || selectedFilenames.length === 0))
                         }
                     />
                     <button
@@ -325,7 +334,8 @@ function AskMatriyaTab({ onGptSyncingChange, gptRagSyncing = false }) {
                         onClick={handleSend}
                         disabled={
                             sending || gptRagSyncing || !input.trim() ||
-                            selectedFilenames.length === 0 || filesInApiOrder.length === 0
+                            (!isLikelyScienceQuery(input) &&
+                                (selectedFilenames.length === 0 || filesInApiOrder.length === 0))
                         }
                         aria-label="Send message"
                     >
