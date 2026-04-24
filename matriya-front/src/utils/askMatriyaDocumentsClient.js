@@ -85,7 +85,7 @@ export async function runAskMatriyaDocumentsQuery(message, filenames) {
         (!sources || sources.length === 0) &&
         Array.isArray(dataRows) &&
         dataRows.length > 0 &&
-        (mode === 'filter' || mode === 'ranking' || mode === 'aggregation' || mode === 'comparison')
+        (mode === 'filter' || mode === 'ranking' || mode === 'aggregation' || mode === 'comparison' || mode === 'partial')
     ) {
         sources = dataRows.map((r) => ({
             content: Object.entries(r || {})
@@ -97,11 +97,7 @@ export async function runAskMatriyaDocumentsQuery(message, filenames) {
         }));
     }
     if (process.env.NODE_ENV === 'development') {
-        console.log('[ask-matriya] parsed', {
-            mode: body.mode,
-            row_count: body.meta?.row_count,
-            filters_applied: body.meta?.filters_applied
-        });
+        console.log('[ask-matriya] full response JSON', body);
     }
     if (cacheEligible) {
         askMatriyaDocumentsCache = { key: repeatKey, reply, sources };

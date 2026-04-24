@@ -6,6 +6,7 @@ import cors from 'cors';
 import multer from 'multer';
 import { Op } from 'sequelize';
 import { fileURLToPath } from 'url';
+import { randomUUID } from 'crypto';
 import path, { dirname, join } from 'path';
 import { existsSync, mkdirSync, unlinkSync, readdirSync, writeFileSync, readFileSync, copyFileSync } from 'fs';
 import settings from './config.js';
@@ -70,6 +71,12 @@ import {
 import { repairUtf8MisdecodedAsLatin1 } from './lib/textEncoding.js';
 import { RAG_INSUFFICIENT_SUPPORT_MESSAGE_HE } from './lib/ragEvidenceFailSafe.js';
 import { handleLabBridgeFlow } from './lib/matriyaLabBridgeFlow.js';
+import {
+  extractExpEntities,
+  buildKernelStageRuns,
+  buildComparisonNarration,
+  resolveEntitySnapshots
+} from './lib/matriyaQueryIntent.js';
 import { externalLayerRouter, initExternalLayerFromEnv } from './lib/externalLayerRouter.js';
 import { evaluate as evaluateConstraintEngine } from './services/eliminationLogic.js';
 import sourcesRouter from './routes/external/sources.js';
@@ -1255,6 +1262,18 @@ const askMatriyaMulter = (req, res, next) => {
 app.get("/ask-matriya", (req, res) => {
   res.status(200).json({ status: 'OK', message: 'Use POST for queries' });
 });
+/** Lab science JSON contract; body: { query }. Rejects non–lab-structured questions (use POST /ask-matriya for RAG). */
+app.post('/api/matriya/query', requireAuth, async (req, res) => {
+  const q = String(req.body?.query ?? '').trim();
+  if (!q) {
+    return res.status(400).json({ error: 'query is required' });
+  }
+  if (!isScienceQueryQuestion(q)) {
+    return res.status(400).json({ error: 'not_a_lab_query', message: 'Use lab/EXP-*/filter syntax or POST /ask-matriya for documents.' });
+  }
+  console.log(`[api/matriya/query] query="${q}"`);
+  return await handleScienceQueryFlow(req, res, { query: q });
+});
 app.post("/ask-matriya", requireAuth, askMatriyaMulter, async (req, res) => {
   const message = (req.body?.message ?? '').trim();
   if (!message) {
@@ -1635,7 +1654,8 @@ function isScienceQueryQuestion(query) {
     if (q.includes(kw)) return true;
   }
 
-  // Entity comparison: two EXP-### ids in one question (lab table, not document RAG)
+  // Entity comparison: two+ EXP-### ids in one question (lab table, not document RAG)
+  if (extractExpEntities(query).length >= 2) return true;
   if (parseTwoExperimentIdsForComparison(query)) return true;
 
   // ── TIER 2: "show all", "list all", "get all" without a specific entity ─
@@ -1733,6 +1753,60 @@ async function fetchLabDataFromManagementApi() {
     logger.warn(`[science-routing] fetchLabDataFromManagementApi failed: ${e.message} — falling back to Excel`);
     return null;
   }
+}
+
+/**
+ * Lab Manager only: same export as fetchLabDataFromManagementApi but returns the row array (no CSV / no DB in matriya-back).
+ * @returns {Promise<object[] | null>}
+ */
+async function fetchExperimentsArrayFromManagementApi() {
+  const managementBase = settings.MATRIYA_MANAGEMENT_API_URL || '';
+  if (!managementBase) return null;
+  try {
+    const resp = await axios.get(`${managementBase}/api/matriya/lab-experiments-export`, {
+      headers: {
+        'Accept': 'application/json',
+        ...(settings.MATRIYA_MANAGEMENT_MATERIALS_KEY
+          ? { 'X-Matriya-Materials-Key': settings.MATRIYA_MANAGEMENT_MATERIALS_KEY }
+          : {}),
+      },
+      timeout: 20000,
+    });
+    const rows = resp.data?.experiments;
+    if (!Array.isArray(rows) || rows.length === 0) return null;
+    return rows;
+  } catch (e) {
+    logger.warn(`[science-routing] fetchExperimentsArrayFromManagementApi failed: ${e.message}`);
+    return null;
+  }
+}
+
+function inferIntentFromMode(mode) {
+  if (mode === 'comparison' || mode === 'partial') return 'comparison';
+  if (mode === 'aggregation' || mode === 'ranking') return mode;
+  if (mode === 'filter' || mode === 'no_match') return 'filter';
+  if (mode === 'error') return 'error';
+  return 'lab_query';
+}
+
+function withScienceTrace(base, {
+  trigger_id,
+  intent,
+  entities,
+  missing_entities,
+  snapshots,
+  kernel_runs
+}) {
+  const out = {
+    ...base,
+    trigger_id,
+    intent: intent != null ? intent : inferIntentFromMode(base.mode)
+  };
+  if (entities != null) out.entities = entities;
+  if (missing_entities != null) out.missing_entities = missing_entities;
+  if (snapshots != null) out.snapshots = snapshots;
+  if (kernel_runs != null) out.kernel_runs = kernel_runs;
+  return out;
 }
 
 /**
@@ -2047,8 +2121,8 @@ function buildScienceContract({
   let pipeline = [];
   if (mode === 'error') {
     pipeline = [];
-  } else if (mode === 'comparison') {
-    pipeline = ['comparison'];
+  } else if (mode === 'comparison' || mode === 'partial') {
+    pipeline = mode === 'partial' ? ['comparison', 'partial'] : ['comparison'];
   } else if (ev.agg_pipeline === 'compound_rank_then_final' || ev.agg_type === 'compound') {
     pipeline = ['filter', 'rank', 'aggregate'];
   } else if (mode === 'ranking') {
@@ -2100,7 +2174,7 @@ function buildScienceContract({
   }
 
   const bestVal = reproSelectedValueNumeric(ev.best_value);
-  const isComparison = mode === 'comparison';
+  const isComparison = mode === 'comparison' || mode === 'partial';
   const repro = {
     pipeline,
     filters:        Array.isArray(fa) ? fa : [],
@@ -2151,7 +2225,101 @@ function buildAskMatriyaLlmContract({ message, text }) {
 }
 
 async function handleScienceQueryFlow(req, res, { query }) {
+  const trigger_id = randomUUID();
+  res.setHeader('X-Matriya-Trigger-Id', trigger_id);
+  const sendSci = (status, contract, extra = {}) =>
+    res.status(status).json(withScienceTrace(contract, { trigger_id, ...extra }));
+  const qStr = String(query != null ? query : '');
+
   try {
+    console.log(`[matriya-query] trigger_id=${trigger_id} step=incoming query=${JSON.stringify(qStr)}`);
+    // N >= 2 EXP entities: intent = comparison; snapshots = Lab Manager HTTP export only (no local DB/CSV for this path).
+    const compEntities = extractExpEntities(qStr);
+    if (compEntities.length >= 2) {
+      console.log(`[matriya-query] trigger_id=${trigger_id} step=entity_extract payload=${JSON.stringify({ entities: compEntities })}`);
+      let snapshots = [];
+      let missing_entities = [];
+      let columnOrder = [];
+      const exps = await fetchExperimentsArrayFromManagementApi();
+      console.log(
+        `[matriya-query] trigger_id=${trigger_id} step=lab_manager_fetch rows=${
+          exps == null ? 'null' : exps.length
+        } intent=comparison`
+      );
+      if (exps && exps.length) {
+        const r = resolveEntitySnapshots(compEntities, exps);
+        snapshots = r.snapshots;
+        missing_entities = r.missing_entities;
+        columnOrder = r.columnOrder;
+      } else {
+        let dataFileFb = await fetchLabDataFromManagementApi();
+        const dsFb = dataFileFb ? 'SUPABASE_LIVE' : 'EXCEL_FALLBACK';
+        if (!dataFileFb) dataFileFb = _activeLabExcel;
+        if (dataFileFb) {
+          try {
+            const { rows, missing, columnOrder: co } = loadLabExperimentRowsByIds(dataFileFb, compEntities);
+            if (dsFb === 'SUPABASE_LIVE' && dataFileFb) {
+              try { unlinkSync(dataFileFb); } catch (_) {}
+            }
+            snapshots = rows;
+            missing_entities = missing;
+            columnOrder = co;
+            console.log(
+              `[matriya-query] trigger_id=${trigger_id} step=lab_file_fallback rows=${rows.length} missing=${missing.length}`
+            );
+          } catch (e) {
+            logger.warn(`[science-routing] comparison file fallback: ${e.message}`);
+          }
+        }
+      }
+      if (snapshots.length === 0) {
+        const allMissing = missing_entities.length ? missing_entities : compEntities;
+        const warn = missing_entities.length
+          ? missing_entities.map((id) => `missing_experiment_id:${id}`)
+          : (exps && exps.length === 0) ? ['EMPTY_LAB_MANAGER_EXPORT'] : ['NO_LAB_DATA_FILE'];
+        return sendSci(200, buildScienceContract({
+          mode:     'error',
+          query:    qStr,
+          message:  missing_entities.length
+            ? `None of the requested experiment IDs were found: ${compEntities.join(', ')}.`
+            : (exps && exps.length === 0
+              ? 'Lab Manager returned no rows and no local lab file could be loaded. Set MATRIYA_MANAGEMENT_API_URL or upload a lab file.'
+              : 'Lab Manager is unavailable and no local lab file could be loaded. Set MATRIYA_MANAGEMENT_API_URL or upload a lab file.'),
+          evidence: { result_preview: [], columns_returned: DEFAULT_LAB_TABLE_COLUMNS, comparison_ids: compEntities },
+          warnings: warn
+        }), { intent: 'comparison', entities: compEntities, missing_entities: allMissing, snapshots: [], kernel_runs: [] });
+      }
+      const kernel_runs = buildKernelStageRuns(snapshots);
+      const isPartial = missing_entities.length > 0;
+      const mode = isPartial ? 'partial' : 'comparison';
+      const evComp = {
+        result_preview:   snapshots,
+        columns_returned: columnOrder.length
+          ? columnOrder
+          : (snapshots[0] && typeof snapshots[0] === 'object' ? Object.keys(snapshots[0]) : DEFAULT_LAB_TABLE_COLUMNS),
+        filters_applied:  [ { column: 'experiment_id', operator: 'in', value: compEntities } ],
+        comparison_ids:   compEntities
+      };
+      if (!evComp.columns_returned || evComp.columns_returned.length === 0) {
+        evComp.columns_returned = DEFAULT_LAB_TABLE_COLUMNS;
+      }
+      const message = buildComparisonNarration(
+        compEntities, snapshots, missing_entities, structuralDiffSummary
+      );
+      const w = isPartial ? missing_entities.map((id) => `missing_experiment_id:${id}`) : [];
+      console.log(
+        `[matriya-query] trigger_id=${trigger_id} step=kernel path=comparison mode=${mode} ` +
+        `snapshots=${snapshots.length} missing=${missing_entities.length} K→C→B→N→L=minimal`
+      );
+      return sendSci(200, buildScienceContract({ mode, query: qStr, message, evidence: evComp, warnings: w }), {
+        intent: 'comparison',
+        entities: compEntities,
+        missing_entities,
+        snapshots,
+        kernel_runs
+      });
+    }
+
     // Try to get live Supabase data first (same source as Lab Decision Board)
     let dataFile = await fetchLabDataFromManagementApi();
     const dataSource = dataFile ? 'SUPABASE_LIVE' : 'EXCEL_FALLBACK';
@@ -2159,88 +2327,17 @@ async function handleScienceQueryFlow(req, res, { query }) {
       dataFile = _activeLabExcel;
     }
     // ── STEP TRACKING ────────────────────────────────────────────────────────
-    console.log(`[LAB PIPELINE] STEP-A: data_source=${dataSource} | file=${dataFile || 'NULL'}`);
-    console.log(`[LAB PIPELINE] STEP-B: query="${query}"`);
+    console.log(`[LAB PIPELINE] trigger_id=${trigger_id} step=data_file data_source=${dataSource} | file=${dataFile || 'NULL'}`);
+    console.log(`[LAB PIPELINE] STEP-B: query="${qStr}"`);
     if (!dataFile) {
-      console.log('[LAB PIPELINE] STEP-A FAIL: no data file — both Supabase and Excel fallback are null');
+      console.log(`[LAB PIPELINE] trigger_id=${trigger_id} step=data_file_fail no CSV/Excel — Python path may fail`);
     }
     // ────────────────────────────────────────────────────────────────────────
-
-    // ── ENTITY COMPARISON (two EXP-###) — fetch rows from same CSV/Excel as the lab engine ──
-    const compareIds = parseTwoExperimentIdsForComparison(query);
-    if (compareIds && dataFile) {
-      const cleanupSupabaseExport = () => {
-        if (dataSource === 'SUPABASE_LIVE' && dataFile) {
-          try { unlinkSync(dataFile); } catch (_) {}
-        }
-      };
-      try {
-        const { rows: compRows, missing, columnOrder } = loadLabExperimentRowsByIds(dataFile, compareIds);
-        if (missing.length) {
-          cleanupSupabaseExport();
-          const evMiss = {
-            result_preview: compRows,
-            columns_returned: compRows[0] ? Object.keys(compRows[0]) : columnOrder,
-            filters_applied:  true,
-            comparison_ids:   compareIds
-          };
-          if (!evMiss.columns_returned || evMiss.columns_returned.length === 0) {
-            evMiss.columns_returned = DEFAULT_LAB_TABLE_COLUMNS;
-          }
-          return res.status(200).json(buildScienceContract({
-            mode:     'error',
-            query,
-            message:  `Could not find in dataset: ${missing.join(', ')}. Requested: ${compareIds[0]} vs ${compareIds[1]}.`,
-            evidence: evMiss,
-            warnings: [`missing_experiment_id:${missing.join(',')}`]
-          }));
-        }
-        const r0 = compRows[0];
-        const r1 = compRows[1];
-        const diff = structuralDiffSummary(r0, r1);
-        const baseMsg = `Structural comparison between ${compareIds[0]} and ${compareIds[1]}.`;
-        const evComp = {
-          result_preview:   compRows,
-          columns_returned: columnOrder,
-          filters_applied:  [
-            { column: 'experiment_id', operator: 'in', value: [compareIds[0], compareIds[1]] }
-          ],
-          comparison_ids:   compareIds
-        };
-        cleanupSupabaseExport();
-        return res.status(200).json(buildScienceContract({
-          mode:     'comparison',
-          query,
-          message:  `${baseMsg} ${diff}`,
-          evidence: evComp,
-          warnings: []
-        }));
-      } catch (ce) {
-        logger.error(`[science-routing] comparison load failed: ${ce.message}`);
-        cleanupSupabaseExport();
-        return res.status(200).json(buildScienceContract({
-          mode:     'error',
-          query,
-          message:  `Could not load lab data for comparison: ${ce.message}`,
-          evidence: { result_preview: [], columns_returned: DEFAULT_LAB_TABLE_COLUMNS },
-          warnings: [String(ce.message || ce)]
-        }));
-      }
-    }
-    if (compareIds && !dataFile) {
-      return res.status(200).json(buildScienceContract({
-        mode:     'error',
-        query,
-        message:  'No lab dataset loaded. Upload lab data or configure management API export.',
-        evidence: { result_preview: [], columns_returned: DEFAULT_LAB_TABLE_COLUMNS },
-        warnings: ['NO_LAB_DATA_FILE']
-      }));
-    }
 
     const result = await runSciencePython([
       'query',
       dataFile,
-      query,
+      qStr,
       'Formulation Data',
       `QUERY-${Date.now()}`
     ]);
@@ -2257,7 +2354,7 @@ async function handleScienceQueryFlow(req, res, { query }) {
     console.log(`[LAB PIPELINE] STEP-C: warnings=${JSON.stringify(result.warnings || [])}`);
     // ────────────────────────────────────────────────────────────────────────
 
-    logger.info(`[science-routing] query="${query}" decision=${result.decision}`);
+    logger.info(`[science-routing] trigger_id=${trigger_id} query="${qStr}" decision=${result.decision}`);
 
     // ── LAYER 1 RESULT: Invalid query (caught by validate_query before filter) ──
     if (result.decision === 'INVALID_QUERY') {
@@ -2265,9 +2362,9 @@ async function handleScienceQueryFlow(req, res, { query }) {
         `Example: "expansion_ratio > 15" or "highest expansion_ratio".`;
       const ev = { ...(result.evidence || {}), result_preview: [], columns_returned: (result.evidence && result.evidence.columns_returned) || [] };
       if (!ev.columns_returned || ev.columns_returned.length === 0) ev.columns_returned = DEFAULT_LAB_TABLE_COLUMNS;
-      return res.status(200).json(buildScienceContract({
+      return sendSci(200, buildScienceContract({
         mode:     'error',
-        query,
+        query:    qStr,
         message:  invalidMsg,
         evidence: ev,
         warnings: result.warnings || []
@@ -2301,9 +2398,9 @@ async function handleScienceQueryFlow(req, res, { query }) {
       const aggApiMode = _scienceApiMode('AGGREGATION_RESULT', ev);
       const aggMsg = String(summary || '').trim() ||
         (aggRows.length ? `Aggregated result (${aggRows.length} row(s)).` : 'Aggregated result.');
-      return res.status(200).json(buildScienceContract({
+      return sendSci(200, buildScienceContract({
         mode:     aggApiMode,
-        query,
+        query:    qStr,
         message:  aggMsg,
         evidence: ev,
         warnings: result.warnings || []
@@ -2316,9 +2413,9 @@ async function handleScienceQueryFlow(req, res, { query }) {
       }`;
       const ev = { ...(result.evidence || {}), result_preview: [], columns_returned: [] };
       if (!ev.columns_returned || ev.columns_returned.length === 0) ev.columns_returned = DEFAULT_LAB_TABLE_COLUMNS;
-      return res.status(200).json(buildScienceContract({
+      return sendSci(200, buildScienceContract({
         mode:     'error',
-        query,
+        query:    qStr,
         message:  ambigMsg,
         evidence: ev,
         warnings: result.warnings || []
@@ -2342,9 +2439,9 @@ async function handleScienceQueryFlow(req, res, { query }) {
       } else {
         msg = `Insufficient data: ${result.evidence?.error || 'cannot execute query'}`;
       }
-      return res.status(200).json(buildScienceContract({
+      return sendSci(200, buildScienceContract({
         mode:     noMatchMode,
-        query,
+        query:    qStr,
         message:  msg,
         evidence: ev,
         warnings: result.warnings || []
@@ -2384,9 +2481,10 @@ async function handleScienceQueryFlow(req, res, { query }) {
       logger.warn(`[document-guard] Science short message: ${sciGuard.violations.slice(0, 3).join(', ')} — sanitizing`);
       filterMsg = sciGuard.sanitized_text;
     }
-    return res.status(200).json(buildScienceContract({
+    console.log(`[LAB PIPELINE] trigger_id=${trigger_id} step=kernel path=python end`);
+    return sendSci(200, buildScienceContract({
       mode:     filterApiMode,
-      query,
+      query:    qStr,
       message:  filterMsg,
       evidence,
       warnings: result.warnings || []
@@ -2394,15 +2492,13 @@ async function handleScienceQueryFlow(req, res, { query }) {
   } catch (e) {
     logger.error(`[science-routing] error: ${e.message}`);
     const evErr = { result_preview: [], columns_returned: DEFAULT_LAB_TABLE_COLUMNS };
-    return res.status(500).json(
-      buildScienceContract({
-        mode:     'error',
-        query:    String(query != null ? query : ''),
-        message:  `Server error: ${String(e.message || e)}`,
-        evidence: evErr,
-        warnings: [String(e.message || e)]
-      })
-    );
+    return sendSci(500, buildScienceContract({
+      mode:     'error',
+      query:    String(query != null ? query : ''),
+      message:  `Server error: ${String(e.message || e)}`,
+      evidence: evErr,
+      warnings: [String(e.message || e)]
+    }), { intent: 'error' });
   }
 }
 
