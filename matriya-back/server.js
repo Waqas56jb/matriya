@@ -1333,7 +1333,9 @@ app.post("/ask-matriya", requireAuth, askMatriyaMulter, async (req, res) => {
           openaiKey,
           historyForMaterials
         );
-        return res.json({ reply: replyMat, sources: [], ask_mode: 'materials_library' });
+        return res.json(
+          buildAskMatriyaLlmContract({ message, text: replyMat, askMode: 'materials_library' })
+        );
       } catch (e) {
         logger.error(
           `[ask-matriya routing] MATERIALS_LIBRARY answer LLM failed → fallback DOCUMENTS | ${e.message}`
@@ -1480,7 +1482,14 @@ ${fileContext}`
     }
     // ─────────────────────────────────────────────────────────────────────────
 
-    return res.json({ reply, sources: [], guard_action: guardResult.action });
+    return res.json(
+      buildAskMatriyaLlmContract({
+        message,
+        text: reply,
+        askMode: 'documents',
+        guardAction: guardResult.action
+      })
+    );
   } catch (e) {
     const upstream = e.response?.status;
     const msg = e.response?.data?.error?.message || e.message || "OpenAI request failed";
@@ -1851,7 +1860,9 @@ function _scienceApiMode(decision, evidence) {
 
 /**
  * Single contract for science responses: { mode, data, meta, repro }.
- * No top-level rows/reply/results/evidence (rows live only under data.rows).
+ * - Tabular truth: data.rows + data.columns only (no result_preview, no top-level rows).
+ * - Human-readable copy: meta.presentation.text (separate from data).
+ * - Citations: meta.sources.
  */
 function buildScienceContract({
   mode,
@@ -1915,26 +1926,29 @@ function buildScienceContract({
       order:  'desc',
       n:      ev.rank_n != null ? ev.rank_n : null
     };
+  } else {
+    reproRanking = null;
   }
 
   let reproAggregation = null;
   if (ev.agg_type === 'compound' || ev.agg_pipeline === 'compound_rank_then_final') {
     reproAggregation = {
-      type:               'compound',
-      pipeline:           ev.agg_pipeline || 'compound_rank_then_final',
-      rank_column:        ev.rank_column != null ? ev.rank_column : null,
-      rank_n:             ev.rank_n != null ? ev.rank_n : null,
-      final_column:       ev.final_column != null ? ev.final_column : null,
-      final_op:           ev.final_agg_op != null ? ev.final_agg_op : null,
-      ranked_row_count:   ev.ranked_row_count != null ? ev.ranked_row_count : null
+      type:     'compound',
+      column:   ev.final_column != null ? ev.final_column : null,
+      n:        ev.rank_n != null ? ev.rank_n : null,
+      pipeline: ev.agg_pipeline || 'compound_rank_then_final',
+      rank_column: ev.rank_column != null ? ev.rank_column : null,
+      final_op:    ev.final_agg_op != null ? ev.final_agg_op : null,
+      ranked_row_count: ev.ranked_row_count != null ? ev.ranked_row_count : null
     };
-  } else if (mode === 'aggregation') {
+  } else if (mode === 'aggregation' && (ev.agg_type || ev.agg_column)) {
     reproAggregation = {
-      type:     ev.agg_type != null ? ev.agg_type : null,
-      column:   ev.agg_column != null ? ev.agg_column : null,
-      n:        ev.agg_n != null ? ev.agg_n : null,
-      pipeline: ev.agg_pipeline != null ? ev.agg_pipeline : null
+      type:   ev.agg_type != null ? ev.agg_type : null,
+      column: ev.agg_column != null ? ev.agg_column : null,
+      n:      ev.agg_n != null ? ev.agg_n : null
     };
+  } else {
+    reproAggregation = null;
   }
 
   if (mode === 'ranking') {
@@ -1943,17 +1957,19 @@ function buildScienceContract({
 
   const repro = {
     pipeline,
-    filters:         Array.isArray(fa) ? fa : [],
-    ranking:         reproRanking,
-    aggregation:     reproAggregation,
-    subset_ids:      subsetIds,
-    selected_id:     ev.best_experiment_id != null ? String(ev.best_experiment_id) : (subsetIds[0] || null),
-    selected_value:  ev.best_value !== undefined && ev.best_value !== null ? ev.best_value : null
+    filters:        Array.isArray(fa) ? fa : [],
+    ranking:        reproRanking,
+    aggregation:    reproAggregation,
+    subset_ids:     subsetIds,
+    selected_id:    ev.best_experiment_id != null ? String(ev.best_experiment_id) : (subsetIds[0] || null),
+    selected_value: ev.best_value !== undefined && ev.best_value !== null ? ev.best_value : null
   };
 
   const meta = {
     rows:              n,
     query:             String(query || ''),
+    presentation:      { text: String(answerText || '') },
+    sources:             Array.isArray(sources) ? sources : [],
     filters_applied:   filtersApplied,
     ranking:           metaRanking,
     decision:          decision || null,
@@ -1965,13 +1981,38 @@ function buildScienceContract({
   };
 
   const data = {
-    answer:  String(answerText || ''),
     rows,
-    columns: Array.isArray(ev.columns_returned) ? ev.columns_returned : [],
-    sources
+    columns: Array.isArray(ev.columns_returned) ? ev.columns_returned : []
   };
 
   return { mode, data, meta, repro };
+}
+
+/** LLM (documents / materials) /ask-matriya — same envelope, no tabular rows. */
+function buildAskMatriyaLlmContract({ message, text, askMode, guardAction = null }) {
+  return {
+    mode: 'llm',
+    data: { rows: [], columns: [] },
+    meta: {
+      query:         String(message || ''),
+      rows:          0,
+      presentation:  { text: String(text || '') },
+      sources:       [],
+      ask_mode:      askMode || 'documents',
+      guard_action:  guardAction,
+      filters_applied: false,
+      ranking:         null
+    },
+    repro: {
+      pipeline:        ['llm'],
+      filters:         [],
+      ranking:         null,
+      aggregation:     null,
+      subset_ids:      [],
+      selected_id:     null,
+      selected_value:  null
+    }
+  };
 }
 
 async function handleScienceQueryFlow(req, res, { query }) {
