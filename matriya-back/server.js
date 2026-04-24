@@ -1250,6 +1250,10 @@ const askMatriyaMulter = (req, res, next) => {
   if (req.is('application/json')) return next();
   return upload.array('files', 10)(req, res, next);
 };
+/** GET — health / contract hint (browser must use POST with JSON body for queries). */
+app.get("/ask-matriya", (req, res) => {
+  res.status(200).json({ status: 'OK', message: 'Use POST for queries' });
+});
 app.post("/ask-matriya", requireAuth, askMatriyaMulter, async (req, res) => {
   const message = (req.body?.message ?? '').trim();
   if (!message) {
@@ -1832,56 +1836,142 @@ app.get('/api/lab/debug', requireAuth, async (req, res) => {
  *  2. _activeLabExcel (Excel file uploaded via /ingest/excel)
  */
 /**
- * Determine the standard response mode for a given Python decision string.
- * validation → filter → aggregation layer naming:
- *   "error"       : query rejected before or during execution (no data returned)
- *   "filter"      : boolean-mask filter ran (0 or more matching rows)
- *   "aggregation" : idxmax / idxmin / nlargest post-processing ran
+ * Public API mode for /ask-matriya (science path).
+ * "ranking" = sort-by-column (e.g. rank_desc), not numeric aggregate.
  */
-function _scienceMode(decision) {
-  if (decision === 'AGGREGATION_RESULT')                        return 'aggregation';
+function _scienceApiMode(decision, evidence) {
+  if (decision === 'AGGREGATION_RESULT') {
+    const at = (evidence || {}).agg_type;
+    if (at === 'rank_desc') return 'ranking';
+    return 'aggregation';
+  }
   if (decision === 'MATCHES_FOUND' || decision === 'NO_MATCHES') return 'filter';
-  return 'error'; // INVALID_QUERY | AMBIGUOUS_QUERY | INSUFFICIENT_DATA | unknown
+  return 'error';
 }
 
 /**
- * Build the standard data payload for each mode.
- * All fields are optional-safe — missing values become null / [] / {}.
+ * Single contract for science responses: { mode, data, meta, repro }.
+ * No top-level rows/reply/results/evidence (rows live only under data.rows).
  */
-function _scienceData(mode, decision, evidence, extraFields) {
-  if (mode === 'aggregation') {
-    const ev = evidence || {};
-    return {
-      rows:                ev.result_preview     || [],
-      matched_rows:        ev.matched_rows        ?? null,
-      total_rows:          ev.total_rows          ?? null,
-      agg_type:            ev.agg_type            || null,
-      agg_column:          ev.agg_column          || null,
-      agg_n:               ev.agg_n               ?? null,
-      best_value:          ev.best_value          ?? null,
-      best_experiment_id:  ev.best_experiment_id  || null,
-      summary:             ev.summary             || null,
-      columns:             ev.columns_returned    || [],
+function buildScienceContract({
+  mode,
+  query,
+  decision,
+  answerText,
+  evidence,
+  warnings = [],
+  sources = [],
+  extraMeta = {}
+}) {
+  const ev = evidence || {};
+  const rows = Array.isArray(ev.result_preview) ? ev.result_preview : [];
+  const n = rows.length;
+  const fa = ev.filters_applied;
+  const filtersApplied = Array.isArray(fa) && fa.length > 0;
+
+  let metaRanking = null;
+  if (mode === 'ranking' && ev.agg_column) {
+    metaRanking = {
+      column: ev.agg_column,
+      order:  'desc',
+      n:      typeof ev.agg_n === 'number' ? ev.agg_n : n
+    };
+  } else if (
+    (ev.agg_type === 'compound' || ev.agg_pipeline === 'compound_rank_then_final') &&
+    ev.rank_column
+  ) {
+    metaRanking = {
+      column: ev.rank_column,
+      order:  'desc',
+      n:      ev.rank_n != null ? ev.rank_n : null
     };
   }
-  if (mode === 'filter') {
-    const ev = evidence || {};
-    return {
-      rows:             ev.result_preview    || [],
-      matched_rows:     ev.matched_rows       ?? null,
-      total_rows:       ev.total_rows         ?? null,
-      columns:          ev.columns_returned   || [],
-      filters_applied:  ev.filters_applied    || [],
-      count_result:     ev.count_result       ?? null,
+
+  const subsetIds = rows.map((r) => (r && r.experiment_id != null ? String(r.experiment_id) : null)).filter(Boolean);
+
+  let pipeline = [];
+  if (mode === 'error') {
+    pipeline = [];
+  } else if (ev.agg_pipeline === 'compound_rank_then_final' || ev.agg_type === 'compound') {
+    pipeline = ['filter', 'rank', 'aggregate'];
+  } else if (mode === 'ranking') {
+    pipeline = ['rank'];
+  } else if (mode === 'aggregation') {
+    pipeline = filtersApplied ? ['filter', 'aggregate'] : ['aggregate'];
+  } else {
+    pipeline = ['filter'];
+  }
+
+  let reproRanking = null;
+  if (mode === 'ranking' && ev.agg_column) {
+    reproRanking = {
+      column: ev.agg_column,
+      order:  'desc',
+      n:      typeof ev.agg_n === 'number' ? ev.agg_n : n
+    };
+  } else if ((ev.agg_type === 'compound' || ev.agg_pipeline) && ev.rank_column) {
+    reproRanking = {
+      column: ev.rank_column,
+      order:  'desc',
+      n:      ev.rank_n != null ? ev.rank_n : null
     };
   }
-  // error
-  return {
-    decision,
-    reason:   (evidence || {}).reason || (extraFields && extraFields.warnings && extraFields.warnings[0]) || null,
-    warnings: (extraFields && extraFields.warnings) || [],
-    evidence: evidence || {},
+
+  let reproAggregation = null;
+  if (ev.agg_type === 'compound' || ev.agg_pipeline === 'compound_rank_then_final') {
+    reproAggregation = {
+      type:               'compound',
+      pipeline:           ev.agg_pipeline || 'compound_rank_then_final',
+      rank_column:        ev.rank_column != null ? ev.rank_column : null,
+      rank_n:             ev.rank_n != null ? ev.rank_n : null,
+      final_column:       ev.final_column != null ? ev.final_column : null,
+      final_op:           ev.final_agg_op != null ? ev.final_agg_op : null,
+      ranked_row_count:   ev.ranked_row_count != null ? ev.ranked_row_count : null
+    };
+  } else if (mode === 'aggregation') {
+    reproAggregation = {
+      type:     ev.agg_type != null ? ev.agg_type : null,
+      column:   ev.agg_column != null ? ev.agg_column : null,
+      n:        ev.agg_n != null ? ev.agg_n : null,
+      pipeline: ev.agg_pipeline != null ? ev.agg_pipeline : null
+    };
+  }
+
+  if (mode === 'ranking') {
+    reproAggregation = null;
+  }
+
+  const repro = {
+    pipeline,
+    filters:         Array.isArray(fa) ? fa : [],
+    ranking:         reproRanking,
+    aggregation:     reproAggregation,
+    subset_ids:      subsetIds,
+    selected_id:     ev.best_experiment_id != null ? String(ev.best_experiment_id) : (subsetIds[0] || null),
+    selected_value:  ev.best_value !== undefined && ev.best_value !== null ? ev.best_value : null
   };
+
+  const meta = {
+    rows:              n,
+    query:             String(query || ''),
+    filters_applied:   filtersApplied,
+    ranking:           metaRanking,
+    decision:          decision || null,
+    warnings:          warnings.length ? warnings : [],
+    routing:           'SCIENCE_QUERY_ENGINE',
+    total_rows:        ev.total_rows != null ? ev.total_rows : null,
+    matched_rows_hint: ev.matched_rows != null ? ev.matched_rows : n,
+    ...extraMeta
+  };
+
+  const data = {
+    answer:  String(answerText || ''),
+    rows,
+    columns: Array.isArray(ev.columns_returned) ? ev.columns_returned : [],
+    sources
+  };
+
+  return { mode, data, meta, repro };
 }
 
 async function handleScienceQueryFlow(req, res, { query }) {
@@ -1926,23 +2016,17 @@ async function handleScienceQueryFlow(req, res, { query }) {
     if (result.decision === 'INVALID_QUERY') {
       const invalidAnswer = `Invalid query: ${result.evidence?.reason || result.warnings?.[0] || 'malformed expression'}.\n` +
         `Please check the syntax. Example: "expansion_ratio > 15" or "highest expansion_ratio".`;
-      const _mode = _scienceMode('INVALID_QUERY');
-      return res.status(200).json({
-        mode: _mode,
-        data: _scienceData(_mode, 'INVALID_QUERY', result.evidence, { warnings: result.warnings || [] }),
+      const ev = { ...(result.evidence || {}), result_preview: [], columns_returned: (result.evidence && result.evidence.columns_returned) || [] };
+      return res.status(200).json(buildScienceContract({
+        mode:     'error',
         query,
-        flow: 'science',
-        routing: 'SCIENCE_QUERY_ENGINE',
-        data_source: 'NONE',
         decision: 'INVALID_QUERY',
-        answer: invalidAnswer,
-        reply: invalidAnswer,
-        evidence: result.evidence || {},
-        warnings: result.warnings || [],
-        sources: [],
-        results: [],
-        results_count: 0,
-      });
+        answerText: invalidAnswer,
+        evidence:   ev,
+        warnings:   result.warnings || [],
+        sources:    [],
+        extraMeta:  { data_source: 'NONE' }
+      }));
     }
 
     // ── LAYER 2 RESULT: Aggregation (highest/lowest/top-N) ────────────────────
@@ -1974,91 +2058,57 @@ async function handleScienceQueryFlow(req, res, { query }) {
       // Log each aggregation result row
       aggRows.forEach((r, i) => console.log(`[science] agg_row[${i}]:`, JSON.stringify(r)));
 
-      const _aggMode = _scienceMode('AGGREGATION_RESULT');
-      return res.status(200).json({
-        mode: _aggMode,
-        data: _scienceData(_aggMode, 'AGGREGATION_RESULT', ev),
+      const aggApiMode = _scienceApiMode('AGGREGATION_RESULT', ev);
+      const aggSources = aggRows.map((r) => ({
+        content:  fmtAggRow(r),
+        metadata: { source: 'lab_data', routing: 'science_query_engine', experiment_id: r.experiment_id || null },
+        score:    1.0
+      }));
+      return res.status(200).json(buildScienceContract({
+        mode:       aggApiMode,
         query,
-        flow: 'science',
-        routing: 'SCIENCE_QUERY_ENGINE',
-        data_source: 'DB_COMPUTED',
-        decision: 'AGGREGATION_RESULT',
-        answer: aggAnswer,
-        reply: aggAnswer,
-        matched_rows: ev.matched_rows,
-        total_rows: ev.total_rows,
-        agg_type: ev.agg_type,
-        agg_column: ev.agg_column,
-        best_value: ev.best_value,
-        best_experiment_id: ev.best_experiment_id,
-        agg_pipeline: ev.agg_pipeline || null,
-        evidence: ev,
-        rows: aggRows,
-        columns: ev.columns_returned || [],
-        warnings: result.warnings || [],
-        sources: aggRows.map(r => ({
-          content: fmtAggRow(r),
-          metadata: { source: 'lab_data', routing: 'science_query_engine', experiment_id: r.experiment_id || null },
-          score: 1.0,
-        })),
-        results: aggRows.map(r => ({
-          content: fmtAggRow(r),
-          metadata: { source: 'lab_data', routing: 'science_query_engine' },
-          score: 1.0,
-        })),
-        results_count: ev.matched_rows ?? aggRows.length,
-        lab_bridge_invoked: true,
-        document_rag_invoked: false,
-        tag: 'computed',
-      });
+        decision:   'AGGREGATION_RESULT',
+        answerText: aggAnswer,
+        evidence:   ev,
+        warnings:   result.warnings || [],
+        sources:    aggSources,
+        extraMeta:  { data_source: 'DB_COMPUTED', tag: 'computed', lab_bridge_invoked: true, document_rag_invoked: false }
+      }));
     }
 
     if (result.decision === 'AMBIGUOUS_QUERY') {
       const ambigAnswer = `Ambiguous query — please specify the exact column name. ${
         (result.evidence?.ambiguous_items || []).map(a => `"${a.term}" could mean: ${a.candidates?.join(', ')}`).join('; ')
       }`;
-      const _ambigMode = _scienceMode('AMBIGUOUS_QUERY');
-      return res.status(200).json({
-        mode: _ambigMode,
-        data: _scienceData(_ambigMode, 'AMBIGUOUS_QUERY', result.evidence, { warnings: result.warnings || [] }),
+      const ev = { ...(result.evidence || {}), result_preview: [], columns_returned: [] };
+      return res.status(200).json(buildScienceContract({
+        mode:       'error',
         query,
-        flow: 'science',
-        routing: 'SCIENCE_QUERY_ENGINE',
-        data_source: 'NONE',
-        decision: 'AMBIGUOUS_QUERY',
-        answer: ambigAnswer,
-        reply: ambigAnswer,
-        evidence: result.evidence || {},
-        warnings: result.warnings || [],
-        sources: [],
-        results: [],
-        results_count: 0,
-      });
+        decision:   'AMBIGUOUS_QUERY',
+        answerText: ambigAnswer,
+        evidence:   ev,
+        warnings:   result.warnings || [],
+        sources:    [],
+        extraMeta:    { data_source: 'NONE' }
+      }));
     }
 
     if (result.decision === 'INSUFFICIENT_DATA' || result.decision === 'NO_MATCHES') {
-      const matched = result.evidence?.matched_rows ?? 0;
       const noMatchAnswer = result.decision === 'NO_MATCHES'
         ? `No experiments matched the query: "${query}". The dataset exists but no rows satisfy this filter.`
         : `Insufficient data to execute the query. ${result.evidence?.error || ''}`;
-      const _noMatchMode = _scienceMode(result.decision);
-      return res.status(200).json({
-        mode: _noMatchMode,
-        data: _scienceData(_noMatchMode, result.decision, result.evidence, { warnings: result.warnings || [] }),
+      const ev = result.evidence || {};
+      const noMatchMode = _scienceApiMode(result.decision, ev);
+      return res.status(200).json(buildScienceContract({
+        mode:       noMatchMode,
         query,
-        flow: 'science',
-        routing: 'SCIENCE_QUERY_ENGINE',
-        data_source: 'DB_COMPUTED',
-        decision: result.decision,
-        answer: noMatchAnswer,
-        reply: noMatchAnswer,
-        evidence: result.evidence || {},
-        warnings: result.warnings || [],
-        sources: [],
-        results: [],
-        results_count: 0,
-        tag: 'computed',
-      });
+        decision:   result.decision,
+        answerText: noMatchAnswer,
+        evidence:   ev,
+        warnings:   result.warnings || [],
+        sources:    [],
+        extraMeta:    { data_source: 'DB_COMPUTED', tag: 'computed' }
+      }));
     }
 
     // MATCHES_FOUND — format rows for frontend
@@ -2123,46 +2173,45 @@ async function handleScienceQueryFlow(req, res, { query }) {
       answer = sciGuard.sanitized_text;
     }
 
-    const _filterMode = _scienceMode(result.decision);
-    return res.status(200).json({
-      mode: _filterMode,
-      data: _scienceData(_filterMode, result.decision, evidence),
+    const filterApiMode = _scienceApiMode(result.decision, evidence);
+    const filterSources = rows.map((r) => ({
+      content:  formatRow(r),
+      metadata: { source: 'lab_data', routing: 'science_query_engine', experiment_id: r.experiment_id || null },
+      score:    1.0
+    }));
+    return res.status(200).json(buildScienceContract({
+      mode:       filterApiMode,
       query,
-      flow: 'science',
-      routing: 'SCIENCE_QUERY_ENGINE',
-      data_source: 'DB_COMPUTED',
-      tag: 'computed',
-      decision: result.decision,
-      answer,
-      reply: answer,
-      matched_rows: matchedRows,
-      total_rows: evidence.total_rows,
-      count_result: countResult,
-      // Full unmodified result rows — ground truth from the Python engine
-      rows,
-      columns: evidence.columns_returned || [],
-      parse_confidence: result.parse_confidence,
-      filters_applied: evidence.filters_applied || [],
-      audit_trace: result.audit_trace || {},
-      warnings: result.warnings || [],
-      sources: rows.map(r => ({
-        content: formatRow(r),
-        metadata: { source: 'lab_data', routing: 'science_query_engine', experiment_id: r.experiment_id || null },
-        score: 1.0,
-      })),
-      results: rows.map(r => ({
-        content: formatRow(r),
-        metadata: { source: 'lab_data', routing: 'science_query_engine' },
-        score: 1.0,
-      })),
-      results_count: matchedRows,
-      lab_bridge_invoked: true,
-      document_rag_invoked: false,
-      guard_action: sciGuard.action,
-    });
+      decision:   result.decision,
+      answerText: answer,
+      evidence,
+      warnings:   result.warnings || [],
+      sources:    filterSources,
+      extraMeta:  {
+        data_source:       'DB_COMPUTED',
+        tag:               'computed',
+        parse_confidence:  result.parse_confidence,
+        count_result:      isCount ? countResult : null,
+        audit_trace:       result.audit_trace || {},
+        guard_action:      sciGuard.action,
+        lab_bridge_invoked: true,
+        document_rag_invoked: false
+      }
+    }));
   } catch (e) {
     logger.error(`[science-routing] error: ${e.message}`);
-    return res.status(500).json({ error: e.message, routing: 'SCIENCE_QUERY_ENGINE' });
+    return res.status(500).json(
+      buildScienceContract({
+        mode:       'error',
+        query:      String((typeof query !== 'undefined' && query) || ''),
+        decision:   'ERROR',
+        answerText: 'Server error while running the science query.',
+        evidence:   { result_preview: [], columns_returned: [] },
+        warnings:   [String(e.message || e)],
+        sources:    [],
+        extraMeta:  { routing: 'SCIENCE_QUERY_ENGINE', http_status: 500, error: String(e.message || e) }
+      })
+    );
   }
 }
 

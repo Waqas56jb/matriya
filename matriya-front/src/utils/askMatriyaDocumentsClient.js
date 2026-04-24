@@ -56,8 +56,22 @@ export async function runAskMatriyaDocumentsQuery(message, filenames) {
         };
     }
     const res = await api.post('/ask-matriya', { message, filenames }, { timeout: 90000 });
-    const reply = res.data?.reply ?? '';
-    const sources = Array.isArray(res.data?.sources) ? res.data.sources : [];
+    const body = res.data || {};
+    // Science (lab) responses: { mode, data: { answer, rows, sources }, meta, repro } — single contract.
+    // Document RAG path: { reply, sources } (legacy) at top level.
+    const reply =
+        (typeof body.data?.answer === 'string' && body.data.answer) ? body.data.answer
+        : (typeof body.reply === 'string' ? body.reply : '');
+    const sources = Array.isArray(body.data?.sources)
+        ? body.data.sources
+        : (Array.isArray(body.sources) ? body.sources : []);
+    if (process.env.NODE_ENV === 'development') {
+        console.log('[ask-matriya] parsed', {
+            mode: body.mode,
+            dataRows: body.data?.rows?.length,
+            metaQuery: body.meta?.query
+        });
+    }
     if (cacheEligible) {
         askMatriyaDocumentsCache = { key: repeatKey, reply, sources };
     } else {
