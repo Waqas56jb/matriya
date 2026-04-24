@@ -244,7 +244,6 @@ def cmd_query(args):
             _filter_result = execute_query(df, _parsed_for_agg)
             _agg_df = _filter_result.get("result_df")
             if _agg_df is None or len(_agg_df) == 0:
-<<<<<<< HEAD
                 if agg_intent.get("compound"):
                     print("[aggregation] compound — filter returned 0 rows; NO_MATCHES (no full-df fallback)",
                           file=_sys.stderr, flush=True)
@@ -262,12 +261,8 @@ def cmd_query(args):
                         "tag":         "computed",
                     })
                     return
-                # Non-compound: legacy fallback
-                print("[aggregation] filter returned 0 rows — aggregating on full df",
-=======
-                # No silent fallback — surface the empty result explicitly
+                # Non-compound: no silent full-df fallback when filter is empty
                 print("[aggregation] filter returned 0 rows — returning NO_MATCHES",
->>>>>>> a72049c0ddfed5d0f6585ce8f1ebb96670aa02d3
                       file=_sys.stderr, flush=True)
                 _out({
                     "error":       "INVALID_QUERY",
