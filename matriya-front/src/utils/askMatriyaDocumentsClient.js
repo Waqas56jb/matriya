@@ -32,7 +32,9 @@ function isLikelyScienceQuery(text) {
         q.includes('ifr') ||
         q.includes('experiment') ||
         /[><]=?/.test(q) ||
-        /\b(top|bottom|highest|lowest|minimum|maximum|among)\b/.test(q)
+        /\b(top|bottom|highest|lowest|minimum|maximum|among)\b/.test(q) ||
+        /\bexp-\d{2,}\b/.test(q) ||
+        (/\b(differ|compare|versus|structural|structurally)\b/.test(q) && /\bexp-\d/.test(q))
     );
 }
 
@@ -83,7 +85,7 @@ export async function runAskMatriyaDocumentsQuery(message, filenames) {
         (!sources || sources.length === 0) &&
         Array.isArray(dataRows) &&
         dataRows.length > 0 &&
-        (mode === 'filter' || mode === 'ranking' || mode === 'aggregation')
+        (mode === 'filter' || mode === 'ranking' || mode === 'aggregation' || mode === 'comparison')
     ) {
         sources = dataRows.map((r) => ({
             content: Object.entries(r || {})

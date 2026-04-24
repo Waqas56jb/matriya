@@ -14,6 +14,7 @@ import { initDb, SearchHistory, ResearchSession, ResearchAuditLog, PolicyAuditLo
 import { authRouter, getCurrentUser, requireAuth } from './authEndpoints.js';
 import DocumentProcessor from './documentProcessor.js';
 import axios from 'axios';
+import XLSX from 'xlsx';
 import { adminRouter } from './adminEndpoints.js';
 import { StateMachine, Kernel } from './stateMachine.js';
 import {
@@ -1634,6 +1635,9 @@ function isScienceQueryQuestion(query) {
     if (q.includes(kw)) return true;
   }
 
+  // Entity comparison: two EXP-### ids in one question (lab table, not document RAG)
+  if (parseTwoExperimentIdsForComparison(query)) return true;
+
   // ── TIER 2: "show all", "list all", "get all" without a specific entity ─
   if (/\b(show|list|get|fetch|find|count)\s+all\b/.test(q)) return true;
 
@@ -1866,6 +1870,136 @@ function reproSelectedValueNumeric(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+function normalizeExperimentIdKey(v) {
+  if (v == null) return '';
+  return String(v).trim().toUpperCase();
+}
+
+/** Parse one CSV line with quoted fields. */
+function parseCsvLineRaw(line) {
+  const out = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') inQuotes = !inQuotes;
+    else if (c === ',' && !inQuotes) {
+      out.push(cur);
+      cur = '';
+    } else {
+      cur += c;
+    }
+  }
+  out.push(cur);
+  return out.map((s) => s.replace(/^"|"$/g, '').trim());
+}
+
+function coerceLabCell(s) {
+  if (s == null || s === '') return null;
+  const t = String(s).trim();
+  if (/^-?\d+(\.\d+)?([eE][-+]?\d+)?$/.test(t)) return Number(t);
+  return t;
+}
+
+function parseCsvToObjects(text) {
+  const lines = text.split(/\r?\n/).filter((l) => l.length);
+  if (lines.length < 2) return [];
+  const headers = parseCsvLineRaw(lines[0]);
+  const out = [];
+  for (let i = 1; i < lines.length; i++) {
+    const parts = parseCsvLineRaw(lines[i]);
+    if (parts.length === 0) continue;
+    const row = {};
+    headers.forEach((h, j) => {
+      const v = parts[j];
+      row[h] = v === undefined || v === '' ? null : coerceLabCell(v);
+    });
+    out.push(row);
+  }
+  return out;
+}
+
+/**
+ * First two distinct EXP-### (or alphanum) tokens in order of appearance — for entity comparison.
+ * Returns null if fewer than two.
+ */
+function parseTwoExperimentIdsForComparison(text) {
+  const s = String(text || '');
+  const re = /\b(EXP-[\dA-Z]+)\b/gi;
+  const seen = new Set();
+  const out = [];
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    const id = m[1].toUpperCase();
+    if (!seen.has(id)) {
+      seen.add(id);
+      out.push(id);
+      if (out.length >= 2) return [out[0], out[1]];
+    }
+  }
+  return null;
+}
+
+function mapRowsByExperimentId(labRows) {
+  const map = new Map();
+  for (const r of labRows) {
+    const k = normalizeExperimentIdKey(
+      r.experiment_id ?? r.Experiment_ID ?? r.experimentId ?? r['Experiment ID']
+    );
+    if (k) map.set(k, r);
+  }
+  return map;
+}
+
+function loadAllLabRowsFromFile(filePath) {
+  const ext = path.extname(filePath || '').toLowerCase();
+  if (ext === '.xlsx' || ext === '.xls') {
+    const wb = XLSX.readFile(filePath, { cellDates: false });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    const arr = XLSX.utils.sheet_to_json(sheet, { defval: null, raw: true });
+    return { rows: arr, from: 'xlsx' };
+  }
+  const text = readFileSync(filePath, 'utf8');
+  const rows = parseCsvToObjects(text);
+  return { rows, from: 'csv' };
+}
+
+/**
+ * @returns {{ rows: object[], missing: string[], columnOrder: string[] }}
+ */
+function loadLabExperimentRowsByIds(filePath, expIds) {
+  const { rows: all } = loadAllLabRowsFromFile(filePath);
+  const byId = mapRowsByExperimentId(all);
+  const ordered = [];
+  const missing = [];
+  for (const id of expIds) {
+    const k = normalizeExperimentIdKey(id);
+    const r = byId.get(k);
+    if (!r) missing.push(id);
+    else ordered.push(r);
+  }
+  const colOrder = ordered[0] ? Object.keys(ordered[0]) : DEFAULT_LAB_TABLE_COLUMNS;
+  return { rows: ordered, missing, columnOrder: colOrder };
+}
+
+function structuralDiffSummary(r1, r2) {
+  if (!r1 || !r2) return 'Compare data.rows in order [first, second] for side-by-side values.';
+  const skip = new Set(['project_id']);
+  const keys = [...new Set([...Object.keys(r1), ...Object.keys(r2)])]
+    .filter((k) => k && !skip.has(k))
+    .sort();
+  const parts = [];
+  for (const k of keys) {
+    const a = r1[k];
+    const b = r2[k];
+    const sa = a === null || a === undefined ? 'null' : a;
+    const sb = b === null || b === undefined ? 'null' : b;
+    if (String(sa) !== String(sb)) parts.push(`${k}: ${sa} vs ${sb}`);
+  }
+  if (parts.length === 0) return 'Compared fields are identical in this dataset view.';
+  return `Key differences: ${parts.slice(0, 20).join('; ')}${parts.length > 20 ? '…' : ''}`;
+}
+
 /**
  * Science API: { mode, data, meta, repro } — clean contract (David).
  * - data: only { rows, columns } (single source of truth for tabular data).
@@ -1913,6 +2047,8 @@ function buildScienceContract({
   let pipeline = [];
   if (mode === 'error') {
     pipeline = [];
+  } else if (mode === 'comparison') {
+    pipeline = ['comparison'];
   } else if (ev.agg_pipeline === 'compound_rank_then_final' || ev.agg_type === 'compound') {
     pipeline = ['filter', 'rank', 'aggregate'];
   } else if (mode === 'ranking') {
@@ -1964,15 +2100,17 @@ function buildScienceContract({
   }
 
   const bestVal = reproSelectedValueNumeric(ev.best_value);
-
+  const isComparison = mode === 'comparison';
   const repro = {
     pipeline,
     filters:        Array.isArray(fa) ? fa : [],
     ranking:        reproRanking,
     aggregation:    reproAggregation,
     subset_ids:     subsetIds,
-    selected_id:    ev.best_experiment_id != null ? String(ev.best_experiment_id) : (subsetIds[0] || null),
-    selected_value: bestVal
+    selected_id:    isComparison
+      ? null
+      : (ev.best_experiment_id != null ? String(ev.best_experiment_id) : (subsetIds[0] || null)),
+    selected_value: isComparison ? null : bestVal
   };
 
   const meta = {
@@ -2027,6 +2165,77 @@ async function handleScienceQueryFlow(req, res, { query }) {
       console.log('[LAB PIPELINE] STEP-A FAIL: no data file — both Supabase and Excel fallback are null');
     }
     // ────────────────────────────────────────────────────────────────────────
+
+    // ── ENTITY COMPARISON (two EXP-###) — fetch rows from same CSV/Excel as the lab engine ──
+    const compareIds = parseTwoExperimentIdsForComparison(query);
+    if (compareIds && dataFile) {
+      const cleanupSupabaseExport = () => {
+        if (dataSource === 'SUPABASE_LIVE' && dataFile) {
+          try { unlinkSync(dataFile); } catch (_) {}
+        }
+      };
+      try {
+        const { rows: compRows, missing, columnOrder } = loadLabExperimentRowsByIds(dataFile, compareIds);
+        if (missing.length) {
+          cleanupSupabaseExport();
+          const evMiss = {
+            result_preview: compRows,
+            columns_returned: compRows[0] ? Object.keys(compRows[0]) : columnOrder,
+            filters_applied:  true,
+            comparison_ids:   compareIds
+          };
+          if (!evMiss.columns_returned || evMiss.columns_returned.length === 0) {
+            evMiss.columns_returned = DEFAULT_LAB_TABLE_COLUMNS;
+          }
+          return res.status(200).json(buildScienceContract({
+            mode:     'error',
+            query,
+            message:  `Could not find in dataset: ${missing.join(', ')}. Requested: ${compareIds[0]} vs ${compareIds[1]}.`,
+            evidence: evMiss,
+            warnings: [`missing_experiment_id:${missing.join(',')}`]
+          }));
+        }
+        const r0 = compRows[0];
+        const r1 = compRows[1];
+        const diff = structuralDiffSummary(r0, r1);
+        const baseMsg = `Structural comparison between ${compareIds[0]} and ${compareIds[1]}.`;
+        const evComp = {
+          result_preview:   compRows,
+          columns_returned: columnOrder,
+          filters_applied:  [
+            { column: 'experiment_id', operator: 'in', value: [compareIds[0], compareIds[1]] }
+          ],
+          comparison_ids:   compareIds
+        };
+        cleanupSupabaseExport();
+        return res.status(200).json(buildScienceContract({
+          mode:     'comparison',
+          query,
+          message:  `${baseMsg} ${diff}`,
+          evidence: evComp,
+          warnings: []
+        }));
+      } catch (ce) {
+        logger.error(`[science-routing] comparison load failed: ${ce.message}`);
+        cleanupSupabaseExport();
+        return res.status(200).json(buildScienceContract({
+          mode:     'error',
+          query,
+          message:  `Could not load lab data for comparison: ${ce.message}`,
+          evidence: { result_preview: [], columns_returned: DEFAULT_LAB_TABLE_COLUMNS },
+          warnings: [String(ce.message || ce)]
+        }));
+      }
+    }
+    if (compareIds && !dataFile) {
+      return res.status(200).json(buildScienceContract({
+        mode:     'error',
+        query,
+        message:  'No lab dataset loaded. Upload lab data or configure management API export.',
+        evidence: { result_preview: [], columns_returned: DEFAULT_LAB_TABLE_COLUMNS },
+        warnings: ['NO_LAB_DATA_FILE']
+      }));
+    }
 
     const result = await runSciencePython([
       'query',
