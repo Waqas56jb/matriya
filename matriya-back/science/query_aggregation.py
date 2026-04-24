@@ -61,6 +61,11 @@ _COMPOUND_MAX = re.compile(
     r'(?P<rank>[\w: ]+?)(?=\s+where\b|\s*$)',
     re.IGNORECASE,
 )
+_RANK_BY = re.compile(
+    r'(?:^|\s)(?:experiments?|formulations?|rows?|results?)\s+by\s+'
+    r'(?P<rank>[\w: ]+?)(?=\s+where\b|\s*$)',
+    re.IGNORECASE,
+)
 
 
 def _resolve_col_token(token: str, available_columns: list) -> str | None:
@@ -149,6 +154,24 @@ def detect_aggregation_intent(query: str, available_columns: list) -> dict:
             "column_resolution_failed": True,
             "original_query":          query,
         }
+
+    # ── SIMPLE RANKING: "experiments by adhesion" -> rank descending by column ──
+    m_rank = _RANK_BY.search(" " + q)
+    if m_rank:
+        rank_tok = m_rank.group("rank").strip()
+        rank_col = _resolve_col_token(rank_tok, available_columns)
+        if rank_col:
+            print(
+                f"[aggregation] RANK_BY column={rank_col!r} query={query!r}",
+                file=sys.stderr, flush=True,
+            )
+            return {
+                "has_agg":        True,
+                "type":           "rank_desc",
+                "column":         rank_col,
+                "n":              None,  # full list
+                "original_query": query,
+            }
 
     # ── Determine aggregation direction and N (simple / single-metric) ───────
     # If the user said "among top … by …", do not treat as simple top_n (avoids misfire).
@@ -364,7 +387,11 @@ def apply_aggregation(df: pd.DataFrame, agg_intent: dict) -> dict:
         }
 
     # ── Run aggregation ────────────────────────────────────────────────────
-    if agg_type in ("max", "top_n"):
+    if agg_type == "rank_desc":
+        result_df = work.sort_values(col, ascending=False)
+        n = len(result_df)
+        label = "ranked_desc"
+    elif agg_type in ("max", "top_n"):
         result_df = work.nlargest(n, col)
         label = "highest"
     else:
@@ -376,7 +403,9 @@ def apply_aggregation(df: pd.DataFrame, agg_intent: dict) -> dict:
     best_id    = best_row.get("experiment_id", "?") if hasattr(best_row, "get") else best_row["experiment_id"]
 
     # Human-readable summary (used by Node.js for the answer text)
-    if n == 1:
+    if agg_type == "rank_desc":
+        summary = f"Experiments ranked by {col} (highest first)."
+    elif n == 1:
         summary = f"{best_id} has the {label} {col}: {best_val}"
     else:
         entries = ", ".join(

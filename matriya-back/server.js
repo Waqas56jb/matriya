@@ -1991,6 +1991,8 @@ async function handleScienceQueryFlow(req, res, { query }) {
         agg_column: ev.agg_column,
         best_value: ev.best_value,
         best_experiment_id: ev.best_experiment_id,
+        agg_pipeline: ev.agg_pipeline || null,
+        evidence: ev,
         rows: aggRows,
         columns: ev.columns_returned || [],
         warnings: result.warnings || [],
