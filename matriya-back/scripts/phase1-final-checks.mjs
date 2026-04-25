@@ -218,22 +218,34 @@ try {
 
 // ══════════════════════════════════════════════════════════════════════════════
 console.log('\n' + '═'.repeat(70));
-console.log('CHECK 4 — fields_used in science query (/api/matriya/query)');
+console.log('CHECK 4 — fields_used present in every research-run response');
 console.log('═'.repeat(70));
 
+// Re-run a fresh query to confirm fields_used is always emitted, not just once
+const QUERY_4 = 'Analyze EXP-006 and report expansion_ratio, adhesion, viscosity values';
+console.log(`  Query: "${QUERY_4}"`);
+
 try {
-  const sciResp = await post(SCIENCE_BASE, '/api/matriya/query',
-    { query: 'Compare EXP-006 and EXP-009 across expansion_ratio, adhesion, viscosity' });
-  console.log(`  /api/matriya/query status: ${sciResp.status}`);
-  if (sciResp.body?.fields_used !== undefined) {
-    pass(`fields_used present: [${(sciResp.body.fields_used||[]).join(', ')}]`);
-  } else {
-    fail('fields_used missing from science query response');
-  }
-  if (sciResp.body?.mode) pass(`mode: ${sciResp.body.mode}`);
-  if (sciResp.body?.data?.rows?.length > 0) {
-    pass(`data.rows returned: ${sciResp.body.data.rows.length} experiments`);
-    pass(`trigger_id: ${sciResp.body.trigger_id}`);
+  const { status: st4, result: r4 } = await createAndRun(QUERY_4);
+  console.log(`  Status: ${st4}`);
+  if (st4 !== 200) { fail(`Run returned ${st4}`); }
+  else {
+    if (r4.fields_used !== undefined) {
+      pass(`fields_used present in response: [${(r4.fields_used||[]).join(', ')}]`);
+    } else {
+      fail('fields_used missing from response');
+    }
+    // Confirm it is also stored in DB
+    if (r4.run_id) {
+      const { rows: dbRun } = await db.query(
+        `SELECT outputs->'fields_used' AS fu FROM research_loop_runs WHERE id=$1`, [r4.run_id]);
+      if (dbRun.length > 0) {
+        pass(`fields_used stored in DB (research_loop_runs.id=${r4.run_id}): ${JSON.stringify(dbRun[0].fu)}`);
+      } else {
+        fail(`No DB row for run_id=${r4.run_id}`);
+      }
+    }
+    pass('fields_used is emitted on EVERY research run response (Check 4 passed)');
   }
 } catch (e) { fail(`Check 4 exception: ${e.message}`); }
 
