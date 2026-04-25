@@ -14,9 +14,10 @@
  *   tradeoff=false → "top 5 by expansion_ratio where APP:PER >= {C1_appPer}"
  * Cycle 3: built from Cycle 2 APP:PER (same logic)
  */
-import https from 'https';
+import http from 'http';
 
-const BASE_HOST = 'matriya-system-project-production.up.railway.app';
+const BASE_HOST = 'localhost';
+const BASE_PORT = 8000;
 const TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0dmVyaWZ5IiwiZXhwIjoxNzc5NjczNzA0LCJpYXQiOjE3NzcwODE3MDR9.28BbToGkQjSCeeIa9oJU2hzOtAxDHxNHCPxzKIdk7Yk';
 
 // ── HTTP helper ──────────────────────────────────────────────────────────────
@@ -24,7 +25,7 @@ function post(path, body) {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify(body);
     const opts = {
-      hostname: BASE_HOST, port: 443, path, method: 'POST',
+      hostname: BASE_HOST, port: BASE_PORT, path, method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(payload),
@@ -32,7 +33,7 @@ function post(path, body) {
       },
       timeout: 35000
     };
-    const req = https.request(opts, res => {
+    const req = http.request(opts, res => {
       let raw = '';
       res.on('data', c => { raw += c; });
       res.on('end', () => {
