@@ -1807,26 +1807,25 @@ function inferIntentFromMode(mode) {
 
 function withScienceTrace(base, {
   trigger_id,
-  intent,
-  entities,
-  missing_entities,
-  snapshots,
-  kernel_runs,
+  intent,           // internal use only — not emitted (clean contract)
+  entities,         // internal use only — not emitted
+  missing_entities, // internal use only — not emitted
+  snapshots,        // internal use only — not emitted
+  kernel_runs,      // internal use only — not emitted
   external_enrichment = null
 }) {
+  // Clean contract: ONLY mode, data, meta, repro, trigger_id, external_enrichment, constraint_graph
   const out = {
-    ...base,
+    mode:      base.mode,
+    data:      base.data,
+    meta:      base.meta,
+    repro:     base.repro,
     trigger_id,
-    intent: intent != null ? intent : inferIntentFromMode(base.mode)
   };
   // Mirror trigger_id into meta for BLOCKED responses (diagnostic contract requires it)
   if (out.meta && out.meta.blocked_reason) {
     out.meta = { ...out.meta, trigger_id };
   }
-  if (entities != null) out.entities = entities;
-  if (missing_entities != null) out.missing_entities = missing_entities;
-  if (snapshots != null) out.snapshots = snapshots;
-  if (kernel_runs != null) out.kernel_runs = kernel_runs;
   // external_enrichment: always present in every response (status:"none" when not applicable)
   out.external_enrichment = (external_enrichment && external_enrichment.status === 'attached')
     ? external_enrichment
@@ -2169,6 +2168,8 @@ function buildConstraintGraph(rows) {
   if (numericCols.length < 2) return [];
 
   const edges = [];
+  // Safeguard: track emitted pairs to prevent any bidirectional duplicates
+  const emittedPairs = new Set();
 
   // Iterate each UNORDERED pair exactly once (a < b by index) to eliminate
   // symmetric duplicates (A→B and B→A are the same correlation, not two facts).
@@ -2176,6 +2177,10 @@ function buildConstraintGraph(rows) {
     for (let b = a + 1; b < numericCols.length; b++) {
       const srcKey = numericCols[a];
       const tgtKey = numericCols[b];
+
+      // Explicit deduplication safeguard — normalised key (alphabetical order)
+      const pairKey = [srcKey, tgtKey].sort().join('|||');
+      if (emittedPairs.has(pairKey)) continue;
 
       let comoving  = 0; // sign(Δsrc) === sign(Δtgt) across pair
       let opposing  = 0; // sign(Δsrc) !== sign(Δtgt) across pair
@@ -2197,12 +2202,18 @@ function buildConstraintGraph(rows) {
       // Rule 3: minimum evidence — support >= 2 AND total >= 3
       if (support < 2 || total < 3) continue;
 
+      // Noise guard: margin must be at least 2 observations above opposition
+      // (prevents near-50/50 noisy signals from appearing as confident relations)
+      const margin = support - Math.min(comoving, opposing);
+      if (margin < 2) continue;
+
       const relation   = comoving >= opposing ? '+' : '-';
       const confidence = Math.round((support / total) * 100) / 100;
 
       // Rule 4: drop weak relations
       if (confidence < 0.6) continue;
 
+      emittedPairs.add(pairKey);
       edges.push({ source: srcKey, target: tgtKey, relation, condition: null, confidence });
     }
   }
@@ -2644,9 +2655,13 @@ async function handleScienceQueryFlow(req, res, { query }) {
       if (!Array.isArray(ev.result_preview)) ev.result_preview = [];
       const fa = ev.filters_applied || [];
       const hasFilters = Array.isArray(fa) && fa.length > 0;
-      const noMatchMode = _scienceApiMode(result.decision, ev);
+      // If query ran but found zero rows, treat as filter no-match (not error)
+      const isZeroRowResult = result.decision === 'NO_MATCHES' ||
+        (result.decision === 'INSUFFICIENT_DATA' && ev.result_preview.length === 0 &&
+          (ev.filters_applied || []).length > 0);
+      const noMatchMode = isZeroRowResult ? 'filter' : _scienceApiMode(result.decision, ev);
       let msg;
-      if (result.decision === 'NO_MATCHES' && hasFilters) {
+      if (isZeroRowResult && hasFilters) {
         msg = 'No matching results found for the given criteria.';
       } else if (result.decision === 'NO_MATCHES') {
         msg = 'No experiments matched the query. Try filter syntax such as: expansion_ratio > 25 and adhesion < 80.';
