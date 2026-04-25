@@ -226,6 +226,10 @@ export async function runLoop(sessionId, query, ragService, filterMetadata = nul
       experiment_outcome: e.experiment_outcome ?? e.status ?? null,
       formula:            e.formula ?? null
     }));
+
+    // fields_used: every metric column that has at least one non-null value — persisted to DB
+    const METRIC_FIELDS = ['expansion_ratio','adhesion','viscosity','char_quality','experiment_outcome','formula'];
+    outputs.fields_used = METRIC_FIELDS.filter(f => outputs.selected_experiments.some(e => e[f] != null));
   }
 
   const runRecord = await saveRun(sessionId, query, outputs, justifications, false, null, durationMs, opts.pre_justification_text ?? null, opts.doe_design_id ?? null);

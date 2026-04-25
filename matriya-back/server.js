@@ -1832,6 +1832,14 @@ function withScienceTrace(base, {
     : { status: 'none' };
   // constraint_graph: always present — populated from actual data co-variation, empty [] otherwise
   out.constraint_graph = buildConstraintGraph(base.data?.rows);
+  // fields_used: list of columns that have at least one non-null value in data.rows
+  if (Array.isArray(base.data?.rows) && base.data.rows.length > 0) {
+    const METRIC_FIELDS = ['expansion_ratio','adhesion','viscosity','char_quality','experiment_outcome',
+                           'formula','APP','PER','MEL','IFR','Nanoclay','APP:PER'];
+    out.fields_used = METRIC_FIELDS.filter(f => base.data.rows.some(r => r[f] != null));
+  } else {
+    out.fields_used = [];
+  }
   return out;
 }
 
@@ -2152,6 +2160,17 @@ function buildExternalEnrichment(mode, entities, rows) {
 // Fixes applied (David review):
 //   1. Symmetry removed — each unordered pair processed exactly once.
 //   2. Confidence = support / (support + counterexamples), no floor.
+/**
+ * Derive fields_used from selected_experiments — lists every column that has
+ * at least one non-null value across all experiments in the response.
+ * This tells the caller exactly which DB columns drove the decision.
+ */
+function deriveFieldsUsed(selectedExperiments) {
+  if (!Array.isArray(selectedExperiments) || selectedExperiments.length === 0) return [];
+  const METRIC_FIELDS = ['expansion_ratio','adhesion','viscosity','char_quality','experiment_outcome','formula'];
+  return METRIC_FIELDS.filter(f => selectedExperiments.some(e => e[f] != null));
+}
+
 //   3. Minimum evidence: support >= 2 AND total >= 3.
 //   4. Weak relations dropped: confidence < 0.6 excluded.
 function buildConstraintGraph(rows) {
@@ -3591,6 +3610,8 @@ app.post("/api/research/run", async (req, res) => {
     // Fetch live lab experiments from management API and inject into research loop context.
     // This connects the research session loop to real DB data (lab_experiments).
     const managementBase = settings.MATRIYA_MANAGEMENT_API_URL || '';
+    let allExps = [];
+    let labApiReachable = false;
     if (managementBase) {
       try {
         const labResp = await axios.get(`${managementBase}/api/matriya/lab-experiments-export`, {
@@ -3602,19 +3623,48 @@ app.post("/api/research/run", async (req, res) => {
           },
           timeout: 8000,
         });
-        const allExps = labResp.data?.experiments || [];
-        if (allExps.length > 0) {
-          // Select the most relevant experiments: prefer those mentioned in the query by ID,
-          // otherwise take the top 5 by most recent / highest numeric values.
-          const upperQuery = query.toUpperCase();
-          const mentioned = allExps.filter(e => e.experiment_id && upperQuery.includes(String(e.experiment_id).toUpperCase()));
-          const labExps = mentioned.length > 0 ? mentioned : allExps.slice(0, 5);
-          runOptions.labContext = { experiments: labExps };
-          logger.info(`[research/run] Injected ${labExps.length} lab experiments into research context (session=${sessionId})`);
-        }
+        allExps = labResp.data?.experiments || [];
+        labApiReachable = true;
       } catch (e) {
         logger.warn(`[research/run] Lab context fetch skipped: ${e.message}`);
       }
+    }
+
+    // ── Check 2: No-match detection ───────────────────────────────────────────
+    // Only run this check when the management API was actually reachable.
+    // If the API was unreachable (network error, 401, etc.) we do NOT block — we
+    // let the run proceed without lab context rather than false-positiving no-match.
+    const requestedIds = [...new Set(
+      (query.toUpperCase().match(/EXP-[\w-]+/g) || [])
+    )];
+    if (labApiReachable && requestedIds.length > 0) {
+      const knownIds = new Set((allExps || []).map(e => String(e.experiment_id || '').toUpperCase()));
+      const missing  = requestedIds.filter(id => !knownIds.has(id));
+      if (missing.length > 0 && missing.length === requestedIds.length) {
+        // ALL requested IDs are missing — full no-match
+        return res.status(404).json({
+          mode: 'no_match',
+          run_id: null,
+          missing_entities: missing,
+          selected_experiments: [],
+          fields_used: [],
+          meta: {
+            message: `BLOCKED: entity_not_found — ${missing.join(', ')} not found in lab_experiments`,
+            recoverable: true,
+            user_action_hint: 'Check the experiment ID and try again, or list available experiments.'
+          }
+        });
+      }
+    }
+
+    if (allExps.length > 0) {
+      // Select the most relevant experiments: prefer those mentioned in the query by ID,
+      // otherwise take the top 5 by most recent / highest numeric values.
+      const upperQuery = query.toUpperCase();
+      const mentioned = allExps.filter(e => e.experiment_id && upperQuery.includes(String(e.experiment_id).toUpperCase()));
+      const labExps = mentioned.length > 0 ? mentioned : allExps.slice(0, 5);
+      runOptions.labContext = { experiments: labExps };
+      logger.info(`[research/run] Injected ${labExps.length} lab experiments into research context (session=${sessionId})`);
     }
 
     if (use4Agents) {
@@ -3632,6 +3682,7 @@ app.post("/api/research/run", async (req, res) => {
         outputs: result.outputs,
         justifications: result.justifications,
         selected_experiments: result.outputs?.selected_experiments || [],
+        fields_used: deriveFieldsUsed(result.outputs?.selected_experiments),
         sources: Array.isArray(result.sources) ? result.sources : []
       });
     }
