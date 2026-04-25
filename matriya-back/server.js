@@ -2306,8 +2306,26 @@ async function handleScienceQueryFlow(req, res, { query }) {
         }), { intent: 'comparison', entities: compEntities, missing_entities: allMissing, snapshots: [], kernel_runs: [] });
       }
       const kernel_runs = buildKernelStageRuns(snapshots);
-      const isPartial = missing_entities.length > 0;
-      const mode = isPartial ? 'partial' : 'comparison';
+      // BLOCKED: any missing entity = hard block (comparison requires ALL entities present)
+      if (missing_entities.length > 0) {
+        const blockedMsg = `BLOCKED: entity_not_found — ${missing_entities.join(', ')} not found in Lab Manager. Comparison requires all referenced experiments to exist.`;
+        const evBlocked = {
+          result_preview:   [],
+          columns_returned: DEFAULT_LAB_TABLE_COLUMNS,
+          comparison_ids:   compEntities
+        };
+        console.log(
+          `[matriya-query] trigger_id=${trigger_id} step=blocked reason=entity_not_found missing=${missing_entities.join(',')}`
+        );
+        return sendSci(200, buildScienceContract({
+          mode:     'error',
+          query:    qStr,
+          message:  blockedMsg,
+          evidence: evBlocked,
+          warnings: missing_entities.map((id) => `missing_experiment_id:${id}`)
+        }), { intent: 'comparison', entities: compEntities, missing_entities, snapshots: [], kernel_runs: [] });
+      }
+      const mode = 'comparison';
       const evComp = {
         result_preview:   snapshots,
         columns_returned: columnOrder.length
@@ -2322,15 +2340,14 @@ async function handleScienceQueryFlow(req, res, { query }) {
       const message = buildComparisonNarration(
         compEntities, snapshots, missing_entities, structuralDiffSummary
       );
-      const w = isPartial ? missing_entities.map((id) => `missing_experiment_id:${id}`) : [];
       console.log(
         `[matriya-query] trigger_id=${trigger_id} step=kernel path=comparison mode=${mode} ` +
-        `snapshots=${snapshots.length} missing=${missing_entities.length} K→C→B→N→L=minimal`
+        `snapshots=${snapshots.length} K→C→B→N→L=minimal`
       );
-      return sendSci(200, buildScienceContract({ mode, query: qStr, message, evidence: evComp, warnings: w }), {
+      return sendSci(200, buildScienceContract({ mode, query: qStr, message, evidence: evComp, warnings: [] }), {
         intent: 'comparison',
         entities: compEntities,
-        missing_entities,
+        missing_entities: [],
         snapshots,
         kernel_runs
       });

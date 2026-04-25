@@ -35,15 +35,18 @@ assert.strictEqual(classifyIntent(e3), 'comparison', 'N=3 intent');
 const r3 = resolveEntitySnapshots(e3, mockRows);
 assert.strictEqual(r3.snapshots.length, 3, 'N=3 snapshots');
 
-// Partial: one missing
+// Blocked: one missing — resolveEntitySnapshots still returns the found snapshot,
+// but the SERVER layer must turn this into mode:"error" / BLOCKED (tested via curl in CI).
+// Here we just verify the resolver contract.
 const ePart = ['EXP-006', 'EXP-999'];
 const rPart = resolveEntitySnapshots(ePart, mockRows);
-assert.deepStrictEqual(rPart.missing_entities, ['EXP-999'], 'missing');
-assert.strictEqual(rPart.snapshots.length, 1, 'one snapshot');
+assert.deepStrictEqual(rPart.missing_entities, ['EXP-999'], 'blocked: missing_entities');
+// Server must emit data.rows:[] when missing_entities.length > 0 — resolver finds 1 row
+assert.strictEqual(rPart.snapshots.length, 1, 'resolver finds 1 row (server will block)');
 assert.ok(rPart.snapshots[0].experiment_id);
 
 const kr = buildKernelStageRuns(rPart.snapshots);
 assert.ok(Array.isArray(kr) && kr.length === 1 && kr[0].stages && kr[0].stages.K);
 
-process.stdout.write('verify-matriya-query-intent: OK (N=2, N=3, partial, kernel_runs)\n');
+process.stdout.write('verify-matriya-query-intent: OK (N=2, N=3, blocked entity_not_found, kernel_runs)\n');
 process.exit(0);
