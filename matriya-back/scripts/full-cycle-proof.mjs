@@ -79,7 +79,7 @@ console.log('\n' + '═'.repeat(70));
 console.log('STEP 2 — Run Full Research Cycle (4-agent loop + lab experiments)');
 console.log('═'.repeat(70));
 
-const QUERY = 'Compare EXP-006 and EXP-009 expansion ratio and adhesion. Which experiment is better for production?';
+const QUERY = 'Compare EXP-004 and EXP-007 across expansion_ratio, adhesion, and viscosity. Which should be used for high-adhesion production requirements?';
 console.log(`Query: "${QUERY}"`);
 console.log('Running... (may take 15-30s for LLM agents)');
 
