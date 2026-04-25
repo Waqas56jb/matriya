@@ -2150,13 +2150,16 @@ function buildExternalEnrichment(mode, entities, rows) {
 
 // ── CONSTRAINT GRAPH (David Task 6 — strictly additive) ─────────────────────
 // Purely data-driven: no predefined parameter pairs, no domain knowledge.
-// Relations are emitted only when ≥ 2 independent pairwise observations support
-// the same direction. Confidence = support / (support + counterexamples).
+// Fixes applied (David review):
+//   1. Symmetry removed — each unordered pair processed exactly once.
+//   2. Confidence = support / (support + counterexamples), no floor.
+//   3. Minimum evidence: support >= 2 AND total >= 3.
+//   4. Weak relations dropped: confidence < 0.6 excluded.
 function buildConstraintGraph(rows) {
-  // Need ≥ 3 rows to produce 2+ independent pairwise observations (C(3,2)=3).
+  // Need ≥ 3 rows → C(3,2)=3 pairwise observations minimum.
   if (!Array.isArray(rows) || rows.length < 3) return [];
 
-  // Discover all numeric columns that have actual variation in the data.
+  // Discover all numeric columns with actual variation in this dataset.
   const allKeys = Object.keys(rows[0] || {});
   const numericCols = allKeys.filter(key => {
     const vals = rows.map(r => parseFloat(r[key])).filter(v => !isNaN(v));
@@ -2167,32 +2170,38 @@ function buildConstraintGraph(rows) {
 
   const edges = [];
 
-  // Test every ordered (source, target) pair of distinct numeric columns.
-  for (const srcKey of numericCols) {
-    for (const tgtKey of numericCols) {
-      if (srcKey === tgtKey) continue;
+  // Iterate each UNORDERED pair exactly once (a < b by index) to eliminate
+  // symmetric duplicates (A→B and B→A are the same correlation, not two facts).
+  for (let a = 0; a < numericCols.length; a++) {
+    for (let b = a + 1; b < numericCols.length; b++) {
+      const srcKey = numericCols[a];
+      const tgtKey = numericCols[b];
 
-      let support = 0;
-      let counterExamples = 0;
+      let comoving  = 0; // sign(Δsrc) === sign(Δtgt) across pair
+      let opposing  = 0; // sign(Δsrc) !== sign(Δtgt) across pair
 
-      // All pairwise row combinations = independent observations.
+      // All C(n,2) pairwise row combinations = independent observations.
       for (let i = 0; i < rows.length; i++) {
         for (let j = i + 1; j < rows.length; j++) {
           const ds = parseFloat(rows[j][srcKey]) - parseFloat(rows[i][srcKey]);
           const dt = parseFloat(rows[j][tgtKey]) - parseFloat(rows[i][tgtKey]);
           if (isNaN(ds) || isNaN(dt) || ds === 0 || dt === 0) continue;
-          if (Math.sign(ds) === Math.sign(dt)) support++;
-          else counterExamples++;
+          if (Math.sign(ds) === Math.sign(dt)) comoving++;
+          else opposing++;
         }
       }
 
-      // Emit edge only when the dominant direction has ≥ 2 independent observations.
-      const dominant = Math.max(support, counterExamples);
-      if (dominant < 2) continue;
+      const total   = comoving + opposing;
+      const support = Math.max(comoving, opposing);
 
-      const total = support + counterExamples;
-      const relation   = support >= counterExamples ? '+' : '-';
-      const confidence = Math.round((dominant / total) * 100) / 100;
+      // Rule 3: minimum evidence — support >= 2 AND total >= 3
+      if (support < 2 || total < 3) continue;
+
+      const relation   = comoving >= opposing ? '+' : '-';
+      const confidence = Math.round((support / total) * 100) / 100;
+
+      // Rule 4: drop weak relations
+      if (confidence < 0.6) continue;
 
       edges.push({ source: srcKey, target: tgtKey, relation, condition: null, confidence });
     }
