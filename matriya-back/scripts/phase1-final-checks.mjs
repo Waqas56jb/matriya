@@ -9,12 +9,13 @@
  * Run: node scripts/phase1-final-checks.mjs
  */
 import pg from 'pg';
+import http from 'http';
 import https from 'https';
 
 const { Client } = pg;
 
-const SCIENCE_BASE = 'https://matriya-system-project-production.up.railway.app';
-const MGMT_BASE    = 'https://steadfast-success-production-02d1.up.railway.app';
+const SCIENCE_BASE = process.env.SCIENCE_BASE || 'https://matriya-system-project-production.up.railway.app';
+const MGMT_BASE    = process.env.MGMT_BASE    || 'https://steadfast-success-production-02d1.up.railway.app';
 const MGMT_KEY     = 'shared_secret_matches_matriya_back';
 const PROJECT_ID   = '48738878-a1ce-408b-bed2-66b80abc7e3f';
 
@@ -22,9 +23,10 @@ const PROJECT_ID   = '48738878-a1ce-408b-bed2-66b80abc7e3f';
 function request(method, urlStr, body = null, extraHeaders = {}) {
   return new Promise((resolve, reject) => {
     const u = new URL(urlStr);
+    const transport = u.protocol === 'https:' ? https : http;
     const payload = body ? JSON.stringify(body) : null;
     const opts = {
-      hostname: u.hostname, port: 443, path: u.pathname + u.search,
+      hostname: u.hostname, port: u.port || (u.protocol === 'https:' ? 443 : 80), path: u.pathname + u.search,
       method,
       headers: {
         'Accept': 'application/json',
@@ -32,7 +34,7 @@ function request(method, urlStr, body = null, extraHeaders = {}) {
         ...extraHeaders
       }
     };
-    const req = https.request(opts, r => {
+    const req = transport.request(opts, r => {
       let d = ''; r.on('data', c => d += c);
       r.on('end', () => { try { resolve({ status: r.statusCode, body: JSON.parse(d) }); } catch { resolve({ status: r.statusCode, body: d }); } });
     });
