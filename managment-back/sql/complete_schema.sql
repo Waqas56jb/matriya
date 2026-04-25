@@ -92,13 +92,15 @@ CREATE TABLE IF NOT EXISTS public.project_emails (
 CREATE TABLE IF NOT EXISTS public.project_chat_messages (
   id          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id  text        NOT NULL,
-  sender      text        NOT NULL,
-  message     text        NOT NULL,
-  role        text        NOT NULL DEFAULT 'user',
-  created_at  timestamptz NOT NULL DEFAULT now(),
+  -- canonical fields (written and read by app)
   user_id     integer,
   username    text        NOT NULL DEFAULT '',
-  body        text        NOT NULL DEFAULT ''
+  body        text        NOT NULL DEFAULT '',
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  -- legacy fields kept for backward compat (app never writes/reads these)
+  sender      text        NOT NULL DEFAULT '',
+  message     text        NOT NULL DEFAULT '',
+  role        text        NOT NULL DEFAULT 'user'
 );
 
 -- ─────────────────────────────────────────────
