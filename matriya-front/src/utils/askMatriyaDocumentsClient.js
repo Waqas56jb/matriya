@@ -139,6 +139,85 @@ export async function runAskMatriyaDocumentsQuery(message, filenames) {
     return { reply, sources };
 }
 
+/**
+ * Call the validated decision pipeline for lab / science queries.
+ *
+ * Two-step flow:
+ *   1. POST /research/session  → session_id
+ *   2. POST /api/research/run  → decision result (4-agent loop)
+ *
+ * Handles all three outcome modes:
+ *   • result      — synthesis + fields_used + selected experiments
+ *   • no_match    — one or more requested IDs are not in lab_experiments
+ *   • no_entities — query is open-ended; no specific experiment IDs named
+ *
+ * @param {string} message
+ * @returns {Promise<{
+ *   mode: string,
+ *   reply: string,
+ *   fieldsUsed: string[],
+ *   runId: string|null,
+ *   experiments: object[],
+ *   missingEntities: string[],
+ *   foundEntities: string[],
+ *   metaHint: string|null
+ * }>}
+ */
+export async function runResearchDecisionQuery(message) {
+    // Step 1 – create a fresh research session (Bearer token forwarded via api interceptor)
+    const sessRes = await api.post('/research/session', {}, { timeout: 15000 });
+    const sessionId = sessRes.data?.session_id;
+    if (!sessionId) {
+        throw new Error('Failed to create research session — session_id missing in response');
+    }
+
+    // Step 2 – run the 4-agent decision loop
+    let runRes;
+    try {
+        runRes = await api.post(
+            '/api/research/run',
+            { session_id: sessionId, query: message },
+            { timeout: 120000 }
+        );
+    } catch (err) {
+        // Boundary modes (no_match / no_entities) arrive as HTTP 400/404 — treat as structured result, not UI error
+        const data = err.response?.data || {};
+        const mode = data.mode || 'error';
+        return {
+            mode,
+            reply: data.meta?.message || data.error || 'The decision pipeline could not process this query.',
+            fieldsUsed: Array.isArray(data.fields_used) ? data.fields_used : [],
+            runId: null,
+            experiments: Array.isArray(data.selected_experiments) ? data.selected_experiments : [],
+            missingEntities: Array.isArray(data.missing_entities) ? data.missing_entities : [],
+            foundEntities: Array.isArray(data.found_entities) ? data.found_entities : [],
+            metaHint: typeof data.meta?.user_action_hint === 'string' ? data.meta.user_action_hint : null,
+        };
+    }
+
+    const body = runRes.data || {};
+    const synthesis = body.outputs?.synthesis || body.outputs?.analysis || '';
+    const fieldsUsed = Array.isArray(body.fields_used) ? body.fields_used : [];
+    const experiments = Array.isArray(body.selected_experiments)
+        ? body.selected_experiments
+        : (Array.isArray(body.outputs?.selected_experiments) ? body.outputs.selected_experiments : []);
+
+    if (process.env.NODE_ENV === 'development') {
+        console.log('[decision-pipeline] result', { mode: 'result', runId: body.run_id, fieldsUsed, experimentCount: experiments.length });
+    }
+
+    return {
+        mode: 'result',
+        reply: synthesis,
+        fieldsUsed,
+        runId: body.run_id || null,
+        experiments,
+        missingEntities: [],
+        foundEntities: [],
+        metaHint: null,
+    };
+}
+
 /** For dropdown UI only — same helper as Ask tab; does not affect /ask-matriya payload order. */
 export function sortFilenamesForAskMatriyaDisplay(filenames) {
     const list = (Array.isArray(filenames) ? filenames : []).filter((f) => typeof f === 'string' && f.trim());
