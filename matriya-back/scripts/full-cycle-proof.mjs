@@ -127,8 +127,8 @@ console.log(`  query            : ${lr.query}`);
 console.log(`  duration_ms      : ${lr.duration_ms}`);
 console.log(`  created_at       : ${lr.created_at}`);
 console.log(`  linked_experiments: ${JSON.stringify(lr.linked_experiments)}`);
-console.log(`  analysis (first 200): ${String(lr.analysis_snippet || '').slice(0, 200)}`);
-console.log(`  synthesis (first 200): ${String(lr.synthesis_snippet || '').slice(0, 200)}`);
+console.log(`  analysis (first 300): ${String(lr.analysis_snippet || '').slice(0, 300)}`);
+console.log(`  synthesis (decision): ${String(lr.synthesis_snippet || '').slice(0, 600)}`);
 
 // ── STEP 4: Join proof — full chain in one query ───────────────────────────────
 console.log('\n' + '═'.repeat(70));
