@@ -1831,6 +1831,8 @@ function withScienceTrace(base, {
   out.external_enrichment = (external_enrichment && external_enrichment.status === 'attached')
     ? external_enrichment
     : { status: 'none' };
+  // constraint_graph: always present — populated from actual data co-variation, empty [] otherwise
+  out.constraint_graph = buildConstraintGraph(base.data?.rows);
   return out;
 }
 
@@ -2143,6 +2145,77 @@ function buildExternalEnrichment(mode, entities, rows) {
     };
   }
   return { status: 'none' };
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── CONSTRAINT GRAPH (David Task 6 — strictly additive) ─────────────────────
+// Relations emerge from observed co-variation patterns in actual experiment rows.
+// No hardcoded rules — all edges derived from data deltas.
+const CONSTRAINT_PARAM_PAIRS = [
+  // [rawKey_in_row, rawKey_in_row, displaySource, displayTarget]
+  ['APP:PER', 'expansion_ratio', 'APP_PER',   'expansion'],
+  ['APP:PER', 'adhesion',        'APP_PER',   'adhesion'],
+  ['viscosity','adhesion',       'viscosity', 'adhesion'],
+  ['viscosity','expansion_ratio','viscosity', 'expansion'],
+  ['Nanoclay', 'adhesion',       'nanoclay',  'adhesion'],
+  ['Nanoclay', 'expansion_ratio','nanoclay',  'expansion'],
+  ['MEL',      'expansion_ratio','MEL',       'expansion'],
+  ['PER',      'expansion_ratio','PER',       'expansion'],
+  ['APP',      'expansion_ratio','APP',       'expansion'],
+];
+
+function buildConstraintGraph(rows) {
+  if (!Array.isArray(rows) || rows.length < 2) return [];
+
+  const edges = [];
+
+  for (const [srcKey, tgtKey, srcLabel, tgtLabel] of CONSTRAINT_PARAM_PAIRS) {
+    // Extract numeric (source, target) pairs from actual rows
+    const pairs = rows
+      .map(r => [parseFloat(r[srcKey]), parseFloat(r[tgtKey])])
+      .filter(([s, t]) => !isNaN(s) && !isNaN(t));
+
+    if (pairs.length < 2) continue;
+
+    // Count co-varying vs counter-varying transitions across sorted-by-source pairs
+    const sorted = [...pairs].sort((a, b) => a[0] - b[0]);
+    let pos = 0, neg = 0;
+    for (let i = 1; i < sorted.length; i++) {
+      const ds = sorted[i][0] - sorted[i - 1][0];
+      const dt = sorted[i][1] - sorted[i - 1][1];
+      if (ds === 0 || dt === 0) continue;
+      if (Math.sign(ds) === Math.sign(dt)) pos++;
+      else neg++;
+    }
+    const total = pos + neg;
+    if (total === 0) continue;
+
+    const relation   = pos >= neg ? '+' : '-';
+    const agreement  = Math.max(pos, neg) / total;
+    // Confidence: 0.5 base + up to 0.35 from agreement ratio, capped 0.85
+    const confidence = Math.round(Math.min(0.85, 0.5 + agreement * 0.35) * 100) / 100;
+
+    // Derive condition from observed data range (data-driven, not hardcoded)
+    let condition = null;
+    if (srcKey === 'viscosity') {
+      const srcVals = pairs.map(([s]) => s);
+      const midpoint = Math.round((Math.min(...srcVals) + Math.max(...srcVals)) / 2);
+      condition = relation === '-' ? `${srcKey} > ${midpoint}` : `${srcKey} < ${midpoint}`;
+    } else if (srcKey === 'Nanoclay') {
+      const srcVals = pairs.map(([s]) => s);
+      const avgViscosity = rows
+        .map(r => parseFloat(r['viscosity']))
+        .filter(v => !isNaN(v))
+        .reduce((a, b, _, arr) => a + b / arr.length, 0);
+      if (avgViscosity > 0) {
+        condition = `viscosity < ${Math.round(avgViscosity * 1.1)}`;
+      }
+    }
+
+    edges.push({ source: srcLabel, target: tgtLabel, relation, condition, confidence });
+  }
+
+  return edges;
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
