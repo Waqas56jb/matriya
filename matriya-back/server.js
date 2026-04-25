@@ -3630,27 +3630,65 @@ app.post("/api/research/run", async (req, res) => {
       }
     }
 
-    // ── Check 2: No-match detection ───────────────────────────────────────────
-    // Only run this check when the management API was actually reachable.
-    // If the API was unreachable (network error, 401, etc.) we do NOT block — we
-    // let the run proceed without lab context rather than false-positiving no-match.
+    // ── Boundary check A: Open-ended query (no entity IDs) ───────────────────
+    // Queries that ask for a "best" experiment without naming any specific IDs
+    // are ambiguous and cannot be answered deterministically — return no_entities.
+    // This prevents the agents from hallucinating a winner out of thin air.
     const requestedIds = [...new Set(
       (query.toUpperCase().match(/EXP-[\w-]+/g) || [])
     )];
+    const OPEN_ENDED_PATTERNS = [
+      /which\s+experiment\s+is\s+best/i,
+      /what\s+is\s+the\s+best\s+experiment/i,
+      /\bbest\s+experiment\b/i,
+      /\btop\s+experiment\b/i,
+      /\boptimal\s+experiment\b/i,
+      /\brecommend\s+an?\s+experiment\b/i,
+      /which\s+one\s+should\s+i\s+use/i,
+      /\bwhich\s+experiment\b(?!.*\bEXP-)/i,
+      // Hebrew equivalents
+      /איזה\s+ניסוי\s+טוב\s+יותר/,
+      /מהו\s+הניסוי\s+הטוב/,
+      /הניסוי\s+הטוב\s+ביותר/,
+    ];
+    if (requestedIds.length === 0 && OPEN_ENDED_PATTERNS.some(p => p.test(query))) {
+      return res.status(400).json({
+        mode: 'no_entities',
+        run_id: null,
+        missing_entities: [],
+        selected_experiments: [],
+        fields_used: [],
+        meta: {
+          message: 'BLOCKED: no_entities — query does not reference any specific experiment IDs. Please name the experiments to compare (e.g. EXP-006, EXP-009).',
+          recoverable: true,
+          limitation_type: 'no_entities',
+          user_action_hint: 'Specify experiment IDs to compare, e.g. "Compare EXP-006 and EXP-009 across expansion_ratio."'
+        }
+      });
+    }
+
+    // ── Boundary check B: No-match / partial-match detection ─────────────────
+    // Only runs when the management API was reachable (avoid false-positive on 401).
+    // Fires when ANY requested experiment ID is missing — even if others exist.
+    // Partial comparisons (e.g. EXP-006 vs EXP-999) must be blocked entirely to
+    // prevent the system from answering with incomplete data.
     if (labApiReachable && requestedIds.length > 0) {
       const knownIds = new Set((allExps || []).map(e => String(e.experiment_id || '').toUpperCase()));
       const missing  = requestedIds.filter(id => !knownIds.has(id));
-      if (missing.length > 0 && missing.length === requestedIds.length) {
-        // ALL requested IDs are missing — full no-match
+      if (missing.length > 0) {
+        // ANY requested IDs are missing — full block, no partial answer
+        const found = requestedIds.filter(id => knownIds.has(id));
         return res.status(404).json({
           mode: 'no_match',
           run_id: null,
           missing_entities: missing,
+          found_entities: found,
           selected_experiments: [],
           fields_used: [],
           meta: {
             message: `BLOCKED: entity_not_found — ${missing.join(', ')} not found in lab_experiments`,
             recoverable: true,
+            limitation_type: missing.length === requestedIds.length ? 'all_missing' : 'partial_missing',
             user_action_hint: 'Check the experiment ID and try again, or list available experiments.'
           }
         });
