@@ -3588,6 +3588,35 @@ app.post("/api/research/run", async (req, res) => {
     if (preJustification != null && typeof preJustification === 'string') runOptions.pre_justification_text = preJustification.trim() || null;
     if (doeDesignId != null) runOptions.doe_design_id = parseInt(doeDesignId, 10) || null;
 
+    // Fetch live lab experiments from management API and inject into research loop context.
+    // This connects the research session loop to real DB data (lab_experiments).
+    const managementBase = settings.MATRIYA_MANAGEMENT_API_URL || '';
+    if (managementBase) {
+      try {
+        const labResp = await axios.get(`${managementBase}/api/matriya/lab-experiments-export`, {
+          headers: {
+            'Accept': 'application/json',
+            ...(settings.MATRIYA_MANAGEMENT_MATERIALS_KEY
+              ? { 'X-Matriya-Materials-Key': settings.MATRIYA_MANAGEMENT_MATERIALS_KEY }
+              : {}),
+          },
+          timeout: 8000,
+        });
+        const allExps = labResp.data?.experiments || [];
+        if (allExps.length > 0) {
+          // Select the most relevant experiments: prefer those mentioned in the query by ID,
+          // otherwise take the top 5 by most recent / highest numeric values.
+          const upperQuery = query.toUpperCase();
+          const mentioned = allExps.filter(e => e.experiment_id && upperQuery.includes(String(e.experiment_id).toUpperCase()));
+          const labExps = mentioned.length > 0 ? mentioned : allExps.slice(0, 5);
+          runOptions.labContext = { experiments: labExps };
+          logger.info(`[research/run] Injected ${labExps.length} lab experiments into research context (session=${sessionId})`);
+        }
+      } catch (e) {
+        logger.warn(`[research/run] Lab context fetch skipped: ${e.message}`);
+      }
+    }
+
     if (use4Agents) {
       const prev = researchRunLocks.get(sessionId) || Promise.resolve();
       const runPromise = prev
@@ -3602,6 +3631,7 @@ app.post("/api/research/run", async (req, res) => {
         run_id: result.run_id,
         outputs: result.outputs,
         justifications: result.justifications,
+        selected_experiments: result.outputs?.selected_experiments || [],
         sources: Array.isArray(result.sources) ? result.sources : []
       });
     }
@@ -3632,9 +3662,10 @@ app.post("/research/session", async (req, res) => {
   }
   const user = await getCurrentUser(req);
   const userId = user?.id ?? null;
+  const projectId = req.body?.project_id || null;
   try {
-    const { session } = await getOrCreateSession(null, userId);
-    return res.json({ session_id: session.id, completed_stages: session.completed_stages || [] });
+    const { session } = await getOrCreateSession(null, userId, projectId);
+    return res.json({ session_id: session.id, project_id: session.project_id || null, completed_stages: session.completed_stages || [] });
   } catch (e) {
     logger.error(`Create research session error: ${e.message}`);
     const isDbError = /relation|does not exist|research_sessions/i.test(String(e.message));

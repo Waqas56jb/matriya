@@ -4,7 +4,7 @@
  * Justification labels/descriptions come from justification templates when available.
  */
 import logger from './logger.js';
-import { ResearchLoopRun } from './database.js';
+import { ResearchLoopRun, sequelize } from './database.js';
 import { getJustificationDisplay } from './justificationTemplates.js';
 import { evidenceFromSearchResults } from './lib/openaiFileSearchMatriya.js';
 
@@ -63,7 +63,9 @@ async function runAgent(agentName, query, previousOutput, ragService, ragContext
  * @param {string} query - User query
  * @param {object} ragService - RAG service (has llmService, generateAnswer)
  * @param {object|null} filterMetadata - Optional { filename } to restrict RAG to one file
- * @param {object|null} runOptions - Optional { pre_justification_text, doe_design_id }
+ * @param {object|null} runOptions - Optional { pre_justification_text, doe_design_id, labContext }
+ *   labContext: { experiments: [{experiment_id, expansion_ratio, adhesion, ...}] }
+ *   When provided, experiment data is injected into agent context and stored in outputs.selected_experiments.
  * @returns {Promise<{ run_id, outputs, justifications, error? }>}
  */
 export async function runLoop(sessionId, query, ragService, filterMetadata = null, runOptions = null) {
@@ -74,6 +76,10 @@ export async function runLoop(sessionId, query, ragService, filterMetadata = nul
   let previousOutput = null;
   let ragContext = null;
   let ragEvidenceSources = [];
+
+  // Extract labContext from runOptions (pre-fetched lab experiments to inject into agent context)
+  const labContext = runOptions?.labContext || null;
+  const selectedExperiments = labContext?.experiments || [];
 
   // When searching a single file, use fewer chunks; when no filter or multiple filenames (project scope), use more
   const filenamesList =
@@ -125,6 +131,18 @@ export async function runLoop(sessionId, query, ragService, filterMetadata = nul
     logger.warn(`RAG context for research step: ${e.message}`);
   }
 
+  // Inject pre-fetched lab experiments directly into agent context (enriches RAG with live DB data)
+  if (selectedExperiments.length > 0) {
+    const labLines = selectedExperiments.map(e => {
+      const fields = ['experiment_id','formula','expansion_ratio','adhesion','viscosity','char_quality','status']
+        .filter(k => e[k] != null)
+        .map(k => `${k}=${e[k]}`).join(' | ');
+      return `  ${fields}`;
+    }).join('\n');
+    const labBlock = `\n\nLab Experiment Data (live from DB — use this as ground truth):\n${labLines}`;
+    ragContext = (ragContext || '') + labBlock;
+  }
+
   for (const agentName of AGENT_ORDER) {
     const { output, error } = await runAgent(
       agentName,
@@ -161,7 +179,43 @@ export async function runLoop(sessionId, query, ragService, filterMetadata = nul
 
   const durationMs = Date.now() - startMs;
   const opts = runOptions && typeof runOptions === 'object' ? runOptions : {};
+
+  // Embed selected experiments into outputs so they are stored in research_loop_runs.outputs (JSONB)
+  if (selectedExperiments.length > 0) {
+    outputs.selected_experiments = selectedExperiments.map(e => ({
+      experiment_id: e.experiment_id,
+      expansion_ratio: e.expansion_ratio ?? null,
+      adhesion: e.adhesion ?? null,
+      viscosity: e.viscosity ?? null,
+      char_quality: e.char_quality ?? null,
+      status: e.status ?? null,
+      formula: e.formula ?? null
+    }));
+  }
+
   const runRecord = await saveRun(sessionId, query, outputs, justifications, false, null, durationMs, opts.pre_justification_text ?? null, opts.doe_design_id ?? null);
+
+  // Write research_session_id back into lab_experiments for each selected experiment.
+  // This closes the loop: lab_experiments.research_session_id → research_sessions.id
+  if (selectedExperiments.length > 0 && sequelize) {
+    try {
+      const expIds = selectedExperiments.map(e => e.experiment_id).filter(Boolean);
+      if (expIds.length > 0) {
+        // Build placeholders manually — Sequelize doesn't expand arrays in ANY(:param)
+        const placeholders = expIds.map((_, i) => `:eid${i}`).join(', ');
+        const replacements = { sessionId };
+        expIds.forEach((id, i) => { replacements[`eid${i}`] = id; });
+        await sequelize.query(
+          `UPDATE lab_experiments SET research_session_id = :sessionId WHERE experiment_id IN (${placeholders})`,
+          { replacements }
+        );
+        logger.info(`[researchLoop] Wrote research_session_id=${sessionId} to lab_experiments: ${expIds.join(', ')}`);
+      }
+    } catch (e) {
+      logger.warn(`[researchLoop] Could not update lab_experiments.research_session_id: ${e.message}`);
+    }
+  }
+
   return {
     run_id: runRecord?.id ?? null,
     outputs,

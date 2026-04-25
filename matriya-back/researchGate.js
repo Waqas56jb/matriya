@@ -99,7 +99,7 @@ export async function getSession(sessionId) {
  * Create a new research session (only via POST /research/session).
  * Returns { session, completed_stages }.
  */
-export async function getOrCreateSession(sessionId, userId = null) {
+export async function getOrCreateSession(sessionId, userId = null, projectId = null) {
   if (!ResearchSession) {
     throw new Error('ResearchSession model not available');
   }
@@ -107,10 +107,9 @@ export async function getOrCreateSession(sessionId, userId = null) {
     const existing = await getSession(sessionId);
     if (existing) return existing;
   }
-  const session = await ResearchSession.create({
-    user_id: userId,
-    completed_stages: []
-  });
+  const createData = { user_id: userId, completed_stages: [] };
+  if (projectId) createData.project_id = projectId;
+  const session = await ResearchSession.create(createData);
   return { session, completed_stages: [] };
 }
 
