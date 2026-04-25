@@ -2240,6 +2240,32 @@ function buildAskMatriyaLlmContract({ message, text }) {
   };
 }
 
+/**
+ * Returns true for dump-all queries that have no specific filter condition,
+ * no EXP entity reference, and no aggregation/ranking intent.
+ * These are blocked with BLOCKED: no_route_matched.
+ *
+ * Examples blocked:  "list all formulations", "show all experiments", "get all"
+ * Examples allowed:  "list all experiments with expansion_ratio > 20"
+ *                    "show all status=PASS", "show all EXP-006"
+ */
+function isUnfilteredDumpQuery(query) {
+  const q = String(query || '').toLowerCase().trim();
+  if (!q) return false;
+  if (!/\b(show|list|get|fetch|find|display)\s+all\b/.test(q)) return false;
+  // Has a numeric operator → real filter, pass through
+  if (/[><]=?|\bbetween\b|\bgreater\b|\bless\b|\babove\b|\bbelow\b|\bat least\b|\bat most\b|\bmore than\b|\bhigher\b|\blower\b/.test(q)) return false;
+  // Has an equality filter → real filter, pass through
+  if (/=/.test(q)) return false;
+  // Has a specific entity ID → pass through
+  if (/\bEXP-[\dA-Z]+\b/i.test(q)) return false;
+  // Has aggregation/ranking intent → pass through
+  if (/\b(highest|lowest|top|bottom|maximum|minimum|best|worst|ranking|rank)\b/.test(q)) return false;
+  // Has a status/field-specific condition word → pass through
+  if (/\b(where|with|having|status|pass|fail|partial|validated|char)\b/.test(q)) return false;
+  return true;
+}
+
 async function handleScienceQueryFlow(req, res, { query }) {
   const trigger_id = randomUUID();
   res.setHeader('X-Matriya-Trigger-Id', trigger_id);
@@ -2366,6 +2392,19 @@ async function handleScienceQueryFlow(req, res, { query }) {
       console.log(`[LAB PIPELINE] trigger_id=${trigger_id} step=data_file_fail no CSV/Excel — Python path may fail`);
     }
     // ────────────────────────────────────────────────────────────────────────
+
+    // BLOCKED: no_route_matched — reject vague dump-all queries that have no
+    // filter condition, no EXP entity, and no aggregation intent.
+    if (isUnfilteredDumpQuery(qStr)) {
+      console.log(`[matriya-query] trigger_id=${trigger_id} step=blocked reason=no_route_matched query="${qStr}"`);
+      return sendSci(200, buildScienceContract({
+        mode:     'error',
+        query:    qStr,
+        message:  'BLOCKED: no_route_matched — query is too vague. Use a specific filter (e.g. expansion_ratio > 20), entity reference (EXP-XXX), or aggregation keyword (highest / lowest).',
+        evidence: { result_preview: [], columns_returned: DEFAULT_LAB_TABLE_COLUMNS },
+        warnings: ['BLOCKED_NO_ROUTE_MATCHED']
+      }), { intent: 'blocked' });
+    }
 
     const result = await runSciencePython([
       'query',
