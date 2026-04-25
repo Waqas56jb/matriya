@@ -2101,7 +2101,8 @@ function buildScienceContract({
   const rows = Array.isArray(ev.result_preview) ? ev.result_preview : [];
   const n = rows.length;
   const fa = ev.filters_applied;
-  const filtersApplied = Array.isArray(fa) && fa.length > 0;
+  const isEntityLookup = mode === 'comparison' || mode === 'partial';
+  const filtersApplied = !isEntityLookup && Array.isArray(fa) && fa.length > 0;
 
   let cols = Array.isArray(ev.columns_returned) && ev.columns_returned.length
     ? ev.columns_returned
