@@ -95,7 +95,10 @@ CREATE TABLE IF NOT EXISTS public.project_chat_messages (
   sender      text        NOT NULL,
   message     text        NOT NULL,
   role        text        NOT NULL DEFAULT 'user',
-  created_at  timestamptz NOT NULL DEFAULT now()
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  user_id     integer,
+  username    text        NOT NULL DEFAULT '',
+  body        text        NOT NULL DEFAULT ''
 );
 
 -- ─────────────────────────────────────────────
