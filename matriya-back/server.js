@@ -1266,7 +1266,10 @@ app.get("/ask-matriya", (req, res) => {
 app.post('/api/matriya/query', requireAuth, async (req, res) => {
   const q = String(req.body?.query ?? '').trim();
   if (!q) {
-    return res.status(400).json({ error: 'query is required' });
+    return res.status(200).json(withScienceTrace(
+      buildScienceContract({ mode: 'error', query: '', message: 'BLOCKED: parse_failed — empty or missing query.', evidence: { result_preview: [], columns_returned: [] }, warnings: ['BLOCKED_PARSE_FAILED'] }),
+      { trigger_id: randomUUID(), intent: 'blocked' }
+    ));
   }
   if (!isScienceQueryQuestion(q)) {
     return res.status(400).json({ error: 'not_a_lab_query', message: 'Use lab/EXP-*/filter syntax or POST /ask-matriya for documents.' });
@@ -1277,7 +1280,10 @@ app.post('/api/matriya/query', requireAuth, async (req, res) => {
 app.post("/ask-matriya", requireAuth, askMatriyaMulter, async (req, res) => {
   const message = (req.body?.message ?? '').trim();
   if (!message) {
-    return res.status(400).json({ error: "message is required" });
+    return res.status(200).json(withScienceTrace(
+      buildScienceContract({ mode: 'error', query: '', message: 'BLOCKED: parse_failed — empty or missing query.', evidence: { result_preview: [], columns_returned: [] }, warnings: ['BLOCKED_PARSE_FAILED'] }),
+      { trigger_id: randomUUID(), intent: 'blocked' }
+    ));
   }
 
   // ── DEBUG LOGGING — full request lifecycle (David) ───────────────────────
