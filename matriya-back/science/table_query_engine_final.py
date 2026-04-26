@@ -768,10 +768,7 @@ def execute_query(df: pd.DataFrame, parsed: dict) -> dict:
             }
             print(f"[DEBUG] AFTER RANKING rows={len(result_df)}", flush=True)
             working_df = result_df.copy()
-            print(
-                f"[DEBUG] PIPELINE INPUT TO AGG rows={len(working_df)}",
-                flush=True,
-            )
+            print(f"[DEBUG] PASS TO AGG rows={len(working_df)}", flush=True)
 
     # Data passed into aggregation: ranked subset when we ranked, else post-filter
     agg_in = working_df if working_df is not None else result_df
@@ -802,7 +799,7 @@ def execute_query(df: pd.DataFrame, parsed: dict) -> dict:
                         "applied_on":            "ranked_result" if rank_meta else "filtered_result",
                         "best_row":              best_row.to_dict(orient="records"),
                     }
-                    result_df = best_row   # narrow to the single best row
+                    # result_df = best_row  # keep N-row subset for preview; not narrowed to a single row here
 
     matched = len(result_df)
     total = len(df)

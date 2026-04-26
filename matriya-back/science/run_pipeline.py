@@ -243,10 +243,10 @@ def cmd_query(args):
                   file=_sys.stderr, flush=True)
             _parsed_for_agg["defer_final_aggregation"] = True
             _filter_result = execute_query(df, _parsed_for_agg)
-            _agg_df = _filter_result.get("ranked_working_df")
-            if _agg_df is None or (hasattr(_agg_df, "__len__") and len(_agg_df) == 0):
-                _agg_df = _filter_result.get("result_df")
-            if _agg_df is None or len(_agg_df) == 0:
+            working_df = _filter_result.get("ranked_working_df")
+            if working_df is None or (hasattr(working_df, "__len__") and len(working_df) == 0):
+                working_df = _filter_result.get("result_df")
+            if working_df is None or len(working_df) == 0:
                 if agg_intent.get("compound"):
                     print("[aggregation] compound — filter returned 0 rows; NO_MATCHES (no full-df fallback)",
                           file=_sys.stderr, flush=True)
@@ -286,9 +286,14 @@ def cmd_query(args):
             # Pure aggregation query — use the full dataset directly
             print("[aggregation] no filters — aggregating on full df",
                   file=_sys.stderr, flush=True)
-            _agg_df = df
+            working_df = df
 
-        result = apply_aggregation(_agg_df, agg_intent)
+        print(
+            f"[CRITICAL DEBUG] AGG INPUT SIZE = "
+            f"{len(working_df) if 'working_df' in locals() else len(df)}",
+            flush=True,
+        )
+        result = apply_aggregation(working_df, agg_intent)
         result["query"]            = query
         result["parse_confidence"] = "HIGH"
         result["computed_columns"] = adapted.get("computed_columns", [])
