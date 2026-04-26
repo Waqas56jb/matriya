@@ -4404,6 +4404,25 @@ app.post("/reset", async (req, res) => {
   }
 });
 
+// ── Serve React frontend (matriya-front build) ──────────────────────────────
+// Any request that is NOT a known API prefix is served the React SPA so that
+// browser-side routing works correctly (e.g. deep-links, page refresh).
+const __filename = fileURLToPath(import.meta.url);
+const __dirnameHere = dirname(__filename);
+const frontendDist = join(__dirnameHere, 'public');
+import fs from 'fs';
+if (fs.existsSync(join(frontendDist, 'index.html'))) {
+  app.use(express.static(frontendDist));
+  const API_PREFIXES = ['/auth', '/admin', '/api', '/ingest', '/files', '/documents',
+    '/search', '/ask-matriya', '/reset', '/gpt-rag', '/collection', '/research', '/health',
+    '/matriya', '/external', '/webhook', '/upload-ask-materials'];
+  app.get('*', (req, res, next) => {
+    if (API_PREFIXES.some(p => req.path.startsWith(p))) return next();
+    res.sendFile(join(frontendDist, 'index.html'));
+  });
+  logger.info('[frontend] Serving React UI from /public');
+}
+
 // Start server
 if (!process.env.VERCEL) {
   app.listen(settings.API_PORT, settings.API_HOST, () => {

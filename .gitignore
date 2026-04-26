@@ -63,6 +63,9 @@ coverage/
 .parcel-cache/
 .turbo/
 *.tgz
+# Allow the pre-built frontend served by matriya-back Express on Railway
+!matriya-back/public/
+!matriya-back/public/**
 
 # --- Vercel / deploy ---
 .vercel/
