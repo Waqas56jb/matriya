@@ -227,6 +227,11 @@ const ResearchSession = sequelize ? sequelize.define('ResearchSession', {
     type: DataTypes.JSON,
     allowNull: true,
     defaultValue: {}
+  },
+  project_id: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    defaultValue: ''
   }
 }, {
   tableName: 'research_sessions',

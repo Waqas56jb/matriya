@@ -2,8 +2,9 @@ import React from 'react';
 import './AnswerEvidenceSection.css';
 
 /**
- * Shows file_search / RAG excerpts returned with an answer (filename + quote).
- * @param {{ sources: { filename?: string, excerpt?: string, text?: string }[], title: string, hint?: string }} props
+ * Shows file_search / RAG excerpts, or science-query row evidence (content + lab metadata).
+ * RAG: document_name, filename, preview | excerpt | text
+ * Science (lab engine): content + metadata.experiment_id / source
  */
 function AnswerEvidenceSection({ sources, title, hint }) {
     if (!Array.isArray(sources) || sources.length === 0) return null;
@@ -13,8 +14,13 @@ function AnswerEvidenceSection({ sources, title, hint }) {
             {hint ? <p className="matriya-evidence__hint">{hint}</p> : null}
             <ul className="matriya-evidence__list">
                 {sources.map((s, i) => {
-                    const label = s.document_name || s.filename || '—';
-                    const body = s.preview || s.excerpt || s.text || '';
+                    const isLab = s?.metadata?.source === 'lab_data' || s?.metadata?.routing === 'science_query_engine';
+                    const expId = s?.metadata?.experiment_id;
+                    const label = s.document_name || s.filename
+                        || (isLab && expId ? `Lab · ${expId}` : null)
+                        || (isLab ? 'Lab data' : null)
+                        || '—';
+                    const body = s.preview || s.excerpt || s.text || s.content || '';
                     const key = s.source_id != null ? String(s.source_id) : `${label}-${i}`;
                     return (
                         <li key={key} className="matriya-evidence__card">

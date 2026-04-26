@@ -2,7 +2,12 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { HiPaperAirplane, HiChevronDown, HiChevronUp } from 'react-icons/hi2';
 import api from '../utils/api';
 import { formatApiErrorForUser } from '../utils/openAiFriendlyError';
-import { runAskMatriyaDocumentsQuery, sortFilenamesForAskMatriyaDisplay } from '../utils/askMatriyaDocumentsClient';
+import {
+    runAskMatriyaDocumentsQuery,
+    runResearchDecisionQuery,
+    sortFilenamesForAskMatriyaDisplay,
+    isLikelyScienceQuery
+} from '../utils/askMatriyaDocumentsClient';
 import { formatBoldSegments } from '../utils/formatBold';
 import AnswerEvidenceSection from './AnswerEvidenceSection';
 import GptSyncStatusRow from './GptSyncStatusRow';
@@ -10,7 +15,66 @@ import './AskMatriyaTab.css';
 
 const ASK_CHAT_EVIDENCE_TITLE = 'Document Sources (Citations)';
 const ASK_CHAT_EVIDENCE_HINT = 'Passages used as the basis for this answer — for transparency and review.';
+const ASK_CHAT_LAB_EVIDENCE_TITLE = 'Lab Experiments Used';
+const ASK_CHAT_LAB_EVIDENCE_HINT = 'Experiment records from the lab database that the decision engine compared.';
 const ASK_ALL_FILES_VALUE = '__ALL_FILES__';
+
+const DECISION_MODE_LABELS = {
+    result:      { text: 'Decision Result', cls: 'result' },
+    no_match:    { text: 'No Match',        cls: 'no_match' },
+    no_entities: { text: 'Specify Experiments', cls: 'no_entities' },
+    error:       { text: 'Pipeline Error', cls: 'error' },
+};
+
+function DecisionMeta({ decisionData }) {
+    if (!decisionData) return null;
+    const { mode, fieldsUsed, runId, missingEntities, foundEntities, metaHint } = decisionData;
+    const label = DECISION_MODE_LABELS[mode] || { text: mode, cls: 'error' };
+    return (
+        <div className="decision-meta">
+            <div className="decision-meta-header">
+                <span className={`decision-mode-badge decision-mode-badge--${label.cls}`}>
+                    {label.text}
+                </span>
+                <span className="decision-engine-label">Decision Engine · /api/research/run</span>
+                {runId && (
+                    <span className="decision-run-id" title="Run ID">#{runId.slice(0, 8)}</span>
+                )}
+            </div>
+            {fieldsUsed && fieldsUsed.length > 0 && (
+                <div className="decision-fields">
+                    <span className="decision-fields-label">fields_used</span>
+                    {fieldsUsed.map((f) => (
+                        <span key={f} className="decision-field-tag">{f}</span>
+                    ))}
+                </div>
+            )}
+            {missingEntities && missingEntities.length > 0 && (
+                <div className="decision-missing">
+                    <div className="decision-missing-label">Missing entities (not in lab_experiments)</div>
+                    <div className="decision-missing-list">
+                        {missingEntities.map((id) => (
+                            <span key={id} className="decision-missing-tag">{id}</span>
+                        ))}
+                    </div>
+                    {foundEntities && foundEntities.length > 0 && (
+                        <div style={{ marginTop: 6 }}>
+                            <span className="decision-fields-label">Found</span>
+                            <span style={{ marginLeft: 6 }}>
+                                {foundEntities.map((id) => (
+                                    <span key={id} className="decision-field-tag" style={{ marginRight: 4 }}>{id}</span>
+                                ))}
+                            </span>
+                        </div>
+                    )}
+                </div>
+            )}
+            {metaHint && (
+                <div className="decision-hint">{metaHint}</div>
+            )}
+        </div>
+    );
+}
 
 function AskMatriyaTab({ onGptSyncingChange, gptRagSyncing = false }) {
     const [filesInApiOrder, setFilesInApiOrder] = useState([]);
@@ -106,26 +170,50 @@ function AskMatriyaTab({ onGptSyncingChange, gptRagSyncing = false }) {
         setSending(true);
 
         try {
-            if (selectedFilenames.length === 0) {
+            const labOnly = isLikelyScienceQuery(text);
+            if (!labOnly && selectedFilenames.length === 0) {
                 setError('Select at least one document before sending a question.');
                 setMessages((prev) => prev.slice(0, -1));
                 return;
             }
-            if (filesInApiOrder.length === 0) {
+            if (!labOnly && filesInApiOrder.length === 0) {
                 setError('No documents in the system — upload documents in the Documents tab first.');
                 setMessages((prev) => prev.slice(0, -1));
                 return;
             }
-            const filenames = isAllFilesSelected
-                ? [...filesInApiOrder]
-                : filesInApiOrder.filter((f) => selectedFilenames.includes(f));
-            if (filenames.length === 0) {
+            const filenames = labOnly
+                ? []
+                : isAllFilesSelected
+                    ? [...filesInApiOrder]
+                    : filesInApiOrder.filter((f) => selectedFilenames.includes(f));
+            if (!labOnly && filenames.length === 0) {
                 setError('No documents available for query. Refresh the list and try again.');
                 setMessages((prev) => prev.slice(0, -1));
                 return;
             }
-            const { reply: replyText, sources } = await runAskMatriyaDocumentsQuery(text, filenames);
-            setMessages((prev) => [...prev, { role: 'assistant', content: replyText, sources }]);
+
+            if (labOnly) {
+                // ── Validated decision pipeline (/research/session → /api/research/run) ──
+                const decisionResult = await runResearchDecisionQuery(text);
+                const experimentSources = (decisionResult.experiments || []).map((e) => ({
+                    content: Object.entries(e || {})
+                        .filter(([k, v]) => v != null && k !== 'project_id')
+                        .map(([k, v]) => `${k}: ${v}`)
+                        .join(' | '),
+                    metadata: { source: 'lab_data', experiment_id: e?.experiment_id ?? null },
+                    score: 1,
+                }));
+                setMessages((prev) => [...prev, {
+                    role: 'assistant',
+                    content: decisionResult.reply || '',
+                    sources: experimentSources,
+                    decisionData: decisionResult,
+                }]);
+            } else {
+                // ── Document RAG path (/ask-matriya) ────────────────────────────────────
+                const { reply: replyText, sources } = await runAskMatriyaDocumentsQuery(text, filenames);
+                setMessages((prev) => [...prev, { role: 'assistant', content: replyText, sources }]);
+            }
         } catch (err) {
             setError(formatApiErrorForUser(err, 'Error sending message'));
             setMessages((prev) => prev.slice(0, -1));
@@ -262,24 +350,31 @@ function AskMatriyaTab({ onGptSyncingChange, gptRagSyncing = false }) {
                 <div className="ask-matriya-messages">
                     {messages.length === 0 && (
                         <div className="ask-matriya-placeholder">
-                            Select one or more documents above, then type your question below.
+                            For document questions: select files above and type your query.<br />
+                            For lab decisions (e.g. "Compare EXP-006 and EXP-009 across expansion_ratio"):
+                            the <strong>validated decision engine</strong> runs automatically — no document selection needed.
                         </div>
                     )}
                     <div className="ask-matriya-messages-list">
                         {messages.map((msg, i) => (
                             <div key={i} className={`ask-matriya-msg ask-matriya-msg-${msg.role}`}>
-                                <div className="ask-matriya-msg-content">
-                                    {formatBoldSegments(msg.content || '').map((part, j) => (
-                                        part.type === 'bold'
-                                            ? <strong key={`p-${i}-${j}`}>{part.value}</strong>
-                                            : <span key={`p-${i}-${j}`}>{part.value}</span>
-                                    ))}
-                                </div>
+                                {msg.role === 'assistant' && msg.decisionData && (
+                                    <DecisionMeta decisionData={msg.decisionData} />
+                                )}
+                                {msg.content && (
+                                    <div className={`ask-matriya-msg-content${msg.decisionData ? ' decision-synthesis' : ''}`}>
+                                        {formatBoldSegments(msg.content || '').map((part, j) => (
+                                            part.type === 'bold'
+                                                ? <strong key={`p-${i}-${j}`}>{part.value}</strong>
+                                                : <span key={`p-${i}-${j}`}>{part.value}</span>
+                                        ))}
+                                    </div>
+                                )}
                                 {msg.role === 'assistant' && (
                                     <AnswerEvidenceSection
                                         sources={msg.sources || []}
-                                        title={ASK_CHAT_EVIDENCE_TITLE}
-                                        hint={ASK_CHAT_EVIDENCE_HINT}
+                                        title={msg.decisionData ? ASK_CHAT_LAB_EVIDENCE_TITLE : ASK_CHAT_EVIDENCE_TITLE}
+                                        hint={msg.decisionData ? ASK_CHAT_LAB_EVIDENCE_HINT : ASK_CHAT_EVIDENCE_HINT}
                                     />
                                 )}
                             </div>
@@ -316,7 +411,8 @@ function AskMatriyaTab({ onGptSyncingChange, gptRagSyncing = false }) {
                         rows={2}
                         disabled={
                             sending || gptRagSyncing ||
-                            filesInApiOrder.length === 0 || selectedFilenames.length === 0
+                            (!isLikelyScienceQuery(input) &&
+                                (filesInApiOrder.length === 0 || selectedFilenames.length === 0))
                         }
                     />
                     <button
@@ -325,7 +421,8 @@ function AskMatriyaTab({ onGptSyncingChange, gptRagSyncing = false }) {
                         onClick={handleSend}
                         disabled={
                             sending || gptRagSyncing || !input.trim() ||
-                            selectedFilenames.length === 0 || filesInApiOrder.length === 0
+                            (!isLikelyScienceQuery(input) &&
+                                (selectedFilenames.length === 0 || filesInApiOrder.length === 0))
                         }
                         aria-label="Send message"
                     >

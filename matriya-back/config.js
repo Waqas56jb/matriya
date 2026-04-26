@@ -72,10 +72,12 @@ class Settings {
       return Math.min(2, t);
     })();
 
-    /** Optional: Management (maneger) API base URL, no trailing slash — e.g. http://localhost:4000 — for «שאל על המסמכים» materials-library branch */
-    this.MATRIYA_MANAGEMENT_API_URL = (process.env.MATRIYA_MANAGEMENT_API_URL || '').trim().replace(/\/$/, '') || '';
-    /** Same secret as MANEGER_MATERIALS_SUMMARY_SERVER_KEY on maneger-back — sent as X-Matriya-Materials-Key (works without user JWT on that route). */
-    this.MATRIYA_MANAGEMENT_MATERIALS_KEY = (process.env.MATRIYA_MANAGEMENT_MATERIALS_KEY || '').trim();
+    /** Management (maneger) API base URL. Env var takes priority; fallback to known Railway URL. */
+    this.MATRIYA_MANAGEMENT_API_URL = (process.env.MATRIYA_MANAGEMENT_API_URL || '').trim().replace(/\/$/, '')
+      || 'https://steadfast-success-production-02d1.up.railway.app';
+    /** Server-to-server key — must match MANEGER_MATERIALS_SUMMARY_SERVER_KEY on maneger-back. */
+    this.MATRIYA_MANAGEMENT_MATERIALS_KEY = (process.env.MATRIYA_MANAGEMENT_MATERIALS_KEY || '').trim()
+      || 'shared_secret_matches_matriya_back';
 
     // OpenAI (for Ask Matriya chat)
     this.OPENAI_API_KEY = process.env.OPENAI_API_KEY || null;

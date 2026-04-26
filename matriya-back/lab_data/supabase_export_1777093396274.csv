@@ -1,0 +1,11 @@
+experiment_id,project_id,APP,PER,MEL,APP:PER,IFR,Nanoclay,expansion_ratio,char_quality,adhesion,viscosity,status,formula
+EXP-001,48738878-a1ce-408b-bed2-66b80abc7e3f,30,15,10,2,55,,14.2,GOOD,85,1200,PASS,APP/PER/MEL baseline formula
+EXP-002,48738878-a1ce-408b-bed2-66b80abc7e3f,35,12,8,2.92,55,,18.7,EXCELLENT,90,1350,PASS,High APP ratio
+EXP-003,48738878-a1ce-408b-bed2-66b80abc7e3f,28,10,12,2.8,50,,9.4,FAIR,72,980,PARTIAL,Low PER trial
+EXP-004,48738878-a1ce-408b-bed2-66b80abc7e3f,30,15,10,2,55,3,21.3,EXCELLENT,92,1480,PASS,Nanoclay enhanced
+EXP-005,48738878-a1ce-408b-bed2-66b80abc7e3f,25,15,18,1.67,58,,6.1,POOR,58,760,FAIL,High MEL variant
+EXP-006,48738878-a1ce-408b-bed2-66b80abc7e3f,32,14,11,2.29,57,,23.8,EXCELLENT,95,1560,PASS,Optimal production
+EXP-007,48738878-a1ce-408b-bed2-66b80abc7e3f,20,10,8,2,38,,11.5,FAIR,68,890,PARTIAL,Reduced IFR test
+EXP-008,48738878-a1ce-408b-bed2-66b80abc7e3f,30,16,10,1.875,56,,17.9,GOOD,88,1100,PASS,Viscosity optimized
+EXP-009,48738878-a1ce-408b-bed2-66b80abc7e3f,38,13,9,2.92,60,5,27.1,EXCELLENT,94,1620,PASS,High expansion target
+EXP-010,48738878-a1ce-408b-bed2-66b80abc7e3f,22,18,14,1.22,54,,8.3,POOR,41,650,FAIL,Adhesion failure

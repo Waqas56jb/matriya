@@ -1,4 +1,4 @@
-﻿import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import api from '../utils/api';
 import { getOpenAiFriendlyMessage } from '../utils/openAiFriendlyError';
 import { formatBoldSegments } from '../utils/formatBold';

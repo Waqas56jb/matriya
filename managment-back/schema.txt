@@ -1,0 +1,1183 @@
+======================================================================
+SUPABASE DATABASE — FULL SCHEMA
+Generated : 2026-04-25T14:26:22.772Z
+Total tables: 64
+Tables: access_requests, admin_audit_log, admin_config, admin_users, audit_log, chunks, decision_audit_log, documents, doe_designs, experiments, external_audit_log, external_claims, external_climate_series, external_documents, external_material_links, external_sources, external_standard_requirements, file_permissions, finance_signals, formulation_materials, formulations, github_events, import_log, ingest_quarantine, integrity_cycle_snapshots, justification_templates, lab_experiments, management_vector, material_library, materials, matriya_app_kv, measurements, milestones, noise_events, notes, outcomes, policy_audit_log, production_runs, production_steps, project_chat_last_read, project_chat_messages, project_emails, project_files, project_join_requests, project_members, projects, rag_documents, research_audit_log, research_loop_runs, research_sessions, run_fsm_trace, runs, search_history, sharepoint_display_names, system_logs, system_snapshots, tasks, twilio_tickets, user_cache, user_sessions, users, violations, whatsapp_tasks, whatsapp_whitelist
+======================================================================
+
+----------------------------------------------------------------------
+TABLE: access_requests
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  phone_number                     text                       NOT NULL
+  first_message                    text                       NULL
+  request_count                    integer                    NOT NULL DEFAULT 1
+  first_seen                       timestamp with time zone   NOT NULL DEFAULT now()
+  last_seen                        timestamp with time zone   NOT NULL DEFAULT now()
+  status                           text                       NOT NULL DEFAULT 'pending'::text
+  reviewed_by                      text                       NULL
+  reviewed_at                      timestamp with time zone   NULL
+  note                             text                       NULL
+  INDEXES:
+    access_requests_pkey:
+      CREATE UNIQUE INDEX access_requests_pkey ON public.access_requests USING btree (id)
+    idx_access_requests_phone:
+      CREATE UNIQUE INDEX idx_access_requests_phone ON public.access_requests USING btree (phone_number)
+    idx_access_requests_status:
+      CREATE INDEX idx_access_requests_status ON public.access_requests USING btree (status, last_seen DESC)
+
+----------------------------------------------------------------------
+TABLE: admin_audit_log
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  admin_email                      character varying(255)     NULL
+  action                           text                       NOT NULL
+  body                             text                       NULL
+  ip                               character varying(64)      NULL
+  created_at                       timestamp with time zone   NOT NULL DEFAULT now()
+  INDEXES:
+    admin_audit_log_pkey:
+      CREATE UNIQUE INDEX admin_audit_log_pkey ON public.admin_audit_log USING btree (id)
+    idx_audit_log_created:
+      CREATE INDEX idx_audit_log_created ON public.admin_audit_log USING btree (created_at DESC)
+    idx_audit_log_email:
+      CREATE INDEX idx_audit_log_email ON public.admin_audit_log USING btree (admin_email)
+
+----------------------------------------------------------------------
+TABLE: admin_config
+----------------------------------------------------------------------
+  key                              character varying(100)     NOT NULL [PK]
+  value                            text                       NULL
+  updated_at                       timestamp with time zone   NOT NULL DEFAULT now()
+  updated_by                       character varying(255)     NULL
+  INDEXES:
+    admin_config_pkey:
+      CREATE UNIQUE INDEX admin_config_pkey ON public.admin_config USING btree (key)
+
+----------------------------------------------------------------------
+TABLE: admin_users
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  email                            character varying(255)     NOT NULL
+  password_hash                    text                       NOT NULL
+  role                             character varying(50)      NOT NULL DEFAULT 'admin'::character varying
+  is_active                        boolean                    NOT NULL DEFAULT true
+  created_at                       timestamp with time zone   NOT NULL DEFAULT now()
+  last_login                       timestamp with time zone   NULL
+  INDEXES:
+    admin_users_email_key:
+      CREATE UNIQUE INDEX admin_users_email_key ON public.admin_users USING btree (email)
+    admin_users_pkey:
+      CREATE UNIQUE INDEX admin_users_pkey ON public.admin_users USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: audit_log
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  project_id                       text                       NULL
+  user_id                          text                       NULL
+  username                         text                       NULL
+  action                           text                       NOT NULL
+  entity_type                      text                       NULL
+  entity_id                        text                       NULL
+  details                          jsonb                      NULL
+  request_id                       text                       NULL
+  created_at                       timestamp with time zone   NOT NULL DEFAULT now()
+  INDEXES:
+    audit_log_pkey:
+      CREATE UNIQUE INDEX audit_log_pkey ON public.audit_log USING btree (id)
+    idx_audit_log_project:
+      CREATE INDEX idx_audit_log_project ON public.audit_log USING btree (project_id)
+
+----------------------------------------------------------------------
+TABLE: chunks
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  document_id                      uuid                       NOT NULL [FK: FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE]
+  formulation_id                   uuid                       NULL
+  source_id                        text                       NOT NULL
+  content                          text                       NOT NULL
+  embedding                        vector(384)                NULL
+  chunk_index                      integer                    NOT NULL
+  page_number                      integer                    NULL
+  char_start                       integer                    NULL
+  char_end                         integer                    NULL
+  row_start                        integer                    NULL
+  row_end                          integer                    NULL
+  sheet_name                       text                       NULL
+  created_at                       timestamp with time zone   NULL DEFAULT now()
+  INDEXES:
+    chunks_document_id_chunk_index_key:
+      CREATE UNIQUE INDEX chunks_document_id_chunk_index_key ON public.chunks USING btree (document_id, chunk_index)
+    chunks_pkey:
+      CREATE UNIQUE INDEX chunks_pkey ON public.chunks USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: decision_audit_log
+----------------------------------------------------------------------
+  id                               integer                    NOT NULL [PK] DEFAULT nextval('decision_audit_log_id_seq'::regclass)
+  session_id                       uuid                       NOT NULL
+  stage                            character varying(255)     NOT NULL
+  decision                         character varying(255)     NOT NULL
+  response_type                    character varying(255)     NULL
+  request_query                    text                       NULL
+  inputs_snapshot                  jsonb                      NULL
+  details                          jsonb                      NULL
+  confidence_score                 numeric(5,4)               NULL
+  basis_count                      integer                    NULL
+  model_version_hash               character varying(64)      NULL
+  complexity_context               jsonb                      NULL
+  human_feedback                   character varying(20)      NULL
+  created_at                       timestamp with time zone   NULL
+  INDEXES:
+    decision_audit_log_pkey:
+      CREATE UNIQUE INDEX decision_audit_log_pkey ON public.decision_audit_log USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: documents
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  file_name                        text                       NOT NULL
+  source                           text                       NOT NULL
+  file_type                        text                       NULL
+  version                          text                       NULL
+  content_hash                     text                       NOT NULL
+  uploaded_at                      timestamp with time zone   NULL DEFAULT now()
+  project_id                       text                       NULL
+  INDEXES:
+    documents_content_hash_key:
+      CREATE UNIQUE INDEX documents_content_hash_key ON public.documents USING btree (content_hash)
+    documents_pkey:
+      CREATE UNIQUE INDEX documents_pkey ON public.documents USING btree (id)
+    idx_documents_project:
+      CREATE INDEX idx_documents_project ON public.documents USING btree (project_id)
+
+----------------------------------------------------------------------
+TABLE: doe_designs
+----------------------------------------------------------------------
+  id                               integer                    NOT NULL [PK] DEFAULT nextval('doe_designs_id_seq'::regclass)
+  name                             character varying(255)     NOT NULL
+  description                      text                       NULL
+  design                           jsonb                      NOT NULL DEFAULT '[]'::jsonb
+  query_template                   text                       NULL
+  created_at                       timestamp with time zone   NULL
+  updated_at                       timestamp with time zone   NULL
+  INDEXES:
+    doe_designs_pkey:
+      CREATE UNIQUE INDEX doe_designs_pkey ON public.doe_designs USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: experiments
+----------------------------------------------------------------------
+  id                               integer                    NOT NULL [PK] DEFAULT nextval('experiments_id_seq'::regclass)
+  experiment_id                    character varying(255)     NOT NULL
+  technology_domain                character varying(255)     NULL
+  formula                          text                       NULL
+  materials                        jsonb                      NULL
+  percentages                      jsonb                      NULL
+  results                          text                       NULL
+  experiment_outcome               character varying(255)     NOT NULL DEFAULT 'success'::character varying
+  is_production_formula            boolean                    NOT NULL DEFAULT false
+  created_at                       timestamp with time zone   NULL
+  updated_at                       timestamp with time zone   NULL
+  experiment_date                  date                       NULL
+  decision_shift                   boolean                    NULL
+  breakdown_flag                   boolean                    NOT NULL DEFAULT false
+  validated                        boolean                    NOT NULL DEFAULT false
+  project_id                       text                       NULL
+  date                             date                       NULL
+  operator                         text                       NULL
+  formulation                      jsonb                      NULL
+  conditions                       jsonb                      NULL
+  outcome                          text                       NULL
+  status                           text                       NULL
+  notes                            text                       NULL
+  INDEXES:
+    experiments_experiment_id:
+      CREATE UNIQUE INDEX experiments_experiment_id ON public.experiments USING btree (experiment_id)
+    experiments_experiment_outcome:
+      CREATE INDEX experiments_experiment_outcome ON public.experiments USING btree (experiment_outcome)
+    experiments_is_production_formula:
+      CREATE INDEX experiments_is_production_formula ON public.experiments USING btree (is_production_formula)
+    experiments_pkey:
+      CREATE UNIQUE INDEX experiments_pkey ON public.experiments USING btree (id)
+    experiments_technology_domain:
+      CREATE INDEX experiments_technology_domain ON public.experiments USING btree (technology_domain)
+    idx_experiments_breakdown_flag:
+      CREATE INDEX idx_experiments_breakdown_flag ON public.experiments USING btree (breakdown_flag)
+    idx_experiments_decision_shift:
+      CREATE INDEX idx_experiments_decision_shift ON public.experiments USING btree (decision_shift)
+    idx_experiments_project_id:
+      CREATE INDEX idx_experiments_project_id ON public.experiments USING btree (project_id)
+    idx_experiments_status:
+      CREATE INDEX idx_experiments_status ON public.experiments USING btree (status)
+    idx_experiments_validated:
+      CREATE INDEX idx_experiments_validated ON public.experiments USING btree (validated)
+
+----------------------------------------------------------------------
+TABLE: external_audit_log
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  query_text                       text                       NOT NULL
+  external_document_ids            uuid[]                     NULL
+  used_external_as_context_only    boolean                    NOT NULL
+  created_at                       timestamp with time zone   NULL DEFAULT now()
+  INDEXES:
+    external_audit_log_pkey:
+      CREATE UNIQUE INDEX external_audit_log_pkey ON public.external_audit_log USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: external_claims
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  document_id                      uuid                       NULL [FK: FOREIGN KEY (document_id) REFERENCES external_documents(id)]
+  claim_type                       text                       NOT NULL
+  evidence_grade                   text                       NOT NULL
+  review_status                    text                       NOT NULL DEFAULT 'PENDING'::text
+  claim_text                       text                       NOT NULL
+  created_at                       timestamp with time zone   NULL DEFAULT now()
+  INDEXES:
+    external_claims_pkey:
+      CREATE UNIQUE INDEX external_claims_pkey ON public.external_claims USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: external_climate_series
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  dataset_code                     text                       NOT NULL
+  location_name                    text                       NOT NULL
+  variable_code                    text                       NOT NULL
+  value                            numeric                    NULL
+  unit                             text                       NULL
+  period_start                     date                       NULL
+  created_at                       timestamp with time zone   NULL DEFAULT now()
+  INDEXES:
+    external_climate_series_pkey:
+      CREATE UNIQUE INDEX external_climate_series_pkey ON public.external_climate_series USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: external_documents
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  source_id                        uuid                       NULL [FK: FOREIGN KEY (source_id) REFERENCES external_sources(id)]
+  title                            text                       NOT NULL
+  document_type                    text                       NOT NULL
+  url                              text                       NOT NULL
+  retrieved_at                     timestamp with time zone   NOT NULL
+  publication_date                 date                       NULL
+  version_label                    text                       NULL
+  created_at                       timestamp with time zone   NULL DEFAULT now()
+  INDEXES:
+    external_documents_pkey:
+      CREATE UNIQUE INDEX external_documents_pkey ON public.external_documents USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: external_material_links
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  claim_id                         uuid                       NULL [FK: FOREIGN KEY (claim_id) REFERENCES external_claims(id)]
+  material_name                    text                       NOT NULL
+  match_type                       text                       NOT NULL
+  created_at                       timestamp with time zone   NULL DEFAULT now()
+  INDEXES:
+    external_material_links_pkey:
+      CREATE UNIQUE INDEX external_material_links_pkey ON public.external_material_links USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: external_sources
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  name                             text                       NOT NULL
+  source_type                      text                       NOT NULL
+  source_code                      text                       NOT NULL
+  trust_grade                      text                       NOT NULL
+  url                              text                       NULL
+  created_at                       timestamp with time zone   NULL DEFAULT now()
+  INDEXES:
+    external_sources_pkey:
+      CREATE UNIQUE INDEX external_sources_pkey ON public.external_sources USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: external_standard_requirements
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  document_id                      uuid                       NULL [FK: FOREIGN KEY (document_id) REFERENCES external_documents(id)]
+  standard_code                    text                       NOT NULL
+  metric_name                      text                       NOT NULL
+  target_value                     numeric                    NULL
+  unit                             text                       NULL
+  created_at                       timestamp with time zone   NULL DEFAULT now()
+  INDEXES:
+    external_standard_requirements_pkey:
+      CREATE UNIQUE INDEX external_standard_requirements_pkey ON public.external_standard_requirements USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: file_permissions
+----------------------------------------------------------------------
+  id                               integer                    NOT NULL [PK] DEFAULT nextval('file_permissions_id_seq'::regclass)
+  user_id                          integer                    NOT NULL
+  filename                         character varying(255)     NOT NULL
+  created_at                       timestamp with time zone   NULL
+  INDEXES:
+    file_permissions_pkey:
+      CREATE UNIQUE INDEX file_permissions_pkey ON public.file_permissions USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: finance_signals
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  signal_id                        text                       NOT NULL
+  instrument                       text                       NOT NULL
+  a_value                          numeric                    NULL
+  decision                         text                       NULL
+  signal_timestamp                 timestamp with time zone   NOT NULL DEFAULT now()
+  trigger_type                     text                       NULL
+  source                           text                       NULL
+  class_label                      text                       NULL
+  composite_alert                  boolean                    NOT NULL DEFAULT false
+  created_at                       timestamp with time zone   NOT NULL DEFAULT now()
+  INDEXES:
+    finance_signals_pkey:
+      CREATE UNIQUE INDEX finance_signals_pkey ON public.finance_signals USING btree (id)
+    finance_signals_signal_id_key:
+      CREATE UNIQUE INDEX finance_signals_signal_id_key ON public.finance_signals USING btree (signal_id)
+    idx_finance_signals_ts:
+      CREATE INDEX idx_finance_signals_ts ON public.finance_signals USING btree (signal_timestamp DESC)
+
+----------------------------------------------------------------------
+TABLE: formulation_materials
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  formulation_id                   uuid                       NOT NULL [FK: FOREIGN KEY (formulation_id) REFERENCES formulations(id) ON DELETE CASCADE]
+  material_name                    text                       NOT NULL
+  fraction                         numeric(10,7)              NOT NULL
+  functional_group                 text                       NULL
+  col_index                        integer                    NOT NULL
+  recommended_material             text                       NULL
+  INDEXES:
+    formulation_materials_pkey:
+      CREATE UNIQUE INDEX formulation_materials_pkey ON public.formulation_materials USING btree (id)
+    formulation_materials_uq:
+      CREATE UNIQUE INDEX formulation_materials_uq ON public.formulation_materials USING btree (formulation_id, material_name)
+    idx_fm_formulation_id:
+      CREATE INDEX idx_fm_formulation_id ON public.formulation_materials USING btree (formulation_id)
+    idx_fm_material_name:
+      CREATE INDEX idx_fm_material_name ON public.formulation_materials USING btree (material_name)
+
+----------------------------------------------------------------------
+TABLE: formulations
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  source_id                        text                       NOT NULL
+  id_suffix                        text                       NULL
+  raw_source_id                    text                       NOT NULL
+  base_id                          text                       NOT NULL
+  version                          text                       NULL
+  product_name                     text                       NULL
+  source_file                      text                       NOT NULL
+  source_sheet                     text                       NOT NULL
+  raw_formula_notes                text                       NULL
+  composition_scale                numeric(4,2)               NOT NULL DEFAULT 2.0
+  created_at                       timestamp with time zone   NOT NULL DEFAULT now()
+  INDEXES:
+    formulations_pkey:
+      CREATE UNIQUE INDEX formulations_pkey ON public.formulations USING btree (id)
+    formulations_source_file_id_uq:
+      CREATE UNIQUE INDEX formulations_source_file_id_uq ON public.formulations USING btree (source_file, source_id)
+    idx_formulations_base_cross:
+      CREATE INDEX idx_formulations_base_cross ON public.formulations USING btree (base_id, source_file)
+    idx_formulations_base_id:
+      CREATE INDEX idx_formulations_base_id ON public.formulations USING btree (base_id)
+    idx_formulations_source_id:
+      CREATE INDEX idx_formulations_source_id ON public.formulations USING btree (source_id)
+
+----------------------------------------------------------------------
+TABLE: github_events
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  repo                             text                       NULL
+  branch                           text                       NULL
+  commit_message                   text                       NULL
+  pusher                           text                       NULL
+  created_at                       timestamp with time zone   NULL DEFAULT now()
+  INDEXES:
+    github_events_pkey:
+      CREATE UNIQUE INDEX github_events_pkey ON public.github_events USING btree (id)
+    idx_github_events_created_at:
+      CREATE INDEX idx_github_events_created_at ON public.github_events USING btree (created_at DESC)
+    idx_github_events_repo:
+      CREATE INDEX idx_github_events_repo ON public.github_events USING btree (repo)
+
+----------------------------------------------------------------------
+TABLE: import_log
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  project_id                       text                       NOT NULL
+  source_file_reference            text                       NULL
+  source_type                      text                       NULL
+  created_count                    integer                    NOT NULL DEFAULT 0
+  updated_count                    integer                    NOT NULL DEFAULT 0
+  error_count                      integer                    NOT NULL DEFAULT 0
+  details                          jsonb                      NULL
+  created_at                       timestamp with time zone   NOT NULL DEFAULT now()
+  INDEXES:
+    idx_import_log_project:
+      CREATE INDEX idx_import_log_project ON public.import_log USING btree (project_id)
+    import_log_pkey:
+      CREATE UNIQUE INDEX import_log_pkey ON public.import_log USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: ingest_quarantine
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  source_file                      text                       NOT NULL
+  source_sheet                     text                       NOT NULL
+  raw_source_id                    text                       NOT NULL
+  test_date                        text                       NULL
+  raw_row_json                     jsonb                      NOT NULL
+  reason                           text                       NOT NULL
+  ingested_at                      timestamp with time zone   NOT NULL DEFAULT now()
+  INDEXES:
+    idx_quarantine_raw_id:
+      CREATE INDEX idx_quarantine_raw_id ON public.ingest_quarantine USING btree (raw_source_id)
+    idx_quarantine_source_file:
+      CREATE INDEX idx_quarantine_source_file ON public.ingest_quarantine USING btree (source_file)
+    ingest_quarantine_pkey:
+      CREATE UNIQUE INDEX ingest_quarantine_pkey ON public.ingest_quarantine USING btree (id)
+    ingest_quarantine_source_id_date_uq:
+      CREATE UNIQUE INDEX ingest_quarantine_source_id_date_uq ON public.ingest_quarantine USING btree (source_file, raw_source_id, test_date)
+
+----------------------------------------------------------------------
+TABLE: integrity_cycle_snapshots
+----------------------------------------------------------------------
+  id                               integer                    NOT NULL [PK] DEFAULT nextval('integrity_cycle_snapshots_id_seq'::regclass)
+  session_id                       uuid                       NOT NULL
+  stage                            character varying(255)     NOT NULL
+  cycle_index                      integer                    NOT NULL DEFAULT 0
+  metric_name                      character varying(255)     NOT NULL DEFAULT 'document_count'::character varying
+  metric_value                     integer                    NOT NULL
+  details                          jsonb                      NULL
+  created_at                       timestamp with time zone   NULL
+  INDEXES:
+    integrity_cycle_snapshots_pkey:
+      CREATE UNIQUE INDEX integrity_cycle_snapshots_pkey ON public.integrity_cycle_snapshots USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: justification_templates
+----------------------------------------------------------------------
+  id                               integer                    NOT NULL [PK] DEFAULT nextval('justification_templates_id_seq'::regclass)
+  name                             character varying(255)     NOT NULL
+  reason_code                      character varying(255)     NOT NULL
+  label                            character varying(255)     NULL
+  description                      text                       NULL
+  template_text                    text                       NULL
+  created_at                       timestamp with time zone   NULL
+  updated_at                       timestamp with time zone   NULL
+  INDEXES:
+    justification_templates_pkey:
+      CREATE UNIQUE INDEX justification_templates_pkey ON public.justification_templates USING btree (id)
+    justification_templates_reason_code_key:
+      CREATE UNIQUE INDEX justification_templates_reason_code_key ON public.justification_templates USING btree (reason_code)
+
+----------------------------------------------------------------------
+TABLE: lab_experiments
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  project_id                       text                       NOT NULL
+  experiment_id                    text                       NOT NULL
+  experiment_version               integer                    NOT NULL DEFAULT 1
+  technology_domain                text                       NOT NULL DEFAULT ''::text
+  formula                          text                       NULL
+  materials                        jsonb                      NOT NULL DEFAULT '[]'::jsonb
+  percentages                      jsonb                      NOT NULL DEFAULT '{}'::jsonb
+  results                          text                       NULL
+  experiment_outcome               text                       NOT NULL DEFAULT 'success'::text
+  is_production_formula            boolean                    NOT NULL DEFAULT false
+  source_file_reference            text                       NULL
+  research_session_id              text                       NULL
+  created_at                       timestamp with time zone   NOT NULL DEFAULT now()
+  updated_at                       timestamp with time zone   NOT NULL DEFAULT now()
+  expansion_ratio                  numeric                    NULL
+  char_quality                     text                       NULL
+  adhesion                         numeric                    NULL
+  viscosity                        numeric                    NULL
+  INDEXES:
+    idx_lab_experiments_eid:
+      CREATE INDEX idx_lab_experiments_eid ON public.lab_experiments USING btree (experiment_id)
+    idx_lab_experiments_project:
+      CREATE INDEX idx_lab_experiments_project ON public.lab_experiments USING btree (project_id)
+    lab_experiments_pkey:
+      CREATE UNIQUE INDEX lab_experiments_pkey ON public.lab_experiments USING btree (id)
+    lab_experiments_project_id_experiment_id_key:
+      CREATE UNIQUE INDEX lab_experiments_project_id_experiment_id_key ON public.lab_experiments USING btree (project_id, experiment_id)
+
+----------------------------------------------------------------------
+TABLE: management_vector
+----------------------------------------------------------------------
+  id                               text                       NOT NULL [PK]
+  embedding                        vector(1536)               NULL
+  document                         text                       NOT NULL
+  metadata                         jsonb                      NULL
+  created_at                       timestamp with time zone   NULL DEFAULT now()
+  INDEXES:
+    management_vector_embedding_idx:
+      CREATE INDEX management_vector_embedding_idx ON public.management_vector USING ivfflat (embedding vector_cosine_ops) WITH (lists='100')
+    management_vector_metadata_filename_idx:
+      CREATE INDEX management_vector_metadata_filename_idx ON public.management_vector USING btree (((metadata ->> 'filename'::text)))
+    management_vector_pkey:
+      CREATE UNIQUE INDEX management_vector_pkey ON public.management_vector USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: material_library
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  project_id                       text                       NOT NULL
+  name                             text                       NOT NULL
+  role_or_function                 text                       NULL
+  created_at                       timestamp with time zone   NOT NULL DEFAULT now()
+  INDEXES:
+    idx_material_library_proj:
+      CREATE INDEX idx_material_library_proj ON public.material_library USING btree (project_id)
+    material_library_pkey:
+      CREATE UNIQUE INDEX material_library_pkey ON public.material_library USING btree (id)
+    material_library_project_id_name_key:
+      CREATE UNIQUE INDEX material_library_project_id_name_key ON public.material_library USING btree (project_id, name)
+
+----------------------------------------------------------------------
+TABLE: materials
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  material_id                      text                       NOT NULL
+  material_name                    text                       NOT NULL
+  aliases                          text[]                     NOT NULL DEFAULT '{}'::text[]
+  material_family                  text                       NULL
+  material_role                    text                       NULL
+  technology_domain                text                       NULL
+  created_at                       timestamp with time zone   NOT NULL DEFAULT now()
+  INDEXES:
+    materials_material_id_key:
+      CREATE UNIQUE INDEX materials_material_id_key ON public.materials USING btree (material_id)
+    materials_pkey:
+      CREATE UNIQUE INDEX materials_pkey ON public.materials USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: matriya_app_kv
+----------------------------------------------------------------------
+  key                              character varying(128)     NOT NULL [PK]
+  value                            text                       NOT NULL
+  updated_at                       timestamp with time zone   NULL
+  INDEXES:
+    matriya_app_kv_pkey:
+      CREATE UNIQUE INDEX matriya_app_kv_pkey ON public.matriya_app_kv USING btree (key)
+
+----------------------------------------------------------------------
+TABLE: measurements
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  production_run_id                uuid                       NOT NULL [FK: FOREIGN KEY (production_run_id) REFERENCES production_runs(id)]
+  test_date                        date                       NOT NULL
+  days_since_production            integer                    NULL
+  measurement_temperature_c        numeric(5,1)               NULL
+  spindle_type                     text                       NULL
+  linkage_confidence               text                       NOT NULL DEFAULT 'HEURISTIC_SOURCE_ID'::text
+  linkage_note                     text                       NULL
+  created_at                       timestamp with time zone   NOT NULL DEFAULT now()
+  raw_test_notes                   text                       NULL
+  INDEXES:
+    idx_meas_linkage:
+      CREATE INDEX idx_meas_linkage ON public.measurements USING btree (linkage_confidence)
+    idx_meas_production_run_id:
+      CREATE INDEX idx_meas_production_run_id ON public.measurements USING btree (production_run_id)
+    idx_meas_test_date:
+      CREATE INDEX idx_meas_test_date ON public.measurements USING btree (test_date)
+    measurements_pkey:
+      CREATE UNIQUE INDEX measurements_pkey ON public.measurements USING btree (id)
+    measurements_run_date_uq:
+      CREATE UNIQUE INDEX measurements_run_date_uq ON public.measurements USING btree (production_run_id, test_date)
+
+----------------------------------------------------------------------
+TABLE: milestones
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  project_id                       text                       NOT NULL
+  title                            text                       NOT NULL
+  description                      text                       NULL
+  due_date                         date                       NULL
+  completed_date                   date                       NULL
+  status                           text                       NOT NULL DEFAULT 'pending'::text
+  created_at                       timestamp with time zone   NOT NULL DEFAULT now()
+  updated_at                       timestamp with time zone   NOT NULL DEFAULT now()
+  INDEXES:
+    idx_milestones_project:
+      CREATE INDEX idx_milestones_project ON public.milestones USING btree (project_id)
+    milestones_pkey:
+      CREATE UNIQUE INDEX milestones_pkey ON public.milestones USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: noise_events
+----------------------------------------------------------------------
+  id                               integer                    NOT NULL [PK] DEFAULT nextval('noise_events_id_seq'::regclass)
+  session_id                       uuid                       NOT NULL
+  decision_id                      integer                    NULL
+  event_type                       character varying(50)      NOT NULL DEFAULT 'gate_decision'::character varying
+  kernel_version_at_classification character varying(64)      NULL
+  re_evaluate_after_kernel_version character varying(64)      NULL
+  created_at                       timestamp with time zone   NULL
+  INDEXES:
+    noise_events_pkey:
+      CREATE UNIQUE INDEX noise_events_pkey ON public.noise_events USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: notes
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  project_id                       text                       NOT NULL
+  title                            text                       NULL
+  content                          text                       NOT NULL
+  created_by                       text                       NULL
+  created_at                       timestamp with time zone   NOT NULL DEFAULT now()
+  updated_at                       timestamp with time zone   NOT NULL DEFAULT now()
+  INDEXES:
+    idx_notes_project:
+      CREATE INDEX idx_notes_project ON public.notes USING btree (project_id)
+    notes_pkey:
+      CREATE UNIQUE INDEX notes_pkey ON public.notes USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: outcomes
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  measurement_id                   uuid                       NOT NULL [FK: FOREIGN KEY (measurement_id) REFERENCES measurements(id) ON DELETE CASCADE]
+  ph                               numeric(4,2)               NULL
+  specific_gravity                 numeric(6,4)               NULL
+  viscosity_6rpm_cps               integer                    NULL
+  viscosity_12rpm_cps              integer                    NULL
+  viscosity_30rpm_cps              integer                    NULL
+  viscosity_60rpm_cps              integer                    NULL
+  capacity_ratings                 jsonb                      NULL
+  failure_signature                text                       NULL
+  stability_classification         text                       NULL
+  mechanism_tag                    text                       NULL
+  conclusion_status                text                       NULL
+  v6                               integer                    NULL
+  v12                              integer                    NULL
+  v30                              integer                    NULL
+  v60                              integer                    NULL
+  test_date                        date                       NULL
+  INDEXES:
+    idx_outcomes_conclusion:
+      CREATE INDEX idx_outcomes_conclusion ON public.outcomes USING btree (conclusion_status)
+    idx_outcomes_measurement_id:
+      CREATE INDEX idx_outcomes_measurement_id ON public.outcomes USING btree (measurement_id)
+    idx_outcomes_mechanism:
+      CREATE INDEX idx_outcomes_mechanism ON public.outcomes USING btree (mechanism_tag)
+    outcomes_measurement_uq:
+      CREATE UNIQUE INDEX outcomes_measurement_uq ON public.outcomes USING btree (measurement_id)
+    outcomes_pkey:
+      CREATE UNIQUE INDEX outcomes_pkey ON public.outcomes USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: policy_audit_log
+----------------------------------------------------------------------
+  id                               integer                    NOT NULL [PK] DEFAULT nextval('policy_audit_log_id_seq'::regclass)
+  session_id                       uuid                       NOT NULL
+  stage                            character varying(255)     NULL
+  created_at                       timestamp with time zone   NULL
+  INDEXES:
+    policy_audit_log_pkey:
+      CREATE UNIQUE INDEX policy_audit_log_pkey ON public.policy_audit_log USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: production_runs
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  batch_id                         text                       NOT NULL
+  batch_id_is_synthetic            boolean                    NOT NULL DEFAULT false
+  formulation_id                   uuid                       NOT NULL [FK: FOREIGN KEY (formulation_id) REFERENCES formulations(id)]
+  production_date                  date                       NULL
+  operator                         text                       NULL
+  production_temperature_c         numeric(5,1)               NULL
+  foaming_event                    boolean                    NULL
+  raw_process_notes                text                       NULL
+  run_origin                       text                       NOT NULL DEFAULT 'HISTORICAL'::text
+  created_at                       timestamp with time zone   NOT NULL DEFAULT now()
+  operator_name                    text                       NULL
+  prep_location                    text                       NULL
+  workflow_state                   text                       NOT NULL DEFAULT 'HISTORICAL'::text
+  baseline_run_id                  uuid                       NULL [FK: FOREIGN KEY (baseline_run_id) REFERENCES production_runs(id)]
+  declared_changed_variable        text                       NULL
+  hypothesis                       text                       NULL
+  run_type                         text                       NULL
+  load_type                        text                       NULL
+  load_conditions                  jsonb                      NULL
+  INDEXES:
+    idx_pr_formulation_id:
+      CREATE INDEX idx_pr_formulation_id ON public.production_runs USING btree (formulation_id)
+    idx_pr_run_origin:
+      CREATE INDEX idx_pr_run_origin ON public.production_runs USING btree (run_origin)
+    idx_pr_synthetic:
+      CREATE INDEX idx_pr_synthetic ON public.production_runs USING btree (batch_id_is_synthetic)
+    idx_runs_baseline:
+      CREATE INDEX idx_runs_baseline ON public.production_runs USING btree (baseline_run_id)
+    idx_runs_run_type:
+      CREATE INDEX idx_runs_run_type ON public.production_runs USING btree (run_type)
+    idx_runs_workflow_state:
+      CREATE INDEX idx_runs_workflow_state ON public.production_runs USING btree (workflow_state)
+    production_runs_batch_id_key:
+      CREATE UNIQUE INDEX production_runs_batch_id_key ON public.production_runs USING btree (batch_id)
+    production_runs_pkey:
+      CREATE UNIQUE INDEX production_runs_pkey ON public.production_runs USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: production_steps
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  production_run_id                uuid                       NOT NULL [FK: FOREIGN KEY (production_run_id) REFERENCES production_runs(id) ON DELETE CASCADE]
+  step_sequence                    integer                    NOT NULL
+  material_name                    text                       NOT NULL
+  mixing_duration_min              integer                    NULL
+  mixing_speed_rpm                 integer                    NULL
+  raw_step_instruction             text                       NULL
+  INDEXES:
+    idx_ps_production_run_id:
+      CREATE INDEX idx_ps_production_run_id ON public.production_steps USING btree (production_run_id)
+    production_steps_pkey:
+      CREATE UNIQUE INDEX production_steps_pkey ON public.production_steps USING btree (id)
+    production_steps_sequence_uq:
+      CREATE UNIQUE INDEX production_steps_sequence_uq ON public.production_steps USING btree (production_run_id, step_sequence)
+
+----------------------------------------------------------------------
+TABLE: project_chat_last_read
+----------------------------------------------------------------------
+  project_id                       text                       NOT NULL [PK]
+  user_id                          text                       NOT NULL [PK]
+  last_read_at                     timestamp with time zone   NOT NULL DEFAULT now()
+  INDEXES:
+    project_chat_last_read_pkey:
+      CREATE UNIQUE INDEX project_chat_last_read_pkey ON public.project_chat_last_read USING btree (project_id, user_id)
+
+----------------------------------------------------------------------
+TABLE: project_chat_messages
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  project_id                       text                       NOT NULL
+  sender                           text                       NOT NULL
+  message                          text                       NOT NULL
+  role                             text                       NOT NULL DEFAULT 'user'::text
+  created_at                       timestamp with time zone   NOT NULL DEFAULT now()
+  user_id                          integer                    NULL
+  username                         text                       NOT NULL
+  body                             text                       NOT NULL
+  INDEXES:
+    idx_chat_messages_project:
+      CREATE INDEX idx_chat_messages_project ON public.project_chat_messages USING btree (project_id)
+    project_chat_messages_pkey:
+      CREATE UNIQUE INDEX project_chat_messages_pkey ON public.project_chat_messages USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: project_emails
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  project_id                       text                       NOT NULL
+  email                            text                       NOT NULL
+  label                            text                       NULL
+  sent_at                          timestamp with time zone   NULL DEFAULT now()
+  direction                        text                       NOT NULL DEFAULT 'sent'::text
+  status                           text                       NOT NULL DEFAULT 'sent'::text
+  from_email                       text                       NULL
+  to_emails                        text[]                     NULL
+  subject                          text                       NULL
+  body_text                        text                       NULL
+  body_html                        text                       NULL
+  resend_email_id                  text                       NULL
+  sent_by_user_id                  text                       NULL
+  sent_by_username                 text                       NULL
+  error_message                    text                       NULL
+  attachments                      jsonb                      NOT NULL DEFAULT '[]'::jsonb
+  INDEXES:
+    idx_project_emails_project:
+      CREATE INDEX idx_project_emails_project ON public.project_emails USING btree (project_id)
+    project_emails_pkey:
+      CREATE UNIQUE INDEX project_emails_pkey ON public.project_emails USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: project_files
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  project_id                       text                       NOT NULL
+  file_name                        text                       NOT NULL
+  file_url                         text                       NULL
+  file_type                        text                       NULL
+  uploaded_by                      text                       NULL
+  created_at                       timestamp with time zone   NOT NULL DEFAULT now()
+  original_name                    text                       NULL
+  folder_display_name              text                       NULL
+  ingest_error                     text                       NULL
+  source_email_id                  text                       NULL
+  INDEXES:
+    idx_project_files_project:
+      CREATE INDEX idx_project_files_project ON public.project_files USING btree (project_id)
+    project_files_pkey:
+      CREATE UNIQUE INDEX project_files_pkey ON public.project_files USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: project_join_requests
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  project_id                       uuid                       NOT NULL [FK: FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE]
+  user_id                          text                       NOT NULL
+  status                           text                       NOT NULL DEFAULT 'pending'::text
+  created_at                       timestamp with time zone   NOT NULL DEFAULT now()
+  INDEXES:
+    project_join_requests_pkey:
+      CREATE UNIQUE INDEX project_join_requests_pkey ON public.project_join_requests USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: project_members
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  project_id                       uuid                       NOT NULL [FK: FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE]
+  user_id                          text                       NOT NULL
+  role                             text                       NOT NULL DEFAULT 'member'::text
+  created_at                       timestamp with time zone   NOT NULL DEFAULT now()
+  INDEXES:
+    idx_project_members_project:
+      CREATE INDEX idx_project_members_project ON public.project_members USING btree (project_id)
+    idx_project_members_user:
+      CREATE INDEX idx_project_members_user ON public.project_members USING btree (user_id)
+    project_members_pkey:
+      CREATE UNIQUE INDEX project_members_pkey ON public.project_members USING btree (id)
+    project_members_project_id_user_id_key:
+      CREATE UNIQUE INDEX project_members_project_id_user_id_key ON public.project_members USING btree (project_id, user_id)
+
+----------------------------------------------------------------------
+TABLE: projects
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  name                             text                       NOT NULL
+  description                      text                       NULL
+  status                           text                       NULL DEFAULT 'ACTIVE'::text
+  created_by                       text                       NULL
+  created_at                       timestamp with time zone   NULL DEFAULT now()
+  updated_at                       timestamp with time zone   NULL DEFAULT now()
+  INDEXES:
+    idx_projects_updated:
+      CREATE INDEX idx_projects_updated ON public.projects USING btree (updated_at DESC)
+    projects_pkey:
+      CREATE UNIQUE INDEX projects_pkey ON public.projects USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: rag_documents
+----------------------------------------------------------------------
+  id                               text                       NOT NULL [PK]
+  embedding                        vector(384)                NULL
+  document                         text                       NOT NULL
+  metadata                         jsonb                      NULL
+  created_at                       timestamp without time zone NULL DEFAULT CURRENT_TIMESTAMP
+  INDEXES:
+    rag_documents_embedding_idx:
+      CREATE INDEX rag_documents_embedding_idx ON public.rag_documents USING ivfflat (embedding vector_cosine_ops) WITH (lists='100')
+    rag_documents_metadata_filename_idx:
+      CREATE INDEX rag_documents_metadata_filename_idx ON public.rag_documents USING btree (((metadata ->> 'filename'::text)))
+    rag_documents_metadata_idx:
+      CREATE INDEX rag_documents_metadata_idx ON public.rag_documents USING gin (metadata)
+    rag_documents_pkey:
+      CREATE UNIQUE INDEX rag_documents_pkey ON public.rag_documents USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: research_audit_log
+----------------------------------------------------------------------
+  id                               integer                    NOT NULL [PK] DEFAULT nextval('research_audit_log_id_seq'::regclass)
+  session_id                       uuid                       NOT NULL
+  stage                            character varying(255)     NOT NULL
+  response_type                    character varying(255)     NULL
+  request_query                    text                       NULL
+  created_at                       timestamp with time zone   NULL
+  INDEXES:
+    research_audit_log_pkey:
+      CREATE UNIQUE INDEX research_audit_log_pkey ON public.research_audit_log USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: research_loop_runs
+----------------------------------------------------------------------
+  id                               integer                    NOT NULL [PK] DEFAULT nextval('research_loop_runs_id_seq'::regclass)
+  session_id                       uuid                       NOT NULL
+  query                            text                       NOT NULL
+  outputs                          jsonb                      NULL DEFAULT '{}'::jsonb
+  justifications                   jsonb                      NULL DEFAULT '[]'::jsonb
+  stopped_by_violation             boolean                    NOT NULL DEFAULT false
+  violation_id                     integer                    NULL
+  duration_ms                      integer                    NULL
+  pre_justification_text           text                       NULL
+  doe_design_id                    integer                    NULL
+  created_at                       timestamp with time zone   NULL
+  INDEXES:
+    research_loop_runs_pkey:
+      CREATE UNIQUE INDEX research_loop_runs_pkey ON public.research_loop_runs USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: research_sessions
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK]
+  user_id                          integer                    NULL
+  completed_stages                 character varying(255)[]   NOT NULL DEFAULT (ARRAY[]::character varying[])::character varying(255)[]
+  created_at                       timestamp with time zone   NULL
+  updated_at                       timestamp with time zone   NULL
+  enforcement_overridden           boolean                    NOT NULL DEFAULT false
+  kernel_context                   json                       NULL DEFAULT '{}'::json
+  project_id                       text                       NOT NULL DEFAULT ''::text
+  name                             text                       NULL
+  started_at                       timestamp with time zone   NOT NULL DEFAULT now()
+  INDEXES:
+    idx_research_sessions_proj:
+      CREATE INDEX idx_research_sessions_proj ON public.research_sessions USING btree (project_id)
+    idx_research_sessions_ts:
+      CREATE INDEX idx_research_sessions_ts ON public.research_sessions USING btree (started_at DESC)
+    research_sessions_pkey:
+      CREATE UNIQUE INDEX research_sessions_pkey ON public.research_sessions USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: run_fsm_trace
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  run_id                           uuid                       NOT NULL
+  from_state                       text                       NULL
+  to_state                         text                       NULL
+  rule_id                          text                       NULL
+  created_at                       timestamp with time zone   NOT NULL DEFAULT now()
+  INDEXES:
+    idx_run_fsm_trace_run:
+      CREATE INDEX idx_run_fsm_trace_run ON public.run_fsm_trace USING btree (run_id)
+    run_fsm_trace_pkey:
+      CREATE UNIQUE INDEX run_fsm_trace_pkey ON public.run_fsm_trace USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: runs
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  project_id                       text                       NOT NULL
+  status                           text                       NOT NULL DEFAULT 'draft'::text
+  features_core                    text[]                     NOT NULL DEFAULT '{}'::text[]
+  features_extended                text[]                     NOT NULL DEFAULT '{}'::text[]
+  created_at                       timestamp with time zone   NOT NULL DEFAULT now()
+  updated_at                       timestamp with time zone   NOT NULL DEFAULT now()
+  INDEXES:
+    idx_runs_project:
+      CREATE INDEX idx_runs_project ON public.runs USING btree (project_id)
+    runs_pkey:
+      CREATE UNIQUE INDEX runs_pkey ON public.runs USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: search_history
+----------------------------------------------------------------------
+  id                               integer                    NOT NULL [PK] DEFAULT nextval('search_history_id_seq'::regclass)
+  user_id                          integer                    NULL
+  username                         character varying(255)     NULL
+  question                         text                       NOT NULL
+  answer                           text                       NULL
+  created_at                       timestamp with time zone   NULL
+  INDEXES:
+    search_history_pkey:
+      CREATE UNIQUE INDEX search_history_pkey ON public.search_history USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: sharepoint_display_names
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  project_id                       text                       NOT NULL
+  path                             text                       NOT NULL
+  display_name                     text                       NULL
+  created_at                       timestamp with time zone   NOT NULL DEFAULT now()
+  INDEXES:
+    idx_sharepoint_dn_project:
+      CREATE INDEX idx_sharepoint_dn_project ON public.sharepoint_display_names USING btree (project_id)
+    sharepoint_display_names_pkey:
+      CREATE UNIQUE INDEX sharepoint_display_names_pkey ON public.sharepoint_display_names USING btree (id)
+    sharepoint_display_names_project_id_path_key:
+      CREATE UNIQUE INDEX sharepoint_display_names_project_id_path_key ON public.sharepoint_display_names USING btree (project_id, path)
+
+----------------------------------------------------------------------
+TABLE: system_logs
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  level                            character varying(20)      NOT NULL DEFAULT 'info'::character varying
+  service                          character varying(100)     NULL
+  message                          text                       NULL
+  metadata                         jsonb                      NULL
+  created_at                       timestamp with time zone   NOT NULL DEFAULT now()
+  INDEXES:
+    idx_system_logs_level:
+      CREATE INDEX idx_system_logs_level ON public.system_logs USING btree (level, created_at DESC)
+    system_logs_pkey:
+      CREATE UNIQUE INDEX system_logs_pkey ON public.system_logs USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: system_snapshots
+----------------------------------------------------------------------
+  id                               integer                    NOT NULL [PK] DEFAULT nextval('system_snapshots_id_seq'::regclass)
+  name                             character varying(255)     NOT NULL
+  description                      text                       NULL
+  snapshot_type                    character varying(255)     NOT NULL DEFAULT 'integrity'::character varying
+  payload                          jsonb                      NOT NULL
+  created_at                       timestamp with time zone   NULL
+  created_by                       integer                    NULL
+  INDEXES:
+    system_snapshots_pkey:
+      CREATE UNIQUE INDEX system_snapshots_pkey ON public.system_snapshots USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: tasks
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  project_id                       text                       NOT NULL
+  title                            text                       NOT NULL
+  description                      text                       NULL
+  status                           text                       NOT NULL DEFAULT 'pending'::text
+  priority                         text                       NOT NULL DEFAULT 'medium'::text
+  assigned_to                      text                       NULL
+  due_date                         date                       NULL
+  created_at                       timestamp with time zone   NOT NULL DEFAULT now()
+  INDEXES:
+    idx_tasks_project:
+      CREATE INDEX idx_tasks_project ON public.tasks USING btree (project_id)
+    tasks_pkey:
+      CREATE UNIQUE INDEX tasks_pkey ON public.tasks USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: twilio_tickets
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  phone_number                     character varying(50)      NOT NULL
+  direction                        character varying(20)      NOT NULL
+  message                          text                       NULL
+  pipeline_result                  jsonb                      NULL
+  action_package                   jsonb                      NULL
+  parent_ticket_id                 uuid                       NULL [FK: FOREIGN KEY (parent_ticket_id) REFERENCES twilio_tickets(id) ON DELETE SET NULL]
+  created_at                       timestamp with time zone   NULL DEFAULT now()
+  INDEXES:
+    idx_twilio_tickets_created_at:
+      CREATE INDEX idx_twilio_tickets_created_at ON public.twilio_tickets USING btree (created_at DESC)
+    idx_twilio_tickets_direction:
+      CREATE INDEX idx_twilio_tickets_direction ON public.twilio_tickets USING btree (direction)
+    idx_twilio_tickets_parent:
+      CREATE INDEX idx_twilio_tickets_parent ON public.twilio_tickets USING btree (parent_ticket_id)
+    idx_twilio_tickets_phone:
+      CREATE INDEX idx_twilio_tickets_phone ON public.twilio_tickets USING btree (phone_number)
+    twilio_tickets_pkey:
+      CREATE UNIQUE INDEX twilio_tickets_pkey ON public.twilio_tickets USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: user_cache
+----------------------------------------------------------------------
+  user_id                          text                       NOT NULL [PK]
+  username                         text                       NOT NULL
+  updated_at                       timestamp with time zone   NOT NULL DEFAULT now()
+  INDEXES:
+    user_cache_pkey:
+      CREATE UNIQUE INDEX user_cache_pkey ON public.user_cache USING btree (user_id)
+
+----------------------------------------------------------------------
+TABLE: user_sessions
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  user_id                          uuid                       NULL
+  ip_address                       character varying(64)      NULL
+  device                           text                       NULL
+  browser                          text                       NULL
+  logged_in_at                     timestamp with time zone   NOT NULL DEFAULT now()
+  last_active_at                   timestamp with time zone   NOT NULL DEFAULT now()
+  is_active                        boolean                    NOT NULL DEFAULT true
+  logout_reason                    text                       NULL
+  INDEXES:
+    idx_sessions_active:
+      CREATE INDEX idx_sessions_active ON public.user_sessions USING btree (is_active, last_active_at DESC)
+    idx_sessions_user:
+      CREATE INDEX idx_sessions_user ON public.user_sessions USING btree (user_id)
+    user_sessions_pkey:
+      CREATE UNIQUE INDEX user_sessions_pkey ON public.user_sessions USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: users
+----------------------------------------------------------------------
+  id                               integer                    NOT NULL [PK] DEFAULT nextval('users_id_seq'::regclass)
+  username                         character varying(255)     NOT NULL
+  email                            character varying(255)     NOT NULL
+  hashed_password                  character varying(255)     NOT NULL
+  full_name                        character varying(255)     NULL
+  is_active                        boolean                    NULL DEFAULT true
+  is_admin                         boolean                    NULL DEFAULT false
+  created_at                       timestamp with time zone   NULL
+  last_login                       timestamp with time zone   NULL
+  status                           character varying(20)      NULL DEFAULT 'active'::character varying
+  approved_at                      timestamp with time zone   NULL
+  approved_by                      text                       NULL
+  reject_reason                    text                       NULL
+  block_reason                     text                       NULL
+  blocked_at                       timestamp with time zone   NULL
+  blocked_by                       text                       NULL
+  session_token                    text                       NULL
+  session_revoked_at               timestamp with time zone   NULL
+  force_logout                     boolean                    NULL DEFAULT false
+  force_logout_at                  timestamp with time zone   NULL
+  password_reset_at                timestamp with time zone   NULL
+  device_fingerprint               text                       NULL
+  management_plain_password        text                       NULL
+  password_updated_at              timestamp with time zone   NULL
+  is_management_user               boolean                    NOT NULL DEFAULT false
+  INDEXES:
+    users_email_key:
+      CREATE UNIQUE INDEX users_email_key ON public.users USING btree (email)
+    users_pkey:
+      CREATE UNIQUE INDEX users_pkey ON public.users USING btree (id)
+    users_username_key:
+      CREATE UNIQUE INDEX users_username_key ON public.users USING btree (username)
+
+----------------------------------------------------------------------
+TABLE: violations
+----------------------------------------------------------------------
+  id                               integer                    NOT NULL [PK] DEFAULT nextval('violations_id_seq'::regclass)
+  session_id                       uuid                       NOT NULL
+  type                             character varying(255)     NOT NULL DEFAULT 'B_INTEGRITY'::character varying
+  reason                           text                       NULL
+  details                          jsonb                      NULL
+  created_at                       timestamp with time zone   NULL
+  resolved_at                      timestamp with time zone   NULL
+  resolved_by                      integer                    NULL
+  resolve_note                     text                       NULL
+  INDEXES:
+    violations_pkey:
+      CREATE UNIQUE INDEX violations_pkey ON public.violations USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: whatsapp_tasks
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  from_number                      text                       NOT NULL
+  message                          text                       NOT NULL
+  received_at                      timestamp with time zone   NULL DEFAULT now()
+  status                           text                       NULL DEFAULT 'PENDING'::text
+  decision                         text                       NULL
+  confidence                       integer                    NULL
+  candidates                       jsonb                      NULL
+  rachel_notified                  boolean                    NOT NULL DEFAULT false
+  resent_at                        timestamp with time zone   NULL
+  twilio_sid                       text                       NULL
+  completed_at                     timestamp with time zone   NULL
+  INDEXES:
+    whatsapp_tasks_pkey:
+      CREATE UNIQUE INDEX whatsapp_tasks_pkey ON public.whatsapp_tasks USING btree (id)
+
+----------------------------------------------------------------------
+TABLE: whatsapp_whitelist
+----------------------------------------------------------------------
+  id                               uuid                       NOT NULL [PK] DEFAULT gen_random_uuid()
+  phone                            text                       NOT NULL
+  label                            text                       NULL
+  active                           boolean                    NOT NULL DEFAULT true
+  added_at                         timestamp with time zone   NOT NULL DEFAULT now()
+  INDEXES:
+    whatsapp_whitelist_phone_key:
+      CREATE UNIQUE INDEX whatsapp_whitelist_phone_key ON public.whatsapp_whitelist USING btree (phone)
+    whatsapp_whitelist_pkey:
+      CREATE UNIQUE INDEX whatsapp_whitelist_pkey ON public.whatsapp_whitelist USING btree (id)
+

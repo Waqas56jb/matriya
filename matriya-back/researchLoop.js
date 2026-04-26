@@ -4,32 +4,52 @@
  * Justification labels/descriptions come from justification templates when available.
  */
 import logger from './logger.js';
-import { ResearchLoopRun } from './database.js';
+import { ResearchLoopRun, sequelize } from './database.js';
 import { getJustificationDisplay } from './justificationTemplates.js';
 import { evidenceFromSearchResults } from './lib/openaiFileSearchMatriya.js';
 
 const AGENT_ORDER = ['analysis', 'research', 'critic', 'synthesis'];
 
-function getAgentPrompt(agentName, query, previousOutput, ragContext = null) {
+function getAgentPrompt(agentName, query, previousOutput, ragContext = null, hasLabData = false) {
   const prev = previousOutput ? `\n\nPrevious step output:\n${String(previousOutput).slice(0, 2000)}` : '';
-  const docContext = ragContext ? `\n\nDocument context (use if relevant):\n${String(ragContext).slice(0, 5000)}` : '';
+  const docContext = ragContext ? `\n\nData and document context:\n${String(ragContext).slice(0, 5000)}` : '';
   const base = `Query: ${query}${prev}${docContext}`;
   const hebrewOnly = ' Always respond in Hebrew (עברית) only. Do not use Arabic.';
+
+  // When real lab data exists, agents must reason from it — no fallbacks allowed
+  const dataGroundingRule = hasLabData
+    ? ' Lab experiment data is provided above — you MUST use the actual numeric values in your reasoning.'
+      + ' STRICTLY FORBIDDEN: do NOT write "אין במערכת מידע תומך" or "no supporting information" or any fallback phrase — real data IS present.'
+      + ' STRICTLY FORBIDDEN: do not end your response with any phrase indicating missing data.'
+    : '';
+
   const prompts = {
     analysis: {
-      system: 'You are the analysis agent. Analyze the query and previous context. Output a concise analysis in Hebrew (עברית) only.' + hebrewOnly,
+      system: 'You are the analysis agent for a materials science system.' + hebrewOnly + dataGroundingRule
+        + (hasLabData
+          ? ' Extract and list the exact numeric values (expansion_ratio, adhesion, viscosity, char_quality, status) for each experiment from the provided data. Present them as a clear comparison table or list.'
+          : ' Analyze the query and previous context. Output a concise analysis.'),
       user: base
     },
     research: {
-      system: 'You are the research agent. Based on the analysis and document context above, produce a short research summary in Hebrew (עברית) only.' + hebrewOnly,
+      system: 'You are the research agent for a materials science system.' + hebrewOnly + dataGroundingRule
+        + (hasLabData
+          ? ' Using the exact numeric values provided, compare each experiment on all available metrics. Identify which experiment performs better on each metric and explain why.'
+          : ' Based on the analysis and document context above, produce a short research summary.'),
       user: base
     },
     critic: {
-      system: 'You are the critic agent. Review the research output critically. Point out gaps or strengths briefly. Respond in Hebrew (עברית) only.' + hebrewOnly,
+      system: 'You are the critic agent for a materials science system.' + hebrewOnly + dataGroundingRule
+        + (hasLabData
+          ? ' Verify that the previous analysis used the actual data values. Check if all metrics were considered. Point out any metric that was missed or incorrectly interpreted.'
+          : ' Review the research output critically. Point out gaps or strengths briefly.'),
       user: base
     },
     synthesis: {
-      system: 'You are the synthesis agent. Synthesize the analysis, research, and critique into a final concise conclusion in Hebrew (עברית) only. Do not use Arabic.',
+      system: 'You are the synthesis agent for a materials science system.' + hebrewOnly + dataGroundingRule
+        + (hasLabData
+          ? ' Based on all the data and analysis above, make a CLEAR and DEFINITIVE recommendation: which experiment is better for production and why. State the winning experiment_id explicitly. Cite the specific numeric values that justify the decision. Do not hedge or give a non-answer.'
+          : ' Synthesize the analysis, research, and critique into a final concise conclusion.'),
       user: base
     }
   };
@@ -39,8 +59,8 @@ function getAgentPrompt(agentName, query, previousOutput, ragContext = null) {
 /**
  * Run one agent: build context and call LLM.
  */
-async function runAgent(agentName, query, previousOutput, ragService, ragContextForResearch = null) {
-  const { system, user } = getAgentPrompt(agentName, query, previousOutput, ragContextForResearch);
+async function runAgent(agentName, query, previousOutput, ragService, ragContextForResearch = null, hasLabData = false) {
+  const { system, user } = getAgentPrompt(agentName, query, previousOutput, ragContextForResearch, hasLabData);
   const llm = ragService.llmService;
   if (!llm || !llm.isAvailable()) {
     return { output: null, error: 'LLM not available' };
@@ -48,7 +68,7 @@ async function runAgent(agentName, query, previousOutput, ragService, ragContext
   const context = `${system}\n\n${user}`;
   const question = query;
   try {
-    const output = await llm.generateAnswer(question, context, 600);
+    const output = await llm.generateAnswer(question, context, 800);
     return { output: output || '', error: null };
   } catch (e) {
     logger.error(`Research loop agent ${agentName} error: ${e.message}`);
@@ -63,7 +83,9 @@ async function runAgent(agentName, query, previousOutput, ragService, ragContext
  * @param {string} query - User query
  * @param {object} ragService - RAG service (has llmService, generateAnswer)
  * @param {object|null} filterMetadata - Optional { filename } to restrict RAG to one file
- * @param {object|null} runOptions - Optional { pre_justification_text, doe_design_id }
+ * @param {object|null} runOptions - Optional { pre_justification_text, doe_design_id, labContext }
+ *   labContext: { experiments: [{experiment_id, expansion_ratio, adhesion, ...}] }
+ *   When provided, experiment data is injected into agent context and stored in outputs.selected_experiments.
  * @returns {Promise<{ run_id, outputs, justifications, error? }>}
  */
 export async function runLoop(sessionId, query, ragService, filterMetadata = null, runOptions = null) {
@@ -74,6 +96,10 @@ export async function runLoop(sessionId, query, ragService, filterMetadata = nul
   let previousOutput = null;
   let ragContext = null;
   let ragEvidenceSources = [];
+
+  // Extract labContext from runOptions (pre-fetched lab experiments to inject into agent context)
+  const labContext = runOptions?.labContext || null;
+  const selectedExperiments = labContext?.experiments || [];
 
   // When searching a single file, use fewer chunks; when no filter or multiple filenames (project scope), use more
   const filenamesList =
@@ -115,7 +141,8 @@ export async function runLoop(sessionId, query, ragService, filterMetadata = nul
 `;
       }
       // When searching "all files" but RAG returned no context (empty collection or no matches), tell the user clearly
-      if (isAllFiles && (!text || text.length < 100)) {
+      // SKIP this fallback if lab experiment data will be injected — it would contradict the real data
+      if (isAllFiles && (!text || text.length < 100) && selectedExperiments.length === 0) {
         text = (text || '') + `[System note: No document content was found in the RAG system. Tell the user in Hebrew, briefly: לא נמצא תוכן במערכת. ייתכן שקבצים טרם עובדו (אינדוקס) בסביבה זו. וודא שהקבצים הועלו ושה-Matriya בסביבת ה-production מקבלת את העלאת הקבצים (MATRIYA_BACK_URL) ומחוברת לאותה מסד נתונים.]
 `;
       }
@@ -125,13 +152,39 @@ export async function runLoop(sessionId, query, ragService, filterMetadata = nul
     logger.warn(`RAG context for research step: ${e.message}`);
   }
 
+  // Inject pre-fetched lab experiments directly into agent context (enriches RAG with live DB data)
+  const hasLabData = selectedExperiments.length > 0;
+  if (hasLabData) {
+    // Build a structured, human-readable table the LLM can parse unambiguously
+    const header = '=== LAB EXPERIMENT DATA (from live DB — use as primary evidence, do NOT say data is missing) ===';
+    const labLines = selectedExperiments.map(e => {
+      const metrics = [
+        ['experiment_id',       e.experiment_id],
+        ['formula',             e.formula],
+        ['expansion_ratio',     e.expansion_ratio],
+        ['adhesion',            e.adhesion],
+        ['viscosity',           e.viscosity],
+        ['char_quality',        e.char_quality],
+        ['experiment_outcome',  e.experiment_outcome || e.status],
+      ]
+        .filter(([, v]) => v != null)
+        .map(([k, v]) => `  ${k}: ${v}`)
+        .join('\n');
+      return `Experiment:\n${metrics}`;
+    }).join('\n\n');
+    const hint = '\nNote: "experiment_outcome=production_formula" means this experiment is validated for production use.';
+    // Replace the entire ragContext with lab data as the primary source (prepend so it appears first)
+    ragContext = `${header}\n\n${labLines}\n${hint}\n\n` + (ragContext ? `Additional document context:\n${ragContext}` : '');
+  }
+
   for (const agentName of AGENT_ORDER) {
     const { output, error } = await runAgent(
       agentName,
       query,
       previousOutput,
       ragService,
-      ragContext
+      ragContext,
+      hasLabData
     );
     if (error) {
       return {
@@ -161,7 +214,47 @@ export async function runLoop(sessionId, query, ragService, filterMetadata = nul
 
   const durationMs = Date.now() - startMs;
   const opts = runOptions && typeof runOptions === 'object' ? runOptions : {};
+
+  // Embed selected experiments into outputs so they are stored in research_loop_runs.outputs (JSONB)
+  if (selectedExperiments.length > 0) {
+    outputs.selected_experiments = selectedExperiments.map(e => ({
+      experiment_id:      e.experiment_id,
+      expansion_ratio:    e.expansion_ratio ?? null,
+      adhesion:           e.adhesion ?? null,
+      viscosity:          e.viscosity ?? null,
+      char_quality:       e.char_quality ?? null,
+      experiment_outcome: e.experiment_outcome ?? e.status ?? null,
+      formula:            e.formula ?? null
+    }));
+
+    // fields_used: every metric column that has at least one non-null value — persisted to DB
+    const METRIC_FIELDS = ['expansion_ratio','adhesion','viscosity','char_quality','experiment_outcome','formula'];
+    outputs.fields_used = METRIC_FIELDS.filter(f => outputs.selected_experiments.some(e => e[f] != null));
+  }
+
   const runRecord = await saveRun(sessionId, query, outputs, justifications, false, null, durationMs, opts.pre_justification_text ?? null, opts.doe_design_id ?? null);
+
+  // Write research_session_id back into lab_experiments for each selected experiment.
+  // This closes the loop: lab_experiments.research_session_id → research_sessions.id
+  if (selectedExperiments.length > 0 && sequelize) {
+    try {
+      const expIds = selectedExperiments.map(e => e.experiment_id).filter(Boolean);
+      if (expIds.length > 0) {
+        // Build placeholders manually — Sequelize doesn't expand arrays in ANY(:param)
+        const placeholders = expIds.map((_, i) => `:eid${i}`).join(', ');
+        const replacements = { sessionId };
+        expIds.forEach((id, i) => { replacements[`eid${i}`] = id; });
+        await sequelize.query(
+          `UPDATE lab_experiments SET research_session_id = :sessionId WHERE experiment_id IN (${placeholders})`,
+          { replacements }
+        );
+        logger.info(`[researchLoop] Wrote research_session_id=${sessionId} to lab_experiments: ${expIds.join(', ')}`);
+      }
+    } catch (e) {
+      logger.warn(`[researchLoop] Could not update lab_experiments.research_session_id: ${e.message}`);
+    }
+  }
+
   return {
     run_id: runRecord?.id ?? null,
     outputs,

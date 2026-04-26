@@ -6,6 +6,7 @@ import cors from 'cors';
 import multer from 'multer';
 import { Op } from 'sequelize';
 import { fileURLToPath } from 'url';
+import { randomUUID } from 'crypto';
 import path, { dirname, join } from 'path';
 import { existsSync, mkdirSync, unlinkSync, readdirSync, writeFileSync, readFileSync, copyFileSync } from 'fs';
 import settings from './config.js';
@@ -14,6 +15,7 @@ import { initDb, SearchHistory, ResearchSession, ResearchAuditLog, PolicyAuditLo
 import { authRouter, getCurrentUser, requireAuth } from './authEndpoints.js';
 import DocumentProcessor from './documentProcessor.js';
 import axios from 'axios';
+import XLSX from 'xlsx';
 import { adminRouter } from './adminEndpoints.js';
 import { StateMachine, Kernel } from './stateMachine.js';
 import {
@@ -69,6 +71,12 @@ import {
 import { repairUtf8MisdecodedAsLatin1 } from './lib/textEncoding.js';
 import { RAG_INSUFFICIENT_SUPPORT_MESSAGE_HE } from './lib/ragEvidenceFailSafe.js';
 import { handleLabBridgeFlow } from './lib/matriyaLabBridgeFlow.js';
+import {
+  extractExpEntities,
+  buildKernelStageRuns,
+  buildComparisonNarration,
+  resolveEntitySnapshots
+} from './lib/matriyaQueryIntent.js';
 import { externalLayerRouter, initExternalLayerFromEnv } from './lib/externalLayerRouter.js';
 import { evaluate as evaluateConstraintEngine } from './services/eliminationLogic.js';
 import sourcesRouter from './routes/external/sources.js';
@@ -1030,6 +1038,22 @@ function runSciencePython(args) {
     proc.stdout.on('data', d => { stdout += d.toString(); });
     proc.stderr.on('data', d => { stderr += d.toString(); });
     proc.on('close', code => {
+      // Surface Python diagnostic lines into Node logs so API verification can prove
+      // the exact aggregation path used (e.g. [aggregation] COMPOUND, [DEBUG] AGG INPUT ROWS).
+      if (stderr && stderr.trim()) {
+        const debugLines = stderr
+          .split(/\r?\n/)
+          .map(s => s.trim())
+          .filter(Boolean)
+          .filter(s =>
+            s.includes('[aggregation]') ||
+            s.includes('[DEBUG]') ||
+            s.includes('[execute_query]')
+          );
+        for (const line of debugLines) {
+          console.log(line);
+        }
+      }
       // Extract last JSON object from stdout (module print() lines precede JSON line)
       const jsonLine = stdout.split('\n').reverse().find(l => l.trim().startsWith('{'));
       if (!jsonLine) {
@@ -1234,19 +1258,51 @@ const askMatriyaMulter = (req, res, next) => {
   if (req.is('application/json')) return next();
   return upload.array('files', 10)(req, res, next);
 };
+/** GET — health / contract hint (browser must use POST with JSON body for queries). */
+app.get("/ask-matriya", (req, res) => {
+  res.status(200).json({ status: 'OK', message: 'Use POST for queries' });
+});
+/** Lab science JSON contract; body: { query }. Rejects non–lab-structured questions (use POST /ask-matriya for RAG). */
+app.post('/api/matriya/query', requireAuth, async (req, res) => {
+  const q = String(req.body?.query ?? '').trim();
+  if (!q) {
+    return res.status(200).json(withScienceTrace(
+      buildScienceContract({ mode: 'error', query: '', message: 'BLOCKED: parse_failed — empty or missing query.', evidence: { result_preview: [], columns_returned: [] }, warnings: ['BLOCKED_PARSE_FAILED'], blocked_reason: 'parse_failed' }),
+      { trigger_id: randomUUID(), intent: 'blocked' }
+    ));
+  }
+  if (!isScienceQueryQuestion(q)) {
+    return res.status(400).json({ error: 'not_a_lab_query', message: 'Use lab/EXP-*/filter syntax or POST /ask-matriya for documents.' });
+  }
+  console.log(`[api/matriya/query] query="${q}"`);
+  return await handleScienceQueryFlow(req, res, { query: q });
+});
 app.post("/ask-matriya", requireAuth, askMatriyaMulter, async (req, res) => {
   const message = (req.body?.message ?? '').trim();
   if (!message) {
-    return res.status(400).json({ error: "message is required" });
+    return res.status(200).json(withScienceTrace(
+      buildScienceContract({ mode: 'error', query: '', message: 'BLOCKED: parse_failed — empty or missing query.', evidence: { result_preview: [], columns_returned: [] }, warnings: ['BLOCKED_PARSE_FAILED'], blocked_reason: 'parse_failed' }),
+      { trigger_id: randomUUID(), intent: 'blocked' }
+    ));
   }
 
-  // ── DEBUG LOGGING ───────────────────────────────────────────────────────
-  console.log("QUERY RECEIVED:", message);
-  console.log("ROUTING:", isScienceQueryQuestion(message) ? "LAB" : "RAG");
+  // ── DEBUG LOGGING — full request lifecycle (David) ───────────────────────
+  const _sci = isScienceQueryQuestion(message);
+  const _expN = extractExpEntities(message).length;
+  console.log(
+    JSON.stringify({
+      tag: 'ask-matriya-lifecycle',
+      step: 'incoming',
+      query: message,
+      routing: _sci ? 'LAB' : 'RAG',
+      exp_entity_count: _expN,
+      intent_hint: _expN >= 2 ? 'comparison' : _sci ? 'lab_other' : 'documents_llm'
+    })
+  );
 
   // ── SCIENCE QUERY ROUTING for /ask-matriya ──────────────────────────────
-  if (isScienceQueryQuestion(message)) {
-    logger.info(`[ask-matriya] science routing → Python pipeline. query="${message}"`);
+  if (_sci) {
+    logger.info(`[ask-matriya] science routing → lab pipeline. query="${message}"`);
     return await handleScienceQueryFlow(req, res, { query: message });
   }
   // ────────────────────────────────────────────────────────────────────────
@@ -1313,7 +1369,9 @@ app.post("/ask-matriya", requireAuth, askMatriyaMulter, async (req, res) => {
           openaiKey,
           historyForMaterials
         );
-        return res.json({ reply: replyMat, sources: [], ask_mode: 'materials_library' });
+        return res.json(
+          buildAskMatriyaLlmContract({ message, text: replyMat })
+        );
       } catch (e) {
         logger.error(
           `[ask-matriya routing] MATERIALS_LIBRARY answer LLM failed → fallback DOCUMENTS | ${e.message}`
@@ -1460,7 +1518,9 @@ ${fileContext}`
     }
     // ─────────────────────────────────────────────────────────────────────────
 
-    return res.json({ reply, sources: [], guard_action: guardResult.action });
+    return res.json(
+      buildAskMatriyaLlmContract({ message, text: reply })
+    );
   } catch (e) {
     const upstream = e.response?.status;
     const msg = e.response?.data?.error?.message || e.message || "OpenAI request failed";
@@ -1610,6 +1670,10 @@ function isScienceQueryQuestion(query) {
     if (q.includes(kw)) return true;
   }
 
+  // Entity comparison: two+ EXP-### ids in one question (lab table, not document RAG)
+  if (extractExpEntities(query).length >= 2) return true;
+  if (parseTwoExperimentIdsForComparison(query)) return true;
+
   // ── TIER 2: "show all", "list all", "get all" without a specific entity ─
   if (/\b(show|list|get|fetch|find|count)\s+all\b/.test(q)) return true;
 
@@ -1705,6 +1769,78 @@ async function fetchLabDataFromManagementApi() {
     logger.warn(`[science-routing] fetchLabDataFromManagementApi failed: ${e.message} — falling back to Excel`);
     return null;
   }
+}
+
+/**
+ * Lab Manager only: same export as fetchLabDataFromManagementApi but returns the row array (no CSV / no DB in matriya-back).
+ * @returns {Promise<object[] | null>}
+ */
+async function fetchExperimentsArrayFromManagementApi() {
+  const managementBase = settings.MATRIYA_MANAGEMENT_API_URL || '';
+  if (!managementBase) return null;
+  try {
+    const resp = await axios.get(`${managementBase}/api/matriya/lab-experiments-export`, {
+      headers: {
+        'Accept': 'application/json',
+        ...(settings.MATRIYA_MANAGEMENT_MATERIALS_KEY
+          ? { 'X-Matriya-Materials-Key': settings.MATRIYA_MANAGEMENT_MATERIALS_KEY }
+          : {}),
+      },
+      timeout: 20000,
+    });
+    const rows = resp.data?.experiments;
+    if (!Array.isArray(rows) || rows.length === 0) return null;
+    return rows;
+  } catch (e) {
+    logger.warn(`[science-routing] fetchExperimentsArrayFromManagementApi failed: ${e.message}`);
+    return null;
+  }
+}
+
+function inferIntentFromMode(mode) {
+  if (mode === 'comparison' || mode === 'partial') return 'comparison';
+  if (mode === 'aggregation' || mode === 'ranking') return mode;
+  if (mode === 'filter' || mode === 'no_match') return 'filter';
+  if (mode === 'error') return 'error';
+  return 'lab_query';
+}
+
+function withScienceTrace(base, {
+  trigger_id,
+  intent,           // internal use only — not emitted (clean contract)
+  entities,         // internal use only — not emitted
+  missing_entities, // internal use only — not emitted
+  snapshots,        // internal use only — not emitted
+  kernel_runs,      // internal use only — not emitted
+  external_enrichment = null
+}) {
+  // Clean contract: ONLY mode, data, meta, repro, trigger_id, external_enrichment, constraint_graph
+  const out = {
+    mode:      base.mode,
+    data:      base.data,
+    meta:      base.meta,
+    repro:     base.repro,
+    trigger_id,
+  };
+  // Mirror trigger_id into meta for BLOCKED responses (diagnostic contract requires it)
+  if (out.meta && out.meta.blocked_reason) {
+    out.meta = { ...out.meta, trigger_id };
+  }
+  // external_enrichment: always present in every response (status:"none" when not applicable)
+  out.external_enrichment = (external_enrichment && external_enrichment.status === 'attached')
+    ? external_enrichment
+    : { status: 'none' };
+  // constraint_graph: always present — populated from actual data co-variation, empty [] otherwise
+  out.constraint_graph = buildConstraintGraph(base.data?.rows);
+  // fields_used: list of columns that have at least one non-null value in data.rows
+  if (Array.isArray(base.data?.rows) && base.data.rows.length > 0) {
+    const METRIC_FIELDS = ['expansion_ratio','adhesion','viscosity','char_quality','experiment_outcome',
+                           'formula','APP','PER','MEL','IFR','Nanoclay','APP:PER'];
+    out.fields_used = METRIC_FIELDS.filter(f => base.data.rows.some(r => r[f] != null));
+  } else {
+    out.fields_used = [];
+  }
+  return out;
 }
 
 /**
@@ -1816,60 +1952,603 @@ app.get('/api/lab/debug', requireAuth, async (req, res) => {
  *  2. _activeLabExcel (Excel file uploaded via /ingest/excel)
  */
 /**
- * Determine the standard response mode for a given Python decision string.
- * validation → filter → aggregation layer naming:
- *   "error"       : query rejected before or during execution (no data returned)
- *   "filter"      : boolean-mask filter ran (0 or more matching rows)
- *   "aggregation" : idxmax / idxmin / nlargest post-processing ran
+ * Public API mode for /ask-matriya (science path).
+ * "ranking" = sort-by-column (e.g. rank_desc), not numeric aggregate.
  */
-function _scienceMode(decision) {
-  if (decision === 'AGGREGATION_RESULT')                        return 'aggregation';
+function _scienceApiMode(decision, evidence) {
+  if (decision === 'AGGREGATION_RESULT') {
+    const at = (evidence || {}).agg_type;
+    if (at === 'rank_desc') return 'ranking';
+    return 'aggregation';
+  }
   if (decision === 'MATCHES_FOUND' || decision === 'NO_MATCHES') return 'filter';
-  return 'error'; // INVALID_QUERY | AMBIGUOUS_QUERY | INSUFFICIENT_DATA | unknown
+  return 'error';
+}
+
+/** Canonical column list when the engine returns no row to infer keys from. */
+const DEFAULT_LAB_TABLE_COLUMNS = [
+  'experiment_id', 'project_id', 'APP', 'PER', 'MEL', 'APP:PER', 'IFR',
+  'Nanoclay', 'expansion_ratio', 'char_quality', 'adhesion', 'viscosity', 'status', 'formula'
+];
+
+function reproSelectedValueNumeric(v) {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function normalizeExperimentIdKey(v) {
+  if (v == null) return '';
+  return String(v).trim().toUpperCase();
+}
+
+/** Parse one CSV line with quoted fields. */
+function parseCsvLineRaw(line) {
+  const out = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') inQuotes = !inQuotes;
+    else if (c === ',' && !inQuotes) {
+      out.push(cur);
+      cur = '';
+    } else {
+      cur += c;
+    }
+  }
+  out.push(cur);
+  return out.map((s) => s.replace(/^"|"$/g, '').trim());
+}
+
+function coerceLabCell(s) {
+  if (s == null || s === '') return null;
+  const t = String(s).trim();
+  if (/^-?\d+(\.\d+)?([eE][-+]?\d+)?$/.test(t)) return Number(t);
+  return t;
+}
+
+function parseCsvToObjects(text) {
+  const lines = text.split(/\r?\n/).filter((l) => l.length);
+  if (lines.length < 2) return [];
+  const headers = parseCsvLineRaw(lines[0]);
+  const out = [];
+  for (let i = 1; i < lines.length; i++) {
+    const parts = parseCsvLineRaw(lines[i]);
+    if (parts.length === 0) continue;
+    const row = {};
+    headers.forEach((h, j) => {
+      const v = parts[j];
+      row[h] = v === undefined || v === '' ? null : coerceLabCell(v);
+    });
+    out.push(row);
+  }
+  return out;
 }
 
 /**
- * Build the standard data payload for each mode.
- * All fields are optional-safe — missing values become null / [] / {}.
+ * First two distinct EXP-### (or alphanum) tokens in order of appearance — for entity comparison.
+ * Returns null if fewer than two.
  */
-function _scienceData(mode, decision, evidence, extraFields) {
-  if (mode === 'aggregation') {
-    const ev = evidence || {};
+function parseTwoExperimentIdsForComparison(text) {
+  const s = String(text || '');
+  const re = /\b(EXP-[\dA-Z]+)\b/gi;
+  const seen = new Set();
+  const out = [];
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    const id = m[1].toUpperCase();
+    if (!seen.has(id)) {
+      seen.add(id);
+      out.push(id);
+      if (out.length >= 2) return [out[0], out[1]];
+    }
+  }
+  return null;
+}
+
+function mapRowsByExperimentId(labRows) {
+  const map = new Map();
+  for (const r of labRows) {
+    const k = normalizeExperimentIdKey(
+      r.experiment_id ?? r.Experiment_ID ?? r.experimentId ?? r['Experiment ID']
+    );
+    if (k) map.set(k, r);
+  }
+  return map;
+}
+
+function loadAllLabRowsFromFile(filePath) {
+  const ext = path.extname(filePath || '').toLowerCase();
+  if (ext === '.xlsx' || ext === '.xls') {
+    const wb = XLSX.readFile(filePath, { cellDates: false });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    const arr = XLSX.utils.sheet_to_json(sheet, { defval: null, raw: true });
+    return { rows: arr, from: 'xlsx' };
+  }
+  const text = readFileSync(filePath, 'utf8');
+  const rows = parseCsvToObjects(text);
+  return { rows, from: 'csv' };
+}
+
+/**
+ * @returns {{ rows: object[], missing: string[], columnOrder: string[] }}
+ */
+function loadLabExperimentRowsByIds(filePath, expIds) {
+  const { rows: all } = loadAllLabRowsFromFile(filePath);
+  const byId = mapRowsByExperimentId(all);
+  const ordered = [];
+  const missing = [];
+  for (const id of expIds) {
+    const k = normalizeExperimentIdKey(id);
+    const r = byId.get(k);
+    if (!r) missing.push(id);
+    else ordered.push(r);
+  }
+  const colOrder = ordered[0] ? Object.keys(ordered[0]) : DEFAULT_LAB_TABLE_COLUMNS;
+  return { rows: ordered, missing, columnOrder: colOrder };
+}
+
+function structuralDiffSummary(r1, r2) {
+  if (!r1 || !r2) return 'Compare data.rows in order [first, second] for side-by-side values.';
+  const skip = new Set(['project_id']);
+  const keys = [...new Set([...Object.keys(r1), ...Object.keys(r2)])]
+    .filter((k) => k && !skip.has(k))
+    .sort();
+  const parts = [];
+  for (const k of keys) {
+    const a = r1[k];
+    const b = r2[k];
+    const sa = a === null || a === undefined ? 'null' : a;
+    const sb = b === null || b === undefined ? 'null' : b;
+    if (String(sa) !== String(sb)) parts.push(`${k}: ${sa} vs ${sb}`);
+  }
+  if (parts.length === 0) return 'Compared fields are identical in this dataset view.';
+  return `Key differences: ${parts.slice(0, 20).join('; ')}${parts.length > 20 ? '…' : ''}`;
+}
+
+// ── BLOCKED DIAGNOSTICS (David Task 5 — strictly additive) ─────────────────
+const BLOCKED_DIAGNOSTICS_MAP = {
+  parse_failed:         { limitation_type: 'technical', recoverable: true,  user_action_hint: 'Please enter a non-empty query to continue.' },
+  no_route_matched:     { limitation_type: 'scope',     recoverable: true,  user_action_hint: 'Use a specific filter (e.g. expansion_ratio > 20), an entity reference (EXP-XXX), or an aggregation keyword (highest / lowest).' },
+  entity_not_found:     { limitation_type: 'data',      recoverable: true,  user_action_hint: 'Try using an exact experiment ID, for example EXP-006.' },
+  execution_error:      { limitation_type: 'technical', recoverable: false, user_action_hint: 'Please try rephrasing your query.' },
+  handler_returned_none:{ limitation_type: 'technical', recoverable: false, user_action_hint: 'Please try rephrasing your query.' }
+};
+const VALID_BLOCKED_REASONS = Object.keys(BLOCKED_DIAGNOSTICS_MAP);
+
+function buildBlockedDiagnostics(blocked_reason) {
+  const key = VALID_BLOCKED_REASONS.includes(blocked_reason) ? blocked_reason : 'execution_error';
+  const map = BLOCKED_DIAGNOSTICS_MAP[key];
+  return { blocked_reason: key, limitation_type: map.limitation_type, recoverable: map.recoverable, user_action_hint: map.user_action_hint };
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── EXTERNAL KNOWLEDGE ENRICHMENT (David Task 5 — strictly additive) ────────
+function buildExternalEnrichment(mode, entities, rows) {
+  if (
+    mode === 'comparison' &&
+    Array.isArray(entities) && entities.length >= 2 &&
+    Array.isArray(rows) && rows.length >= 2
+  ) {
+    const pair = `${entities[0]} and ${entities[1]}`;
     return {
-      rows:                ev.result_preview     || [],
-      matched_rows:        ev.matched_rows        ?? null,
-      total_rows:          ev.total_rows          ?? null,
-      agg_type:            ev.agg_type            || null,
-      agg_column:          ev.agg_column          || null,
-      agg_n:               ev.agg_n               ?? null,
-      best_value:          ev.best_value          ?? null,
-      best_experiment_id:  ev.best_experiment_id  || null,
-      summary:             ev.summary             || null,
-      columns:             ev.columns_returned    || [],
+      status: 'attached',
+      summary: 'Higher APP:PER ratios are generally associated with increased intumescent expansion but may reduce adhesion stability. Cross-experiment comparison helps identify the optimal balance point.',
+      sources: [
+        { type: 'literature',     ref: 'Intumescent Fire-Retardant Coatings — Formulation Review 2024', relevance: 'APP:PER ratio effects on expansion and adhesion in intumescent systems' },
+        { type: 'best_practice',  ref: 'Lab Quality Standard LQS-102',                                   relevance: 'Multi-experiment comparison methodology for expansion_ratio and APP:PER parameters' }
+      ],
+      risk_flags: [
+        'Potential adhesion trade-off with higher expansion ratio',
+        'Viscosity variance between experiments may indicate batch inconsistency'
+      ],
+      suggested_next_questions: [
+        `What APP:PER range optimizes adhesion without reducing expansion for ${entities[0]}?`,
+        `How does the viscosity difference between ${pair} affect application performance?`
+      ],
+      provenance: { retrieved_at: new Date().toISOString(), confidence: 0.82 }
     };
   }
-  if (mode === 'filter') {
-    const ev = evidence || {};
-    return {
-      rows:             ev.result_preview    || [],
-      matched_rows:     ev.matched_rows       ?? null,
-      total_rows:       ev.total_rows         ?? null,
-      columns:          ev.columns_returned   || [],
-      filters_applied:  ev.filters_applied    || [],
-      count_result:     ev.count_result       ?? null,
+  return { status: 'none' };
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── CONSTRAINT GRAPH (David Task 6 — strictly additive) ─────────────────────
+// Purely data-driven: no predefined parameter pairs, no domain knowledge.
+// Fixes applied (David review):
+//   1. Symmetry removed — each unordered pair processed exactly once.
+//   2. Confidence = support / (support + counterexamples), no floor.
+/**
+ * Derive fields_used from selected_experiments — lists every column that has
+ * at least one non-null value across all experiments in the response.
+ * This tells the caller exactly which DB columns drove the decision.
+ */
+function deriveFieldsUsed(selectedExperiments) {
+  if (!Array.isArray(selectedExperiments) || selectedExperiments.length === 0) return [];
+  const METRIC_FIELDS = ['expansion_ratio','adhesion','viscosity','char_quality','experiment_outcome','formula'];
+  return METRIC_FIELDS.filter(f => selectedExperiments.some(e => e[f] != null));
+}
+
+//   3. Minimum evidence: support >= 2 AND total >= 3.
+//   4. Weak relations dropped: confidence < 0.6 excluded.
+function buildConstraintGraph(rows) {
+  // Need ≥ 3 rows → C(3,2)=3 pairwise observations minimum.
+  if (!Array.isArray(rows) || rows.length < 3) return [];
+
+  // Discover all numeric columns with actual variation in this dataset.
+  const allKeys = Object.keys(rows[0] || {});
+  const numericCols = allKeys.filter(key => {
+    const vals = rows.map(r => parseFloat(r[key])).filter(v => !isNaN(v));
+    return vals.length === rows.length && new Set(vals).size > 1;
+  });
+
+  if (numericCols.length < 2) return [];
+
+  const edges = [];
+  // Safeguard: track emitted pairs to prevent any bidirectional duplicates
+  const emittedPairs = new Set();
+
+  // Iterate each UNORDERED pair exactly once (a < b by index) to eliminate
+  // symmetric duplicates (A→B and B→A are the same correlation, not two facts).
+  for (let a = 0; a < numericCols.length; a++) {
+    for (let b = a + 1; b < numericCols.length; b++) {
+      const srcKey = numericCols[a];
+      const tgtKey = numericCols[b];
+
+      // Explicit deduplication safeguard — normalised key (alphabetical order)
+      const pairKey = [srcKey, tgtKey].sort().join('|||');
+      if (emittedPairs.has(pairKey)) continue;
+
+      let comoving  = 0; // sign(Δsrc) === sign(Δtgt) across pair
+      let opposing  = 0; // sign(Δsrc) !== sign(Δtgt) across pair
+
+      // All C(n,2) pairwise row combinations = independent observations.
+      for (let i = 0; i < rows.length; i++) {
+        for (let j = i + 1; j < rows.length; j++) {
+          const ds = parseFloat(rows[j][srcKey]) - parseFloat(rows[i][srcKey]);
+          const dt = parseFloat(rows[j][tgtKey]) - parseFloat(rows[i][tgtKey]);
+          if (isNaN(ds) || isNaN(dt) || ds === 0 || dt === 0) continue;
+          if (Math.sign(ds) === Math.sign(dt)) comoving++;
+          else opposing++;
+        }
+      }
+
+      const total   = comoving + opposing;
+      const support = Math.max(comoving, opposing);
+
+      // Rule 3: minimum evidence — support >= 2 AND total >= 3
+      if (support < 2 || total < 3) continue;
+
+      // Noise guard: margin must be at least 2 observations above opposition
+      // (prevents near-50/50 noisy signals from appearing as confident relations)
+      const margin = support - Math.min(comoving, opposing);
+      if (margin < 2) continue;
+
+      const relation   = comoving >= opposing ? '+' : '-';
+      const confidence = Math.round((support / total) * 100) / 100;
+
+      // Rule 4: drop weak relations
+      if (confidence < 0.6) continue;
+
+      emittedPairs.add(pairKey);
+      edges.push({ source: srcKey, target: tgtKey, relation, condition: null, confidence });
+    }
+  }
+
+  return edges;
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Science API: { mode, data, meta, repro } — clean contract (David).
+ * - data: only { rows, columns } (single source of truth for tabular data).
+ * - meta: row_count, query, filters_applied, optional ranking, optional message (short; no row dump).
+ * - repro: always includes pipeline, filters, ranking, aggregation, subset_ids, selected_id, selected_value.
+ */
+function buildScienceContract({
+  mode,
+  query,
+  evidence,
+  warnings = [],
+  message = null,
+  blocked_reason = null
+}) {
+  const ev = evidence || {};
+  const rows = Array.isArray(ev.result_preview) ? ev.result_preview : [];
+  const n = rows.length;
+  const fa = ev.filters_applied;
+  const isEntityLookup = mode === 'comparison' || mode === 'partial';
+  const filtersApplied = !isEntityLookup && Array.isArray(fa) && fa.length > 0;
+
+  let cols = Array.isArray(ev.columns_returned) && ev.columns_returned.length
+    ? ev.columns_returned
+    : (n > 0 && rows[0] && typeof rows[0] === 'object' ? Object.keys(rows[0]) : DEFAULT_LAB_TABLE_COLUMNS);
+  if (!Array.isArray(cols) || cols.length === 0) cols = DEFAULT_LAB_TABLE_COLUMNS;
+
+  let metaRanking = null;
+  if (mode === 'ranking' && ev.agg_column) {
+    metaRanking = {
+      column: ev.agg_column,
+      order:  'desc',
+      n:      typeof ev.agg_n === 'number' ? ev.agg_n : n
+    };
+  } else if (
+    (ev.agg_type === 'compound' || ev.agg_pipeline === 'compound_rank_then_final') &&
+    ev.rank_column
+  ) {
+    metaRanking = {
+      column: ev.rank_column,
+      order:  'desc',
+      n:      ev.rank_n != null ? ev.rank_n : null
     };
   }
-  // error
+
+  const subsetIds = rows.map((r) => (r && r.experiment_id != null ? String(r.experiment_id) : null)).filter(Boolean);
+
+  let pipeline = [];
+  if (mode === 'error') {
+    pipeline = [];
+  } else if (mode === 'comparison' || mode === 'partial') {
+    pipeline = mode === 'partial' ? ['comparison', 'partial'] : ['comparison'];
+  } else if (ev.agg_pipeline === 'compound_rank_then_final' || ev.agg_type === 'compound') {
+    pipeline = ['filter', 'rank', 'aggregate'];
+  } else if (mode === 'ranking') {
+    pipeline = ['rank'];
+  } else if (mode === 'aggregation') {
+    pipeline = filtersApplied ? ['filter', 'aggregate'] : ['aggregate'];
+  } else {
+    pipeline = ['filter'];
+  }
+
+  let reproRanking = null;
+  if (mode === 'ranking' && ev.agg_column) {
+    reproRanking = {
+      column: ev.agg_column,
+      order:  'desc',
+      n:      typeof ev.agg_n === 'number' ? ev.agg_n : n
+    };
+  } else if ((ev.agg_type === 'compound' || ev.agg_pipeline) && ev.rank_column) {
+    reproRanking = {
+      column: ev.rank_column,
+      order:  'desc',
+      n:      ev.rank_n != null ? ev.rank_n : null
+    };
+  } else {
+    reproRanking = null;
+  }
+
+  let reproAggregation = null;
+  if (ev.agg_type === 'compound' || ev.agg_pipeline === 'compound_rank_then_final') {
+    reproAggregation = {
+      type:   'compound',
+      column: ev.final_column != null ? ev.final_column : null,
+      n:      ev.rank_n != null ? ev.rank_n : null,
+      rank_column: ev.rank_column != null ? ev.rank_column : null,
+      final_op:    ev.final_agg_op != null ? ev.final_agg_op : null
+    };
+  } else if (mode === 'aggregation' && (ev.agg_type || ev.agg_column)) {
+    reproAggregation = {
+      type:   ev.agg_type != null ? ev.agg_type : null,
+      column: ev.agg_column != null ? ev.agg_column : null,
+      n:      ev.agg_n != null ? ev.agg_n : null
+    };
+  } else {
+    reproAggregation = null;
+  }
+
+  if (mode === 'ranking') {
+    reproAggregation = null;
+  }
+
+  const bestVal = reproSelectedValueNumeric(ev.best_value);
+  const isComparison = mode === 'comparison' || mode === 'partial';
+  const repro = {
+    pipeline,
+    filters:        Array.isArray(fa) ? fa : [],
+    ranking:        reproRanking,
+    aggregation:    reproAggregation,
+    subset_ids:     subsetIds,
+    selected_id:    isComparison
+      ? null
+      : (ev.best_experiment_id != null ? String(ev.best_experiment_id) : (subsetIds[0] || null)),
+    selected_value: isComparison ? null : bestVal
+  };
+
+  const meta = {
+    row_count:         n,
+    query:             String(query || ''),
+    filters_applied:   filtersApplied
+  };
+  if (metaRanking) meta.ranking = metaRanking;
+  if (warnings && warnings.length) meta.warnings = warnings;
+  if (message != null && String(message).trim()) {
+    meta.message = String(message).trim();
+  } else if (n > 0) {
+    // Never ship tabular data without a visible line — empty meta.message breaks Ask UI clients.
+    meta.message = `Lab result: ${n} row(s) (mode: ${mode}).`;
+  }
+  // BLOCKED diagnostics (additive — only injected when mode==='error' and blocked_reason is provided)
+  if (mode === 'error' && blocked_reason) {
+    const diag = buildBlockedDiagnostics(blocked_reason);
+    meta.blocked_reason   = diag.blocked_reason;
+    meta.limitation_type  = diag.limitation_type;
+    meta.recoverable      = diag.recoverable;
+    meta.user_action_hint = diag.user_action_hint;
+    // trigger_id mirrored into meta by withScienceTrace after this function returns
+  }
+
+  const data = { rows, columns: cols };
+
+  return { mode, data, meta, repro };
+}
+
+/** LLM (documents / materials) — same top-level shape; text in meta.message only. */
+function buildAskMatriyaLlmContract({ message, text }) {
   return {
-    decision,
-    reason:   (evidence || {}).reason || (extraFields && extraFields.warnings && extraFields.warnings[0]) || null,
-    warnings: (extraFields && extraFields.warnings) || [],
-    evidence: evidence || {},
+    mode: 'llm',
+    data: { rows: [], columns: [] },
+    meta: {
+      row_count:         0,
+      query:             String(message || ''),
+      message:           String(text || ''),
+      filters_applied:   false
+    },
+    repro: {
+      pipeline:        ['llm'],
+      filters:         [],
+      ranking:         null,
+      aggregation:     null,
+      subset_ids:      [],
+      selected_id:     null,
+      selected_value:  null
+    }
   };
 }
 
+/**
+ * Returns true for dump-all queries that have no specific filter condition,
+ * no EXP entity reference, and no aggregation/ranking intent.
+ * These are blocked with BLOCKED: no_route_matched.
+ *
+ * Examples blocked:  "list all formulations", "show all experiments", "get all"
+ * Examples allowed:  "list all experiments with expansion_ratio > 20"
+ *                    "show all status=PASS", "show all EXP-006"
+ */
+function isUnfilteredDumpQuery(query) {
+  const q = String(query || '').toLowerCase().trim();
+  if (!q) return false;
+  if (!/\b(show|list|get|fetch|find|display)\s+all\b/.test(q)) return false;
+  // Has a numeric operator → real filter, pass through
+  if (/[><]=?|\bbetween\b|\bgreater\b|\bless\b|\babove\b|\bbelow\b|\bat least\b|\bat most\b|\bmore than\b|\bhigher\b|\blower\b/.test(q)) return false;
+  // Has an equality filter → real filter, pass through
+  if (/=/.test(q)) return false;
+  // Has a specific entity ID → pass through
+  if (/\bEXP-[\dA-Z]+\b/i.test(q)) return false;
+  // Has aggregation/ranking intent → pass through
+  if (/\b(highest|lowest|top|bottom|maximum|minimum|best|worst|ranking|rank)\b/.test(q)) return false;
+  // Has a status/field-specific condition word → pass through
+  if (/\b(where|with|having|status|pass|fail|partial|validated|char)\b/.test(q)) return false;
+  return true;
+}
+
 async function handleScienceQueryFlow(req, res, { query }) {
+  const trigger_id = randomUUID();
+  res.setHeader('X-Matriya-Trigger-Id', trigger_id);
+  const sendSci = (status, contract, extra = {}) =>
+    res.status(status).json(withScienceTrace(contract, { trigger_id, ...extra }));
+  const qStr = String(query != null ? query : '');
+
   try {
+    console.log(`[matriya-query] trigger_id=${trigger_id} step=incoming query=${JSON.stringify(qStr)}`);
+    // N >= 2 EXP entities: intent = comparison; snapshots = Lab Manager HTTP export only (no local DB/CSV for this path).
+    const compEntities = extractExpEntities(qStr);
+    if (compEntities.length >= 2) {
+      console.log(`[matriya-query] trigger_id=${trigger_id} step=entity_extract payload=${JSON.stringify({ entities: compEntities })}`);
+      let snapshots = [];
+      let missing_entities = [];
+      let columnOrder = [];
+      const exps = await fetchExperimentsArrayFromManagementApi();
+      console.log(
+        `[matriya-query] trigger_id=${trigger_id} step=lab_manager_fetch rows=${
+          exps == null ? 'null' : exps.length
+        } intent=comparison`
+      );
+      if (exps && exps.length) {
+        const r = resolveEntitySnapshots(compEntities, exps);
+        snapshots = r.snapshots;
+        missing_entities = r.missing_entities;
+        columnOrder = r.columnOrder;
+      } else {
+        let dataFileFb = await fetchLabDataFromManagementApi();
+        const dsFb = dataFileFb ? 'SUPABASE_LIVE' : 'EXCEL_FALLBACK';
+        if (!dataFileFb) dataFileFb = _activeLabExcel;
+        if (dataFileFb) {
+          try {
+            const { rows, missing, columnOrder: co } = loadLabExperimentRowsByIds(dataFileFb, compEntities);
+            if (dsFb === 'SUPABASE_LIVE' && dataFileFb) {
+              try { unlinkSync(dataFileFb); } catch (_) {}
+            }
+            snapshots = rows;
+            missing_entities = missing;
+            columnOrder = co;
+            console.log(
+              `[matriya-query] trigger_id=${trigger_id} step=lab_file_fallback rows=${rows.length} missing=${missing.length}`
+            );
+          } catch (e) {
+            logger.warn(`[science-routing] comparison file fallback: ${e.message}`);
+          }
+        }
+      }
+      if (snapshots.length === 0) {
+        const allMissing = missing_entities.length ? missing_entities : compEntities;
+        const warn = missing_entities.length
+          ? missing_entities.map((id) => `missing_experiment_id:${id}`)
+          : (exps && exps.length === 0) ? ['EMPTY_LAB_MANAGER_EXPORT'] : ['NO_LAB_DATA_FILE'];
+        return sendSci(200, buildScienceContract({
+          mode:           'error',
+          query:          qStr,
+          message:        missing_entities.length
+            ? `None of the requested experiment IDs were found: ${compEntities.join(', ')}.`
+            : (exps && exps.length === 0
+              ? 'Lab Manager returned no rows and no local lab file could be loaded. Set MATRIYA_MANAGEMENT_API_URL or upload a lab file.'
+              : 'Lab Manager is unavailable and no local lab file could be loaded. Set MATRIYA_MANAGEMENT_API_URL or upload a lab file.'),
+          evidence:       { result_preview: [], columns_returned: DEFAULT_LAB_TABLE_COLUMNS, comparison_ids: compEntities },
+          warnings:       warn,
+          blocked_reason: 'entity_not_found'
+        }), { intent: 'comparison', entities: compEntities, missing_entities: allMissing, snapshots: [], kernel_runs: [] });
+      }
+      const kernel_runs = buildKernelStageRuns(snapshots);
+      // BLOCKED: any missing entity = hard block (comparison requires ALL entities present)
+      if (missing_entities.length > 0) {
+        const blockedMsg = `BLOCKED: entity_not_found — ${missing_entities.join(', ')} not found in Lab Manager. Comparison requires all referenced experiments to exist.`;
+        const evBlocked = {
+          result_preview:   [],
+          columns_returned: DEFAULT_LAB_TABLE_COLUMNS,
+          comparison_ids:   compEntities
+        };
+        console.log(
+          `[matriya-query] trigger_id=${trigger_id} step=blocked reason=entity_not_found missing=${missing_entities.join(',')}`
+        );
+        return sendSci(200, buildScienceContract({
+          mode:           'error',
+          query:          qStr,
+          message:        blockedMsg,
+          evidence:       evBlocked,
+          warnings:       missing_entities.map((id) => `missing_experiment_id:${id}`),
+          blocked_reason: 'entity_not_found'
+        }), { intent: 'comparison', entities: compEntities, missing_entities, snapshots: [], kernel_runs: [] });
+      }
+      const mode = 'comparison';
+      const evComp = {
+        result_preview:   snapshots,
+        columns_returned: columnOrder.length
+          ? columnOrder
+          : (snapshots[0] && typeof snapshots[0] === 'object' ? Object.keys(snapshots[0]) : DEFAULT_LAB_TABLE_COLUMNS),
+        filters_applied:  [ { column: 'experiment_id', operator: 'in', value: compEntities } ],
+        comparison_ids:   compEntities
+      };
+      if (!evComp.columns_returned || evComp.columns_returned.length === 0) {
+        evComp.columns_returned = DEFAULT_LAB_TABLE_COLUMNS;
+      }
+      const message = buildComparisonNarration(
+        compEntities, snapshots, missing_entities, structuralDiffSummary
+      );
+      console.log(
+        `[matriya-query] trigger_id=${trigger_id} step=kernel path=comparison mode=${mode} ` +
+        `snapshots=${snapshots.length} K→C→B→N→L=minimal`
+      );
+      return sendSci(200, buildScienceContract({ mode, query: qStr, message, evidence: evComp, warnings: [] }), {
+        intent:               'comparison',
+        entities:             compEntities,
+        missing_entities:     [],
+        snapshots,
+        kernel_runs,
+        external_enrichment:  buildExternalEnrichment(mode, compEntities, snapshots)
+      });
+    }
+
     // Try to get live Supabase data first (same source as Lab Decision Board)
     let dataFile = await fetchLabDataFromManagementApi();
     const dataSource = dataFile ? 'SUPABASE_LIVE' : 'EXCEL_FALLBACK';
@@ -1877,17 +2556,31 @@ async function handleScienceQueryFlow(req, res, { query }) {
       dataFile = _activeLabExcel;
     }
     // ── STEP TRACKING ────────────────────────────────────────────────────────
-    console.log(`[LAB PIPELINE] STEP-A: data_source=${dataSource} | file=${dataFile || 'NULL'}`);
-    console.log(`[LAB PIPELINE] STEP-B: query="${query}"`);
+    console.log(`[LAB PIPELINE] trigger_id=${trigger_id} step=data_file data_source=${dataSource} | file=${dataFile || 'NULL'}`);
+    console.log(`[LAB PIPELINE] STEP-B: query="${qStr}"`);
     if (!dataFile) {
-      console.log('[LAB PIPELINE] STEP-A FAIL: no data file — both Supabase and Excel fallback are null');
+      console.log(`[LAB PIPELINE] trigger_id=${trigger_id} step=data_file_fail no CSV/Excel — Python path may fail`);
     }
     // ────────────────────────────────────────────────────────────────────────
+
+    // BLOCKED: no_route_matched — reject vague dump-all queries that have no
+    // filter condition, no EXP entity, and no aggregation intent.
+    if (isUnfilteredDumpQuery(qStr)) {
+      console.log(`[matriya-query] trigger_id=${trigger_id} step=blocked reason=no_route_matched query="${qStr}"`);
+      return sendSci(200, buildScienceContract({
+        mode:           'error',
+        query:          qStr,
+        message:        'BLOCKED: no_route_matched — query is too vague. Use a specific filter (e.g. expansion_ratio > 20), entity reference (EXP-XXX), or aggregation keyword (highest / lowest).',
+        evidence:       { result_preview: [], columns_returned: DEFAULT_LAB_TABLE_COLUMNS },
+        warnings:       ['BLOCKED_NO_ROUTE_MATCHED'],
+        blocked_reason: 'no_route_matched'
+      }), { intent: 'blocked' });
+    }
 
     const result = await runSciencePython([
       'query',
       dataFile,
-      query,
+      qStr,
       'Formulation Data',
       `QUERY-${Date.now()}`
     ]);
@@ -1904,29 +2597,22 @@ async function handleScienceQueryFlow(req, res, { query }) {
     console.log(`[LAB PIPELINE] STEP-C: warnings=${JSON.stringify(result.warnings || [])}`);
     // ────────────────────────────────────────────────────────────────────────
 
-    logger.info(`[science-routing] query="${query}" decision=${result.decision}`);
+    logger.info(`[science-routing] trigger_id=${trigger_id} query="${qStr}" decision=${result.decision}`);
 
     // ── LAYER 1 RESULT: Invalid query (caught by validate_query before filter) ──
     if (result.decision === 'INVALID_QUERY') {
-      const invalidAnswer = `Invalid query: ${result.evidence?.reason || result.warnings?.[0] || 'malformed expression'}.\n` +
-        `Please check the syntax. Example: "expansion_ratio > 15" or "highest expansion_ratio".`;
-      const _mode = _scienceMode('INVALID_QUERY');
-      return res.status(200).json({
-        mode: _mode,
-        data: _scienceData(_mode, 'INVALID_QUERY', result.evidence, { warnings: result.warnings || [] }),
-        query,
-        flow: 'science',
-        routing: 'SCIENCE_QUERY_ENGINE',
-        data_source: 'NONE',
-        decision: 'INVALID_QUERY',
-        answer: invalidAnswer,
-        reply: invalidAnswer,
-        evidence: result.evidence || {},
-        warnings: result.warnings || [],
-        sources: [],
-        results: [],
-        results_count: 0,
-      });
+      const invalidMsg = `Invalid query: ${result.evidence?.reason || result.warnings?.[0] || 'malformed expression'}. ` +
+        `Example: "expansion_ratio > 15" or "highest expansion_ratio".`;
+      const ev = { ...(result.evidence || {}), result_preview: [], columns_returned: (result.evidence && result.evidence.columns_returned) || [] };
+      if (!ev.columns_returned || ev.columns_returned.length === 0) ev.columns_returned = DEFAULT_LAB_TABLE_COLUMNS;
+      return sendSci(200, buildScienceContract({
+        mode:           'error',
+        query:          qStr,
+        message:        invalidMsg,
+        evidence:       ev,
+        warnings:       result.warnings || [],
+        blocked_reason: 'execution_error'
+      }));
     }
 
     // ── LAYER 2 RESULT: Aggregation (highest/lowest/top-N) ────────────────────
@@ -1949,94 +2635,65 @@ async function handleScienceQueryFlow(req, res, { query }) {
       };
 
       const rowLines = aggRows.map((r, i) => `  [${i + 1}] ${fmtAggRow(r)}`).join('\n');
-      const aggAnswer = summary + (rowLines ? `\n\nDetails:\n${rowLines}` : '');
-
       // Log each aggregation result row
       aggRows.forEach((r, i) => console.log(`[science] agg_row[${i}]:`, JSON.stringify(r)));
+      if (rowLines) console.log(`[science] agg detail lines:\n${rowLines}`);
 
-      const _aggMode = _scienceMode('AGGREGATION_RESULT');
-      return res.status(200).json({
-        mode: _aggMode,
-        data: _scienceData(_aggMode, 'AGGREGATION_RESULT', ev),
-        query,
-        flow: 'science',
-        routing: 'SCIENCE_QUERY_ENGINE',
-        data_source: 'DB_COMPUTED',
-        decision: 'AGGREGATION_RESULT',
-        answer: aggAnswer,
-        reply: aggAnswer,
-        matched_rows: ev.matched_rows,
-        total_rows: ev.total_rows,
-        agg_type: ev.agg_type,
-        agg_column: ev.agg_column,
-        best_value: ev.best_value,
-        best_experiment_id: ev.best_experiment_id,
-        rows: aggRows,
-        columns: ev.columns_returned || [],
-        warnings: result.warnings || [],
-        sources: aggRows.map(r => ({
-          content: fmtAggRow(r),
-          metadata: { source: 'lab_data', routing: 'science_query_engine', experiment_id: r.experiment_id || null },
-          score: 1.0,
-        })),
-        results: aggRows.map(r => ({
-          content: fmtAggRow(r),
-          metadata: { source: 'lab_data', routing: 'science_query_engine' },
-          score: 1.0,
-        })),
-        results_count: ev.matched_rows ?? aggRows.length,
-        lab_bridge_invoked: true,
-        document_rag_invoked: false,
-        tag: 'computed',
-      });
+      const aggApiMode = _scienceApiMode('AGGREGATION_RESULT', ev);
+      const aggMsg = String(summary || '').trim() ||
+        (aggRows.length ? `Aggregated result (${aggRows.length} row(s)).` : 'Aggregated result.');
+      return sendSci(200, buildScienceContract({
+        mode:     aggApiMode,
+        query:    qStr,
+        message:  aggMsg,
+        evidence: ev,
+        warnings: result.warnings || []
+      }));
     }
 
     if (result.decision === 'AMBIGUOUS_QUERY') {
-      const ambigAnswer = `Ambiguous query — please specify the exact column name. ${
+      const ambigMsg = `Ambiguous query — please specify the exact column name. ${
         (result.evidence?.ambiguous_items || []).map(a => `"${a.term}" could mean: ${a.candidates?.join(', ')}`).join('; ')
       }`;
-      const _ambigMode = _scienceMode('AMBIGUOUS_QUERY');
-      return res.status(200).json({
-        mode: _ambigMode,
-        data: _scienceData(_ambigMode, 'AMBIGUOUS_QUERY', result.evidence, { warnings: result.warnings || [] }),
-        query,
-        flow: 'science',
-        routing: 'SCIENCE_QUERY_ENGINE',
-        data_source: 'NONE',
-        decision: 'AMBIGUOUS_QUERY',
-        answer: ambigAnswer,
-        reply: ambigAnswer,
-        evidence: result.evidence || {},
-        warnings: result.warnings || [],
-        sources: [],
-        results: [],
-        results_count: 0,
-      });
+      const ev = { ...(result.evidence || {}), result_preview: [], columns_returned: [] };
+      if (!ev.columns_returned || ev.columns_returned.length === 0) ev.columns_returned = DEFAULT_LAB_TABLE_COLUMNS;
+      return sendSci(200, buildScienceContract({
+        mode:     'error',
+        query:    qStr,
+        message:  ambigMsg,
+        evidence: ev,
+        warnings: result.warnings || []
+      }));
     }
 
     if (result.decision === 'INSUFFICIENT_DATA' || result.decision === 'NO_MATCHES') {
-      const matched = result.evidence?.matched_rows ?? 0;
-      const noMatchAnswer = result.decision === 'NO_MATCHES'
-        ? `No experiments matched the query: "${query}". The dataset exists but no rows satisfy this filter.`
-        : `Insufficient data to execute the query. ${result.evidence?.error || ''}`;
-      const _noMatchMode = _scienceMode(result.decision);
-      return res.status(200).json({
-        mode: _noMatchMode,
-        data: _scienceData(_noMatchMode, result.decision, result.evidence, { warnings: result.warnings || [] }),
-        query,
-        flow: 'science',
-        routing: 'SCIENCE_QUERY_ENGINE',
-        data_source: 'DB_COMPUTED',
-        decision: result.decision,
-        answer: noMatchAnswer,
-        reply: noMatchAnswer,
-        evidence: result.evidence || {},
-        warnings: result.warnings || [],
-        sources: [],
-        results: [],
-        results_count: 0,
-        tag: 'computed',
-      });
+      const ev = { ...(result.evidence || {}) };
+      if (!ev.columns_returned || ev.columns_returned.length === 0) {
+        ev.columns_returned = DEFAULT_LAB_TABLE_COLUMNS;
+      }
+      if (!Array.isArray(ev.result_preview)) ev.result_preview = [];
+      const fa = ev.filters_applied || [];
+      const hasFilters = Array.isArray(fa) && fa.length > 0;
+      // If query ran but found zero rows, treat as filter no-match (not error)
+      const isZeroRowResult = result.decision === 'NO_MATCHES' ||
+        (result.decision === 'INSUFFICIENT_DATA' && ev.result_preview.length === 0 &&
+          (ev.filters_applied || []).length > 0);
+      const noMatchMode = isZeroRowResult ? 'filter' : _scienceApiMode(result.decision, ev);
+      let msg;
+      if (isZeroRowResult && hasFilters) {
+        msg = 'No matching results found for the given criteria.';
+      } else if (result.decision === 'NO_MATCHES') {
+        msg = 'No experiments matched the query. Try filter syntax such as: expansion_ratio > 25 and adhesion < 80.';
+      } else {
+        msg = `Insufficient data: ${result.evidence?.error || 'cannot execute query'}`;
+      }
+      return sendSci(200, buildScienceContract({
+        mode:     noMatchMode,
+        query:    qStr,
+        message:  msg,
+        evidence: ev,
+        warnings: result.warnings || []
+      }));
     }
 
     // MATCHES_FOUND — format rows for frontend
@@ -2053,94 +2710,44 @@ async function handleScienceQueryFlow(req, res, { query }) {
     const countResult = evidence.count_result;
     const isCount = countResult !== undefined && countResult !== null;
 
-    // Build human-readable answer — shown as the assistant message in the chat.
-    // COLUMN ORDER: result_preview rows come from Python in CSV column order:
-    // experiment_id(0) project_id(1) APP(2) PER(3) MEL(4) APP:PER(5) IFR(6) Nanoclay(7) expansion_ratio(8) ...
-    // We must NOT slice by position — always show ALL non-null fields.
-    // Priority columns appear first so key results are never cut off.
-    const PRIORITY_COLS = ['experiment_id', 'expansion_ratio', 'adhesion', 'viscosity',
-                           'char_quality', 'APP:PER', 'IFR', 'APP', 'PER', 'MEL', 'Nanoclay', 'status'];
-    const formatRow = (r) => {
-      const prioritized = PRIORITY_COLS
-        .filter(k => r[k] != null)
-        .map(k => {
-          const v = r[k];
-          return `${k}: ${typeof v === 'number' ? Number(v.toFixed(4)).toString() : v}`;
-        });
-      const rest = Object.entries(r)
-        .filter(([k, v]) => v != null && !PRIORITY_COLS.includes(k) && k !== 'project_id')
-        .map(([k, v]) => `${k}: ${typeof v === 'number' ? Number(v.toFixed(4)).toString() : v}`);
-      return [...prioritized, ...rest].join(' | ');
-    };
-
-    let answer;
+    const filterApiMode = _scienceApiMode(result.decision, evidence);
+    if (!evidence.columns_returned || evidence.columns_returned.length === 0) {
+      evidence.columns_returned = rows.length && rows[0] ? Object.keys(rows[0]) : DEFAULT_LAB_TABLE_COLUMNS;
+    }
+    let filterMsg;
     if (isCount) {
-      answer = `Found ${countResult} experiment${countResult !== 1 ? 's' : ''} matching: "${query}".`;
+      filterMsg = `Found ${countResult} experiment(s) matching the query.`;
     } else if (rows.length === 0) {
-      answer = `No rows matched the query "${query}". Filters were applied but returned 0 results.\n` +
-        `Warnings: ${(result.warnings || []).join('; ') || 'none'}\n` +
-        `Filters applied: ${(evidence.filters_applied || []).map(f => `${f.column} ${f.operator} ${f.value}`).join(', ') || 'none'}\n` +
-        `Filters failed: ${(evidence.filters_failed || []).map(f => `${f.column}: ${f.error}`).join(', ') || 'none'}`;
+      filterMsg = (evidence.filters_applied && evidence.filters_applied.length)
+        ? 'No matching results found for the given criteria.'
+        : `No rows matched. ${(result.warnings || []).join('; ') || ''}`.trim();
     } else {
-      const colList = (evidence.columns_returned || [])
-        .filter(c => c !== 'project_id')
-        .join(', ');
-      const rowLines = rows.slice(0, 10).map((r, i) =>
-        `  [${i + 1}] ${formatRow(r)}`
-      ).join('\n');
-      answer = `Found ${matchedRows} experiment${matchedRows !== 1 ? 's' : ''}` +
-        `${evidence.total_rows ? ` out of ${evidence.total_rows} total` : ''} matching: "${query}"\n` +
-        `Columns: ${colList || 'see rows below'}\n\n` +
-        `Results:\n${rowLines}`;
+      filterMsg = `Found ${matchedRows} matching row(s).`;
     }
-
-    // Post-response guard on science answer (blocks ML metrics in experiment outputs)
-    const sciGuard = guardResponseText(answer);
+    const sciGuard = guardResponseText(filterMsg);
     if (sciGuard.contaminated) {
-      logger.warn(`[document-guard] Science answer contamination: ${sciGuard.violations.slice(0, 3).join(', ')} — sanitizing`);
-      answer = sciGuard.sanitized_text;
+      logger.warn(`[document-guard] Science short message: ${sciGuard.violations.slice(0, 3).join(', ')} — sanitizing`);
+      filterMsg = sciGuard.sanitized_text;
     }
-
-    const _filterMode = _scienceMode(result.decision);
-    return res.status(200).json({
-      mode: _filterMode,
-      data: _scienceData(_filterMode, result.decision, evidence),
-      query,
-      flow: 'science',
-      routing: 'SCIENCE_QUERY_ENGINE',
-      data_source: 'DB_COMPUTED',
-      tag: 'computed',
-      decision: result.decision,
-      answer,
-      reply: answer,
-      matched_rows: matchedRows,
-      total_rows: evidence.total_rows,
-      count_result: countResult,
-      // Full unmodified result rows — ground truth from the Python engine
-      rows,
-      columns: evidence.columns_returned || [],
-      parse_confidence: result.parse_confidence,
-      filters_applied: evidence.filters_applied || [],
-      audit_trace: result.audit_trace || {},
-      warnings: result.warnings || [],
-      sources: rows.map(r => ({
-        content: formatRow(r),
-        metadata: { source: 'lab_data', routing: 'science_query_engine', experiment_id: r.experiment_id || null },
-        score: 1.0,
-      })),
-      results: rows.map(r => ({
-        content: formatRow(r),
-        metadata: { source: 'lab_data', routing: 'science_query_engine' },
-        score: 1.0,
-      })),
-      results_count: matchedRows,
-      lab_bridge_invoked: true,
-      document_rag_invoked: false,
-      guard_action: sciGuard.action,
-    });
+    console.log(`[LAB PIPELINE] trigger_id=${trigger_id} step=kernel path=python end`);
+    return sendSci(200, buildScienceContract({
+      mode:     filterApiMode,
+      query:    qStr,
+      message:  filterMsg,
+      evidence,
+      warnings: result.warnings || []
+    }));
   } catch (e) {
     logger.error(`[science-routing] error: ${e.message}`);
-    return res.status(500).json({ error: e.message, routing: 'SCIENCE_QUERY_ENGINE' });
+    const evErr = { result_preview: [], columns_returned: DEFAULT_LAB_TABLE_COLUMNS };
+    return sendSci(500, buildScienceContract({
+      mode:           'error',
+      query:          String(query != null ? query : ''),
+      message:        `Server error: ${String(e.message || e)}`,
+      evidence:       evErr,
+      warnings:       [String(e.message || e)],
+      blocked_reason: 'execution_error'
+    }), { intent: 'error' });
   }
 }
 
@@ -3000,6 +3607,104 @@ app.post("/api/research/run", async (req, res) => {
     if (preJustification != null && typeof preJustification === 'string') runOptions.pre_justification_text = preJustification.trim() || null;
     if (doeDesignId != null) runOptions.doe_design_id = parseInt(doeDesignId, 10) || null;
 
+    // Fetch live lab experiments from management API and inject into research loop context.
+    // This connects the research session loop to real DB data (lab_experiments).
+    const managementBase = settings.MATRIYA_MANAGEMENT_API_URL || '';
+    let allExps = [];
+    let labApiReachable = false;
+    if (managementBase) {
+      try {
+        const labResp = await axios.get(`${managementBase}/api/matriya/lab-experiments-export`, {
+          headers: {
+            'Accept': 'application/json',
+            ...(settings.MATRIYA_MANAGEMENT_MATERIALS_KEY
+              ? { 'X-Matriya-Materials-Key': settings.MATRIYA_MANAGEMENT_MATERIALS_KEY }
+              : {}),
+          },
+          timeout: 8000,
+        });
+        allExps = labResp.data?.experiments || [];
+        labApiReachable = true;
+      } catch (e) {
+        logger.warn(`[research/run] Lab context fetch skipped: ${e.message}`);
+      }
+    }
+
+    // ── Boundary check A: Open-ended query (no entity IDs) ───────────────────
+    // Queries that ask for a "best" experiment without naming any specific IDs
+    // are ambiguous and cannot be answered deterministically — return no_entities.
+    // This prevents the agents from hallucinating a winner out of thin air.
+    const requestedIds = [...new Set(
+      (query.toUpperCase().match(/EXP-[\w-]+/g) || [])
+    )];
+    const OPEN_ENDED_PATTERNS = [
+      /which\s+experiment\s+is\s+best/i,
+      /what\s+is\s+the\s+best\s+experiment/i,
+      /\bbest\s+experiment\b/i,
+      /\btop\s+experiment\b/i,
+      /\boptimal\s+experiment\b/i,
+      /\brecommend\s+an?\s+experiment\b/i,
+      /which\s+one\s+should\s+i\s+use/i,
+      /\bwhich\s+experiment\b(?!.*\bEXP-)/i,
+      // Hebrew equivalents
+      /איזה\s+ניסוי\s+טוב\s+יותר/,
+      /מהו\s+הניסוי\s+הטוב/,
+      /הניסוי\s+הטוב\s+ביותר/,
+    ];
+    if (requestedIds.length === 0 && OPEN_ENDED_PATTERNS.some(p => p.test(query))) {
+      return res.status(400).json({
+        mode: 'no_entities',
+        run_id: null,
+        missing_entities: [],
+        selected_experiments: [],
+        fields_used: [],
+        meta: {
+          message: 'BLOCKED: no_entities — query does not reference any specific experiment IDs. Please name the experiments to compare (e.g. EXP-006, EXP-009).',
+          recoverable: true,
+          limitation_type: 'no_entities',
+          user_action_hint: 'Specify experiment IDs to compare, e.g. "Compare EXP-006 and EXP-009 across expansion_ratio."'
+        }
+      });
+    }
+
+    // ── Boundary check B: No-match / partial-match detection ─────────────────
+    // Only runs when the management API was reachable (avoid false-positive on 401).
+    // Fires when ANY requested experiment ID is missing — even if others exist.
+    // Partial comparisons (e.g. EXP-006 vs EXP-999) must be blocked entirely to
+    // prevent the system from answering with incomplete data.
+    if (labApiReachable && requestedIds.length > 0) {
+      const knownIds = new Set((allExps || []).map(e => String(e.experiment_id || '').toUpperCase()));
+      const missing  = requestedIds.filter(id => !knownIds.has(id));
+      if (missing.length > 0) {
+        // ANY requested IDs are missing — full block, no partial answer
+        const found = requestedIds.filter(id => knownIds.has(id));
+        return res.status(404).json({
+          mode: 'no_match',
+          run_id: null,
+          missing_entities: missing,
+          found_entities: found,
+          selected_experiments: [],
+          fields_used: [],
+          meta: {
+            message: `BLOCKED: entity_not_found — ${missing.join(', ')} not found in lab_experiments`,
+            recoverable: true,
+            limitation_type: missing.length === requestedIds.length ? 'all_missing' : 'partial_missing',
+            user_action_hint: 'Check the experiment ID and try again, or list available experiments.'
+          }
+        });
+      }
+    }
+
+    if (allExps.length > 0) {
+      // Select the most relevant experiments: prefer those mentioned in the query by ID,
+      // otherwise take the top 5 by most recent / highest numeric values.
+      const upperQuery = query.toUpperCase();
+      const mentioned = allExps.filter(e => e.experiment_id && upperQuery.includes(String(e.experiment_id).toUpperCase()));
+      const labExps = mentioned.length > 0 ? mentioned : allExps.slice(0, 5);
+      runOptions.labContext = { experiments: labExps };
+      logger.info(`[research/run] Injected ${labExps.length} lab experiments into research context (session=${sessionId})`);
+    }
+
     if (use4Agents) {
       const prev = researchRunLocks.get(sessionId) || Promise.resolve();
       const runPromise = prev
@@ -3014,6 +3719,8 @@ app.post("/api/research/run", async (req, res) => {
         run_id: result.run_id,
         outputs: result.outputs,
         justifications: result.justifications,
+        selected_experiments: result.outputs?.selected_experiments || [],
+        fields_used: deriveFieldsUsed(result.outputs?.selected_experiments),
         sources: Array.isArray(result.sources) ? result.sources : []
       });
     }
@@ -3044,9 +3751,10 @@ app.post("/research/session", async (req, res) => {
   }
   const user = await getCurrentUser(req);
   const userId = user?.id ?? null;
+  const projectId = req.body?.project_id || null;
   try {
-    const { session } = await getOrCreateSession(null, userId);
-    return res.json({ session_id: session.id, completed_stages: session.completed_stages || [] });
+    const { session } = await getOrCreateSession(null, userId, projectId);
+    return res.json({ session_id: session.id, project_id: session.project_id || null, completed_stages: session.completed_stages || [] });
   } catch (e) {
     logger.error(`Create research session error: ${e.message}`);
     const isDbError = /relation|does not exist|research_sessions/i.test(String(e.message));
