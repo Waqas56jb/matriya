@@ -409,6 +409,11 @@ const researchRunLocks = new Map();
  * Root endpoint
  */
 app.get("/", (req, res) => {
+  // Serve the bundled React frontend when available; otherwise return API info.
+  const indexPath = join(__dirname, 'public', 'index.html');
+  if (existsSync(indexPath)) {
+    return res.sendFile(indexPath);
+  }
   return res.json({
     message: "MATRIYA RAG System API",
     version: "1.0.0",
