@@ -18,7 +18,7 @@ CONDITION_KEYWORDS = [">", "<", "=", ">=", "<=", "!=", "where", "and", "or"]
 def classify_intent(query: str) -> Literal["FILTER", "AGGREGATION", "SORT", "INVALID"]:
     q = query.lower().strip()
 
-    # INVALID: incomplete operator at end
+    # INVALID: incomplete operator at end 
     if re.search(r'[<>=]\s*$', q):
         return "INVALID"
 
