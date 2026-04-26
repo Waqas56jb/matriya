@@ -3,6 +3,7 @@ MATRIYA v0.1 — Document Guard
 ==============================
 Prevents cross-domain contamination in RAG responses.
 
+
 Three problems solved:
 1. Index separation: lab data / MATRIYA docs / unrelated docs
 2. Domain metric guardrails: blocks F1, MCC, accuracy in experiment design
@@ -14,6 +15,7 @@ No LLM decides what is allowed. All rules are deterministic code.
 import re
 from pathlib import Path
 from typing import Optional
+
 from datetime import datetime, timezone
 
 
