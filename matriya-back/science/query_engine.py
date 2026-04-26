@@ -22,6 +22,7 @@ def classify_intent(query: str) -> Literal["FILTER", "AGGREGATION", "SORT", "INV
     if re.search(r'[<>=]\s*$', q):
         return "INVALID"
 
+
     # Detect aggregation
     has_agg = any(kw in q for kw in AGG_KEYWORDS["max"] + AGG_KEYWORDS["min"])
     has_sort = any(kw in q for kw in SORT_KEYWORDS)
