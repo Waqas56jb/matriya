@@ -127,7 +127,8 @@ Answer in the same language as the user (Hebrew if Hebrew, English if English).`
         { role: 'user', content: input }
       ],
       max_tokens: 500,
-      temperature: 0.1
+      temperature: 0,
+      seed: 812_736_459
     },
     {
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },

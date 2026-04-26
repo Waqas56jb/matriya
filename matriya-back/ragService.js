@@ -409,6 +409,12 @@ class RAGService {
      */
     await hydrateMatriyaOpenAiVectorStoreId();
 
+    // When the caller scoped the search to a specific file, skip domain filtering in both
+    // the OpenAI file_search path and the pgvector path — the file scope IS the filter.
+    const hasSpecificFileScope = filterMetadata &&
+      (typeof filterMetadata.filename === 'string' ||
+       (Array.isArray(filterMetadata.filenames) && filterMetadata.filenames.length > 0));
+
     let searchResults = Array.isArray(prefetchedSearchResults) ? prefetchedSearchResults : null;
 
     if (searchResults == null && this._openAiFileSearchReady()) {
@@ -418,7 +424,9 @@ class RAGService {
           forContextOnly: !useLlm,
           catalogFilenames
         });
-        let domainSnippets = filterSnippetsByQueryDomain(query, snippets);
+        let domainSnippets = hasSpecificFileScope
+          ? snippets
+          : filterSnippetsByQueryDomain(query, snippets);
         if (!hasFileSearchEvidence(domainSnippets) && detectStructuredDataInSnippets(snippets)) {
           domainSnippets = snippets;
         }
@@ -509,7 +517,10 @@ class RAGService {
     }
     searchResults = thresholdRows;
 
-    const domainRows = filterRetrievalRowsByQueryDomain(query, searchResults);
+    // hasSpecificFileScope is defined at the top of generateAnswer (shared by both paths)
+    const domainRows = hasSpecificFileScope
+      ? searchResults
+      : filterRetrievalRowsByQueryDomain(query, searchResults);
     if (!domainRows.length || !hasVectorSearchEvidence(domainRows)) {
       return {
         query: query,

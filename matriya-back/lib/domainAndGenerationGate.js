@@ -68,16 +68,20 @@ export function filterRetrievalRowsByQueryDomain(query, rows) {
   });
   const maxO = Math.max(0, ...scored.map((x) => x.overlap));
   if (maxO === 0) {
-    if (arr.length > 1) return arr;
-    const structuredOnly = arr.filter((r) => chunkLikeHasStructuredData(r));
-    if (structuredOnly.length) return structuredOnly;
-    return [];
+    // No query tokens found in any chunk — domain filter cannot distinguish; return all.
+    return arr;
   }
 
   const filtered = scored.filter((x) => x.overlap >= minQueryOverlap).map((x) => x.r);
-  const filteredSet = new Set(filtered);
+  // Graceful fallback: if every chunk scored below threshold, return the best-scoring ones
+  // rather than an empty array. This prevents INSUFFICIENT_EVIDENCE on valid-but-terse queries.
+  const result = filtered.length > 0 ? filtered : scored
+    .sort((a, b) => b.overlap - a.overlap)
+    .slice(0, Math.max(1, Math.ceil(arr.length / 2)))
+    .map((x) => x.r);
+  const filteredSet = new Set(result);
   const extra = arr.filter((r) => chunkLikeHasStructuredData(r) && !filteredSet.has(r));
-  return extra.length ? [...filtered, ...extra] : filtered;
+  return extra.length ? [...result, ...extra] : result;
 }
 
 /**
@@ -98,22 +102,21 @@ export function filterSnippetsByQueryDomain(query, snippets) {
   });
   const maxO = Math.max(0, ...scored.map((x) => x.overlap));
   if (maxO === 0) {
-    if (list.length > 1) return list;
-    const structuredOnly = list.filter((s) =>
-      textHasStructuredPercentOrCompositionSignals(s.text ?? s.excerpt ?? '')
-    );
-    if (structuredOnly.length) return structuredOnly;
-    return [];
+    return list;
   }
 
   const filtered = scored.filter((x) => x.overlap >= minQueryOverlap).map((x) => x.s);
-  const filteredSet = new Set(filtered);
+  const result = filtered.length > 0 ? filtered : scored
+    .sort((a, b) => b.overlap - a.overlap)
+    .slice(0, Math.max(1, Math.ceil(list.length / 2)))
+    .map((x) => x.s);
+  const filteredSet = new Set(result);
   const extra = list.filter(
     (s) =>
       textHasStructuredPercentOrCompositionSignals(s.text ?? s.excerpt ?? '') &&
       !filteredSet.has(s)
   );
-  return extra.length ? [...filtered, ...extra] : filtered;
+  return extra.length ? [...result, ...extra] : result;
 }
 
 export function getGenerationReadinessOptions() {
