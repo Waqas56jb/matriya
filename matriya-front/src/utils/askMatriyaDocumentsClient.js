@@ -40,9 +40,13 @@ export function isLikelyScienceQuery(text) {
         q.includes('experiment') ||
         q.includes('formulation') ||
         q.includes('experiment_id') ||
+        q.includes('char_quality') ||
+        q.includes('expansion') ||
         /[><]=?/.test(q) ||
         /\b(top|bottom|highest|lowest|minimum|maximum|among)\b/.test(q) ||
         /\bexp-\d{2,}\b/.test(q) ||
+        /\b(compare|comparison|versus|vs\.?|between)\b.*\bexp-/.test(q) ||
+        /\bexp-.*\b(compare|comparison|versus|vs\.?|between)\b/.test(q) ||
         (/\b(differ|compare|versus|structural|structurally)\b/.test(q) && /\bexp-\d/.test(q))
     );
 }
@@ -182,35 +186,52 @@ export async function runResearchDecisionQuery(message) {
     } catch (err) {
         // Boundary modes (no_match / no_entities) arrive as HTTP 400/404 — treat as structured result, not UI error
         const data = err.response?.data || {};
-        const mode = data.mode || 'error';
+        const mode = typeof data.mode === 'string' ? data.mode : 'error';
+        // David requirement: log error response before rendering
+        console.log('[decision-pipeline] /api/research/run error response', { status: err.response?.status, data });
         return {
             mode,
-            reply: data.meta?.message || data.error || 'The decision pipeline could not process this query.',
+            reply: typeof data.meta?.message === 'string' ? data.meta.message
+                 : typeof data.error === 'string'         ? data.error
+                 : 'The decision pipeline could not process this query.',
+            decision:  null,
+            reasoning: null,
             fieldsUsed: Array.isArray(data.fields_used) ? data.fields_used : [],
             runId: null,
             experiments: Array.isArray(data.selected_experiments) ? data.selected_experiments : [],
             missingEntities: Array.isArray(data.missing_entities) ? data.missing_entities : [],
-            foundEntities: Array.isArray(data.found_entities) ? data.found_entities : [],
+            foundEntities:   Array.isArray(data.found_entities)   ? data.found_entities   : [],
             metaHint: typeof data.meta?.user_action_hint === 'string' ? data.meta.user_action_hint : null,
         };
     }
 
     const body = runRes.data || {};
-    const synthesis = body.outputs?.synthesis || body.outputs?.analysis || '';
-    const fieldsUsed = Array.isArray(body.fields_used) ? body.fields_used : [];
-    const experiments = Array.isArray(body.selected_experiments)
-        ? body.selected_experiments
-        : (Array.isArray(body.outputs?.selected_experiments) ? body.outputs.selected_experiments : []);
 
-    if (process.env.NODE_ENV === 'development') {
-        console.log('[decision-pipeline] result', { mode: 'result', runId: body.run_id, fieldsUsed, experimentCount: experiments.length });
-    }
+    // David requirement: log response before rendering
+    console.log('[decision-pipeline] /api/research/run response', body);
+
+    const synthesis  = typeof body.outputs?.synthesis  === 'string' ? body.outputs.synthesis
+                     : typeof body.outputs?.analysis   === 'string' ? body.outputs.analysis
+                     : '';
+    const fieldsUsed = Array.isArray(body.fields_used)        ? body.fields_used
+                     : Array.isArray(body.outputs?.fields_used) ? body.outputs.fields_used
+                     : [];
+    const experiments = Array.isArray(body.selected_experiments)         ? body.selected_experiments
+                      : Array.isArray(body.outputs?.selected_experiments) ? body.outputs.selected_experiments
+                      : [];
+    const runId     = body.run_id != null ? body.run_id : null;
+    const decision  = typeof body.decision === 'string' ? body.decision : null;
+    const reasoning = typeof body.reasoning === 'string' ? body.reasoning
+                    : synthesis;
+    const mode      = typeof body.mode === 'string' ? body.mode : 'result';
 
     return {
-        mode: 'result',
+        mode,
         reply: synthesis,
+        decision,
+        reasoning,
         fieldsUsed,
-        runId: body.run_id || null,
+        runId,
         experiments,
         missingEntities: [],
         foundEntities: [],

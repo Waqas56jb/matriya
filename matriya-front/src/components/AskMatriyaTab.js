@@ -26,43 +26,88 @@ const DECISION_MODE_LABELS = {
     error:       { text: 'Pipeline Error', cls: 'error' },
 };
 
+const DECISION_LABELS = {
+    GO:      { text: 'GO',      cls: 'go' },
+    ITERATE: { text: 'ITERATE', cls: 'iterate' },
+    STOP:    { text: 'STOP',    cls: 'stop' },
+};
+
+/** Safe coercions — never let unexpected types crash the render tree */
+function safeString(v) {
+    if (v == null) return '';
+    if (typeof v === 'string') return v;
+    if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+    try { return JSON.stringify(v); } catch { return ''; }
+}
+function safeArray(v) { return Array.isArray(v) ? v : []; }
+
 function DecisionMeta({ decisionData }) {
     if (!decisionData) return null;
-    const { mode, fieldsUsed, runId, missingEntities, foundEntities, metaHint } = decisionData;
-    const label = DECISION_MODE_LABELS[mode] || { text: mode, cls: 'error' };
+    const rawMode      = decisionData.mode;
+    const rawDecision  = decisionData.decision;
+    const rawReasoning = decisionData.reasoning;
+    const rawFieldsUsed = decisionData.fieldsUsed;
+    const rawRunId     = decisionData.runId;
+    const missingEntities = safeArray(decisionData.missingEntities);
+    const foundEntities   = safeArray(decisionData.foundEntities);
+    const metaHint        = safeString(decisionData.metaHint);
+
+    const mode      = safeString(rawMode) || 'result';
+    const decision  = safeString(rawDecision).toUpperCase();
+    const reasoning = safeString(rawReasoning);
+    const fieldsUsed = safeArray(rawFieldsUsed);
+    const runIdStr  = rawRunId != null ? safeString(rawRunId) : null;
+
+    const label   = DECISION_MODE_LABELS[mode]    || { text: mode,     cls: 'error' };
+    const decLabel = DECISION_LABELS[decision]    || null;
+
     return (
         <div className="decision-meta">
             <div className="decision-meta-header">
                 <span className={`decision-mode-badge decision-mode-badge--${label.cls}`}>
                     {label.text}
                 </span>
+                {decLabel && (
+                    <span className={`decision-mode-badge decision-mode-badge--${decLabel.cls}`}
+                        title="Decision Engine verdict">
+                        {decLabel.text}
+                    </span>
+                )}
                 <span className="decision-engine-label">Decision Engine · /api/research/run</span>
-                {runId && (
-                    <span className="decision-run-id" title="Run ID">#{runId.slice(0, 8)}</span>
+                {runIdStr && (
+                    <span className="decision-run-id" title={`Run ID: ${runIdStr}`}>
+                        #{runIdStr.length > 8 ? runIdStr.slice(0, 8) : runIdStr}
+                    </span>
                 )}
             </div>
-            {fieldsUsed && fieldsUsed.length > 0 && (
+            {fieldsUsed.length > 0 && (
                 <div className="decision-fields">
                     <span className="decision-fields-label">fields_used</span>
-                    {fieldsUsed.map((f) => (
-                        <span key={f} className="decision-field-tag">{f}</span>
+                    {fieldsUsed.map((f, i) => (
+                        <span key={safeString(f) || i} className="decision-field-tag">{safeString(f)}</span>
                     ))}
                 </div>
             )}
-            {missingEntities && missingEntities.length > 0 && (
+            {reasoning && (
+                <div className="decision-reasoning">
+                    <span className="decision-fields-label">reasoning</span>
+                    <div className="decision-reasoning-text">{reasoning}</div>
+                </div>
+            )}
+            {missingEntities.length > 0 && (
                 <div className="decision-missing">
                     <div className="decision-missing-label">Missing entities (not in lab_experiments)</div>
                     <div className="decision-missing-list">
                         {missingEntities.map((id) => (
-                            <span key={id} className="decision-missing-tag">{id}</span>
+                            <span key={safeString(id)} className="decision-missing-tag">{safeString(id)}</span>
                         ))}
                     </div>
-                    {foundEntities && foundEntities.length > 0 && (
+                    {foundEntities.length > 0 && (
                         <div style={{ marginTop: 6 }}>
                             <span className="decision-fields-label">Found</span>
                             <span style={{ marginLeft: 6 }}>
                                 {foundEntities.map((id) => (
-                                    <span key={id} className="decision-field-tag" style={{ marginRight: 4 }}>{id}</span>
+                                    <span key={safeString(id)} className="decision-field-tag" style={{ marginRight: 4 }}>{safeString(id)}</span>
                                 ))}
                             </span>
                         </div>
@@ -207,7 +252,16 @@ function AskMatriyaTab({ onGptSyncingChange, gptRagSyncing = false }) {
                     role: 'assistant',
                     content: decisionResult.reply || '',
                     sources: experimentSources,
-                    decisionData: decisionResult,
+                    decisionData: {
+                        mode: decisionResult.mode,
+                        decision: decisionResult.decision,
+                        reasoning: decisionResult.reasoning,
+                        fieldsUsed: decisionResult.fieldsUsed,
+                        runId: decisionResult.runId,
+                        missingEntities: decisionResult.missingEntities,
+                        foundEntities: decisionResult.foundEntities,
+                        metaHint: decisionResult.metaHint,
+                    },
                 }]);
             } else {
                 // ── Document RAG path (/ask-matriya) ────────────────────────────────────

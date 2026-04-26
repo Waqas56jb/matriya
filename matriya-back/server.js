@@ -2171,6 +2171,27 @@ function deriveFieldsUsed(selectedExperiments) {
   return METRIC_FIELDS.filter(f => selectedExperiments.some(e => e[f] != null));
 }
 
+/**
+ * Derive a deterministic GO / ITERATE / STOP decision from the synthesis agent output.
+ * Priority: explicit keyword → recommendation language → default ITERATE.
+ */
+function deriveSynthesisDecision(synthesis) {
+  if (!synthesis) return 'STOP';
+  const s = synthesis.toLowerCase();
+  // Explicit decision keywords first
+  if (/\bgo\b/.test(s)) return 'GO';
+  if (/\bstop\b/.test(s)) return 'STOP';
+  if (/\biterate\b/.test(s)) return 'ITERATE';
+  // Positive recommendation → GO
+  if (/ניסוי.*ממליץ|ממליץ.*ניסוי|מומלץ|עדיף|מנצח|טוב יותר|הטוב ביותר|winner|recommend|preferred|better performing/.test(s)) return 'GO';
+  // Explicit EXP-id recommendation → GO
+  if (/exp-\d/.test(s) && /(recommend|winner|preferred|better|best|ממליץ|מומלץ|עדיף|מנצח)/.test(s)) return 'GO';
+  // Missing data / incomplete → STOP
+  if (/אין מידע|אין נתונים|no data|no supporting|insufficient/.test(s)) return 'STOP';
+  // Default: ITERATE (partial evidence, needs more)
+  return 'ITERATE';
+}
+
 //   3. Minimum evidence: support >= 2 AND total >= 3.
 //   4. Weak relations dropped: confidence < 0.6 excluded.
 function buildConstraintGraph(rows) {
@@ -3715,13 +3736,18 @@ app.post("/api/research/run", async (req, res) => {
       if (result.error) {
         return res.status(500).json({ error: result.error, outputs: result.outputs || {}, justifications: result.justifications || [] });
       }
+      const synthText = result.outputs?.synthesis || '';
       return res.json({
-        run_id: result.run_id,
+        run_id: result.run_id != null ? String(result.run_id) : null,
+        mode: 'result',
+        decision: deriveSynthesisDecision(synthText),
+        reasoning: synthText,
         outputs: result.outputs,
         justifications: result.justifications,
         selected_experiments: result.outputs?.selected_experiments || [],
-        fields_used: deriveFieldsUsed(result.outputs?.selected_experiments),
-        sources: Array.isArray(result.sources) ? result.sources : []
+        fields_used: result.outputs?.fields_used || deriveFieldsUsed(result.outputs?.selected_experiments),
+        sources: Array.isArray(result.sources) ? result.sources : [],
+        duration_ms: result.duration_ms ?? null
       });
     }
 
