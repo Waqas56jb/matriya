@@ -173,7 +173,9 @@ export function computeDecisionStatusFromLab(labResult) {
 }
 
 function evidenceDataGrade(labResult) {
-  return labResult?.data_grade === 'REAL' ? 'REAL' : 'HISTORICAL_REFERENCE';
+  if (labResult?.data_grade === 'REAL')    return 'REAL';
+  if (labResult?.data_grade === 'LOGICAL') return 'LOGICAL';
+  return 'HISTORICAL_REFERENCE';
 }
 
 function buildEvidence(labResult, decisionStatus) {
@@ -222,6 +224,28 @@ function buildNaturalLanguageAnswer(query, labResult, decisionStatus, evidence) 
     Number.isFinite(thrNum)
   ) {
     if (decisionStatus === 'VALID_CONCLUSION') {
+      // Clean human-readable summary when expansion_ratio is the dominant/present channel.
+      // Channel table stays in evidence only — never repeated in the main answer.
+      const expCh = evidence.delta_summary?.channels?.find(
+        (c) => c.channel === 'expansion_ratio' && c.status === 'COMPARED'
+      );
+      if (expCh) {
+        const baseV = Number(expCh.baseline_value);
+        const runV  = Number(expCh.run_value);
+        const lo = Math.floor(Math.min(baseV, runV));
+        const hi = Math.ceil(Math.max(baseV, runV));
+        const isIncrease = runV >= baseV;
+        const deltaAbs = Math.abs(Number(expCh.delta_pct));
+        const dirSymbol = isIncrease ? '↑' : '↓';
+        const sign      = isIncrease ? '+' : '−';
+        const baseId = labResult?.source_metadata?.base_id ?? labResult?.base_id ?? null;
+        const runCount = evidence.run_ids.length;
+        const baseLabel = baseId ? ` (${baseId})` : '';
+        return (
+          `Expected expansion ratio: ${lo}–${hi}× (${dirSymbol} ${sign}${Math.round(deltaAbs * 10) / 10}%)\n` +
+          `Based on ${runCount} REAL run${runCount !== 1 ? 's' : ''}${baseLabel}`
+        );
+      }
       return `max_delta (${mdNum}%) ≥ threshold (${thrNum}%) → VALID_CONCLUSION`;
     }
     return `max_delta (${mdNum}%) < threshold (${thrNum}%) → INCONCLUSIVE`;

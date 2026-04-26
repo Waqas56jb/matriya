@@ -265,10 +265,14 @@ function channelDelta(run, baseline) {
 }
 
 function buildDeltaSummary(outCompare, outBaseline) {
-  const channels = ['v6', 'v12', 'v30', 'v60'].map((channel) => {
-    const runKey = channel;
-    const baseKey = channel;
-    const row = channelDelta(outCompare?.[runKey], outBaseline?.[baseKey]);
+  // Standard viscosity channels plus expansion_ratio (only included when at least
+  // one run has a non-null value so the channel doesn't clutter the response).
+  const viscoChannels = ['v6', 'v12', 'v30', 'v60'];
+  const extraChannels = ['expansion_ratio'].filter(
+    (ch) => outCompare?.[ch] != null || outBaseline?.[ch] != null
+  );
+  const channels = [...viscoChannels, ...extraChannels].map((channel) => {
+    const row = channelDelta(outCompare?.[channel], outBaseline?.[channel]);
     return { channel, ...row };
   });
 
@@ -417,6 +421,7 @@ async function handleVersionComparison(client, base_id, version_a, version_b) {
         COALESCE(o.v30, o.viscosity_30rpm_cps)::float AS v30,
         COALESCE(o.v60, o.viscosity_60rpm_cps)::float AS v60,
         o.ph::float AS ph,
+        o.expansion_ratio::float AS expansion_ratio,
         o.conclusion_status
      FROM outcomes o
      JOIN measurements m ON m.id = o.measurement_id

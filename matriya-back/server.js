@@ -1395,14 +1395,22 @@ app.post("/ask-matriya", requireAuth, askMatriyaMulter, async (req, res) => {
   // (e.g. Final Project Report.pdf with ML metrics) from contaminating
   // lab/formulation experiment responses. LAB_FORMULATION files pass through;
   // UNKNOWN files also pass (conservative — only clear unrelated docs blocked).
+  //
+  // SCOPE ISOLATION: When the user selected specific file(s), ONLY load context
+  // from those files — never fall back to the full corpus. This prevents
+  // cross-document contamination (e.g. "Final Project Report" topics bleeding
+  // into an intumescent coating document answer).
   const isLabFormulationQuery = /\b(formulation|intumescent|experiment|expansion|char|app.?per|ifr|coating|binder|fire)\b/i.test(message);
   let filteredFilenames = filenames;
   if (isLabFormulationQuery && filenames.length > 0) {
-    filteredFilenames = filterFilenamesByDomain(filenames, 'LAB_FORMULATION');
-    if (filteredFilenames.length === 0) {
-      // All files were blocked — fall back to using all files to avoid empty context
-      logger.warn('[document-guard] All files blocked by domain filter — falling back to unfiltered list');
-      filteredFilenames = filenames;
+    const domainFiltered = filterFilenamesByDomain(filenames, 'LAB_FORMULATION');
+    if (domainFiltered.length > 0) {
+      filteredFilenames = domainFiltered;
+    }
+    // If domain filter removes ALL files (edge case), keep original selection to avoid empty context
+    // but log the fall-through so it's visible.
+    if (domainFiltered.length === 0) {
+      logger.warn('[document-guard] All files blocked by domain filter — keeping original selection');
     }
   }
   // ─────────────────────────────────────────────────────────────────────────
@@ -1519,7 +1527,15 @@ ${fileContext}`
     // ─────────────────────────────────────────────────────────────────────────
 
     return res.json(
-      buildAskMatriyaLlmContract({ message, text: reply })
+      buildAskMatriyaLlmContract({
+        message,
+        text: reply,
+        sources: filteredFilenames.map((fn) => ({
+          filename: fn,
+          document_name: fn,
+          content: `מקור: ${fn}`
+        }))
+      })
     );
   } catch (e) {
     const upstream = e.response?.status;
@@ -1653,6 +1669,13 @@ function guardResponseText(text) {
 function isScienceQueryQuestion(query) {
   const q = String(query || '').toLowerCase().trim();
   if (!q) return false;
+
+  // ── DOCUMENT-INTENT GUARD — never route to science pipeline ─────────────
+  // If the query explicitly refers to "this document" or "the document", it is
+  // a document RAG question, not a lab structured-data query. Return false
+  // regardless of what other keywords appear (e.g. "results in this document").
+  if (/\b(this document|the document|in this doc|about this doc|המסמך|במסמך|על המסמך|מטרת המסמך)\b/i.test(q)) return false;
+  // ────────────────────────────────────────────────────────────────────────
 
   // ── TIER 1: Direct lab entity keywords — immediate LAB route ────────────
   // Any query that mentions these words is a structured lab data query,
@@ -2406,7 +2429,7 @@ function buildScienceContract({
 }
 
 /** LLM (documents / materials) — same top-level shape; text in meta.message only. */
-function buildAskMatriyaLlmContract({ message, text }) {
+function buildAskMatriyaLlmContract({ message, text, sources }) {
   return {
     mode: 'llm',
     data: { rows: [], columns: [] },
@@ -2414,7 +2437,8 @@ function buildAskMatriyaLlmContract({ message, text }) {
       row_count:         0,
       query:             String(message || ''),
       message:           String(text || ''),
-      filters_applied:   false
+      filters_applied:   false,
+      ...(Array.isArray(sources) && sources.length > 0 ? { sources } : {})
     },
     repro: {
       pipeline:        ['llm'],
@@ -3182,7 +3206,11 @@ async function handleMatriyaSearch(req, res) {
           query
         });
       }
-      const relevantDoc = filterChunksByRetrievalSimilarityThreshold(searchResults);
+      // For document-only flow (user explicitly selected a document), use a much lower
+      // similarity threshold (0.1) to avoid false INSUFFICIENT_EVIDENCE on broad/Hebrew queries.
+      // The filename filter already scopes results to the selected document.
+      const docFlowThreshold = 0.1;
+      const relevantDoc = filterChunksByRetrievalSimilarityThreshold(searchResults, docFlowThreshold);
       if (!relevantDoc.length) {
         return res.status(422).json({
           error: 'INSUFFICIENT_EVIDENCE',
@@ -3202,7 +3230,7 @@ async function handleMatriyaSearch(req, res) {
         });
       }
       const docResult = await rag.generateAnswer(query, nPre, filterMetadata, true, relevantDoc);
-      let rows = filterChunksByRetrievalSimilarityThreshold(docResult.results || []);
+      let rows = filterChunksByRetrievalSimilarityThreshold(docResult.results || [], docFlowThreshold);
       rows = filterRetrievalRowsByAnswerBinding(rows, docResult.answer || '');
         const sources = buildAnswerSourcesFromRetrieval(rows);
       if (SearchHistory && docResult.answer) {

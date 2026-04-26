@@ -415,18 +415,13 @@ export async function runPipeline(input) {
 
   // ── Confidence = evidence quality, independent of decision type ──────────────
   //
-  // Rule: completeness score is the deterministic baseline.
-  //       LLM confidence can only RAISE it (prevents LLM returning 0 and collapsing score).
+  // Rule: confidence is ALWAYS the deterministic completeness score only.
+  //       LLM confidence is intentionally ignored — the MATRIYA spec requires
+  //       deterministic, code-based scoring (Option A), not LLM inference.
   //       STOP hard-cap at 35% (something is clearly missing).
   //       ITERATE and GO: no artificial floor/ceiling — score reflects actual evidence.
   //
-  let confidence = completenessScore; // deterministic baseline (0-100)
-
-  if (typeof llmConfidence === 'number' && llmConfidence > confidence) {
-    // LLM saw more context (e.g. from RAG docs) — allow it to raise confidence
-    // but never more than 25 points above the deterministic score
-    confidence = Math.min(llmConfidence, confidence + 25);
-  }
+  let confidence = completenessScore; // deterministic only — LLM confidence never modifies this
 
   // ── Rule 6 — deterministic evidence overrides LLM STOP ───────────────────────
   //
