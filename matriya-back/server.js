@@ -3138,6 +3138,27 @@ async function handleMatriyaSearch(req, res) {
   }
   // ─── END SOURCE GUARD ───────────────────────────────────────────────────────────────────────
 
+  // ── GREETING / TRIVIAL QUERY GUARD ─────────────────────────────────────────────────────────
+  // David requirement: "שלום" or any non-document greeting must NEVER return document sources.
+  // If the query is a short greeting/salutation, respond immediately without retrieval.
+  const _trimmedQ = query.trim();
+  const GREETING_RE = /^[\u0590-\u05FF\s,!?.]{1,20}$|^(hi|hello|hey|good morning|good afternoon|good evening|shalom|greetings|test|ping|yo|sup)\s*[!?.,]*$/i;
+  const _isShortNonQuestion = _trimmedQ.length <= 6 && !/[\d]/.test(_trimmedQ) && !/[a-zA-Z\u0590-\u05FF]{4,}/.test(_trimmedQ);
+  const _greetingWords = ['שלום', 'היי', 'הי', 'בוקר טוב', 'ערב טוב', 'להתראות', 'תודה', 'hello', 'hi', 'hey', 'thanks', 'thank you', 'bye'];
+  const _isGreeting = GREETING_RE.test(_trimmedQ) || _greetingWords.some(w => _trimmedQ.toLowerCase() === w.toLowerCase());
+  if (_isGreeting && flowRawEarly !== 'document' && flowRawEarly !== 'lab') {
+    logger.info(`[greeting-guard] trivial query detected — returning no-source response. query="${query}"`);
+    return res.status(200).json({
+      query,
+      results: [],
+      results_count: 0,
+      answer: 'MATRIYA מוכן לעזור. אנא שאל שאלה הקשורה למסמכי המחקר שלך.',
+      sources: [],
+      routing: 'GREETING_GUARD'
+    });
+  }
+  // ────────────────────────────────────────────────────────────────────────────────────────────
+
   let nResults = parseInt(req.body?.n_results ?? req.query.n_results, 10) || 5;
   if (nResults < 1 || nResults > 50) {
     nResults = 5;

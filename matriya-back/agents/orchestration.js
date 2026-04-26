@@ -35,9 +35,204 @@ function getRagService() {
   return _ragService;
 }
 
+// ─── WhatsApp key=value lab format detector ───────────────────────────────────
+
+/**
+ * Detects and parses the WhatsApp multi-condition key=value lab format:
+ *
+ *   validate CE-003
+ *   A: rpm=1400 exp=50 ttf=70 adh=0 foam=3
+ *   B: rpm=1800 exp=60 ttf=63 adh=0 foam=2
+ *   C: rpm=2200 exp=70 ttf=56 adh=4 foam=2
+ *   K-test: "mixing↑ → performance↑"
+ *   Question: Is K valid?
+ *
+ * Returns { isLabFormat, expId, conditions, kTestHypothesis, question }
+ * or { isLabFormat: false } if not recognised.
+ */
+function parseWhatsAppLabInput(input) {
+  const text = (input || '').trim();
+
+  // Must have at least one key=value row  e.g.  "A: rpm=1400 exp=50"
+  const conditionRowRe = /^([A-Z])\s*:\s*((?:\w+=[\d.]+\s*)+)/gm;
+  const conditionMatches = [...text.matchAll(conditionRowRe)];
+  if (conditionMatches.length < 2) return { isLabFormat: false };
+
+  // Parse each condition row into a map  { A: { rpm:1400, exp:50, ... }, ... }
+  const conditions = {};
+  for (const m of conditionMatches) {
+    const label = m[1].toUpperCase();
+    const pairs = {};
+    for (const kv of m[2].matchAll(/(\w+)=([\d.]+)/g)) {
+      pairs[kv[1].toLowerCase()] = parseFloat(kv[2]);
+    }
+    conditions[label] = pairs;
+  }
+
+  // Optional experiment ID  "validate CE-003" / "CE-003" / "EXP-7"
+  const expIdMatch = text.match(/\b(CE[-_]?\w+|EXP[-_]?\w+|validate\s+([\w-]+))/i);
+  const expId = expIdMatch ? (expIdMatch[2] || expIdMatch[1]).replace(/^validate\s+/i, '').trim() : null;
+
+  // Optional K-test hypothesis
+  const kTestMatch = text.match(/K[-_]test\s*:\s*["']?([^"'\n]+)["']?/i);
+  const kTestHypothesis = kTestMatch ? kTestMatch[1].trim() : null;
+
+  // Optional free-form question
+  const questionMatch = text.match(/[Qq]uestion\s*:\s*(.+)/);
+  const question = questionMatch ? questionMatch[1].trim() : null;
+
+  return { isLabFormat: true, expId, conditions, kTestHypothesis, question };
+}
+
+/**
+ * Evaluate whether a K-test directional hypothesis holds across sorted conditions.
+ *
+ * Logic:
+ *   1. Identify the independent variable from the hypothesis arrow text (e.g. "mixing↑" → rpm)
+ *   2. Sort conditions by that variable ascending
+ *   3. For each other variable, test if the claimed trend (↑ or ↓) is monotone
+ *
+ * Returns { verdict: 'VALID'|'CONTRADICTED'|'PARTIAL'|'INCONCLUSIVE',
+ *           support: [...], contradictions: [...], summary: string }
+ */
+function evaluateKTest(conditions, hypothesis) {
+  const conditionKeys = Object.keys(conditions).sort();
+  if (conditionKeys.length < 2) {
+    return { verdict: 'INCONCLUSIVE', support: [], contradictions: [], summary: 'Need ≥ 2 conditions to evaluate a trend.' };
+  }
+
+  // Map common abbreviations to readable names
+  const abbrevMap = {
+    rpm: 'mixing speed (rpm)', exp: 'expansion ratio', ttf: 'time-to-fire (s)',
+    adh: 'adhesion', foam: 'foam quality', visc: 'viscosity', temp: 'temperature',
+    ph: 'pH', mass: 'mass', yield: 'yield', strength: 'strength',
+  };
+
+  // Collect all measurement keys across conditions
+  const allKeys = [...new Set(conditionKeys.flatMap(k => Object.keys(conditions[k])))];
+
+  // Try to detect the independent variable from hypothesis text
+  // "mixing↑" → rpm, "temperature↑" → temp, "speed" → rpm, etc.
+  const hyp = (hypothesis || '').toLowerCase();
+  const indepKeyword = hyp.match(/\b(rpm|speed|mix|stir|agit|temp|conc|time|pressure)\b/)?.[1];
+  let indepVar = allKeys[0]; // default: first listed key
+  if (indepKeyword) {
+    if (/rpm|speed|mix|stir|agit/.test(indepKeyword)) indepVar = 'rpm';
+    else if (/temp/.test(indepKeyword)) indepVar = 'temp';
+    else if (/time/.test(indepKeyword)) indepVar = 'ttf';
+    else if (/conc/.test(indepKeyword)) indepVar = 'conc';
+  }
+  if (!allKeys.includes(indepVar)) indepVar = allKeys[0];
+
+  // Sort conditions by independent variable ascending
+  const sorted = conditionKeys.sort((a, b) =>
+    (conditions[a][indepVar] ?? 0) - (conditions[b][indepVar] ?? 0)
+  );
+
+  // Determine claimed direction for dependent variables from hypothesis
+  // "mixing↑ → performance↑" → performance is claimed to increase
+  // Common "performance" proxies: exp↑, ttf↓ (lower = better = faster fire), adh↑, foam↓
+  const claimedUp = /performance[↑\+]|exp[↑\+]|result[↑\+]|yield[↑\+]|strength[↑\+]/i.test(hyp);
+  const claimedDown = /ttf[↓\-]|time[↓\-]|foam[↓\-]|error[↓\-]/i.test(hyp);
+
+  const support = [];
+  const contradictions = [];
+
+  for (const key of allKeys) {
+    if (key === indepVar) continue;
+    const values = sorted.map(c => conditions[c][key]);
+    if (values.some(v => v == null)) continue;
+
+    const allUp   = values.every((v, i) => i === 0 || v >= values[i - 1]);
+    const allDown = values.every((v, i) => i === 0 || v <= values[i - 1]);
+    const name = abbrevMap[key] || key;
+
+    // Evaluate against hypothesis
+    if (key === 'exp' || key === 'adh' || key === 'yield' || key === 'strength') {
+      if (allUp)   support.push(`${name}: ↑ monotone (${values.join('→')})`);
+      else if (allDown) contradictions.push(`${name}: ↓ contrary to performance↑ (${values.join('→')})`);
+    } else if (key === 'ttf' || key === 'foam') {
+      // Lower is better for these (faster ignition, less excess foam)
+      if (allDown) support.push(`${name}: ↓ consistent with better performance (${values.join('→')})`);
+      else if (allUp) contradictions.push(`${name}: ↑ contrary to expected improvement (${values.join('→')})`);
+    } else {
+      if (allUp)   support.push(`${name}: ↑ (${values.join('→')})`);
+      else if (allDown) support.push(`${name}: ↓ (${values.join('→')})`);
+      else         contradictions.push(`${name}: non-monotone (${values.join('→')})`);
+    }
+  }
+
+  const indepValues = sorted.map(c => conditions[c][indepVar]);
+  const indepName = abbrevMap[indepVar] || indepVar;
+  const indepSummary = `${indepName} range: ${indepValues.join('→')} (${sorted.join('→')})`;
+
+  let verdict;
+  if (contradictions.length === 0 && support.length > 0)  verdict = 'VALID';
+  else if (support.length === 0 && contradictions.length > 0) verdict = 'CONTRADICTED';
+  else if (support.length > 0)                             verdict = 'PARTIAL';
+  else                                                     verdict = 'INCONCLUSIVE';
+
+  const summary = [
+    `K-test: "${hypothesis}"`,
+    `Independent variable: ${indepSummary}`,
+    support.length       ? `Supporting: ${support.join('; ')}`       : null,
+    contradictions.length? `Contradicting: ${contradictions.join('; ')}` : null,
+    `Verdict: ${verdict}`,
+  ].filter(Boolean).join('\n');
+
+  return { verdict, support, contradictions, summary };
+}
+
+/**
+ * Build an enriched context string for the LLM when key=value lab format is detected.
+ * Also expands abbreviations so the LLM knows what the variables mean.
+ */
+function buildKeyValueLabContext(parsed, kTestResult) {
+  const { expId, conditions, kTestHypothesis } = parsed;
+  const abbrevMap = {
+    rpm: 'mixing speed (rpm)', exp: 'expansion ratio', ttf: 'time-to-fire (s)',
+    adh: 'adhesion score', foam: 'foam quality (lower=better)', ph: 'pH',
+    visc: 'viscosity (cP)', mass: 'mass (g)', yield: 'yield (%)',
+  };
+
+  const conditionKeys = Object.keys(conditions).sort();
+  const allKeys = [...new Set(conditionKeys.flatMap(k => Object.keys(conditions[k])))];
+
+  // Build table header
+  const header = ['Condition', ...allKeys.map(k => abbrevMap[k] || k)].join(' | ');
+  const sep    = new Array(header.split('|').length).fill('---').join(' | ');
+  const rows   = conditionKeys.map(c =>
+    [c, ...allKeys.map(k => conditions[c][k] ?? '-')].join(' | ')
+  );
+  const table = [header, sep, ...rows].join('\n');
+
+  const lines = [
+    expId ? `Experiment: ${expId}` : 'Structured experiment data (WhatsApp lab input)',
+    '',
+    table,
+    '',
+  ];
+
+  if (kTestHypothesis && kTestResult) {
+    lines.push(`K-test hypothesis: "${kTestHypothesis}"`);
+    lines.push(`K-test analysis:`);
+    lines.push(kTestResult.summary);
+    lines.push('');
+    lines.push(`Deterministic verdict: ${kTestResult.verdict}`);
+  }
+
+  return lines.join('\n');
+}
+
 // ─── Domain gate ──────────────────────────────────────────────────────────────
 
 function checkDomainGate(input) {
+  // Also recognise key=value lab format (rpm=, exp=, ttf=, etc.) and K-test patterns
+  const kvLabPattern = /\b[A-Z]\s*:\s*\w+=[\d.]+/;
+  const kTestPattern = /k[-_]?test|validate\s+\w|CE[-_]\d|rpm=|ttf=|adh=|foam=|exp=/i;
+  if (kvLabPattern.test(input) || kTestPattern.test(input)) {
+    return { passed: true, stage: 'DOMAIN_PASS', reason: 'Structured key=value lab data detected' };
+  }
   const domainTerms = /\b(formul|corrosion|coating|experiment|viscosit|polymer|alloy|substrate|inhibit|passiv|adhesion|thermal|nano|crystal|react|bond|intumesc|material|lab|test|result|ציפוי|נוסחה|ניסוי|חומר|תוצאות|מעבדה|formula|formulation|sample|batch|measurement|concentration|temperature|pressure|particle|surface|oxide|zinc|epoxy|pigment|binder|solvent)/i;
   const passed = domainTerms.test(input);
   return {
@@ -97,6 +292,16 @@ RULES (never violate):
 - If input is NOT lab/research data → return STOP with reason "Not lab data"
 - External data is CONTEXT only, never evidence
 - trust_grade is limited to C or D — no conclusions from external sources alone
+
+STRUCTURED LAB INPUT (key=value format — always accept this as valid lab data):
+- Rows like "A: rpm=1400 exp=50 ttf=70 adh=0 foam=3" ARE valid structured experiment data
+- Abbreviations: rpm=mixing speed, exp=expansion ratio, ttf=time-to-fire (s), adh=adhesion, foam=foam quality (lower=better)
+- "validate CE-XXX" or "CE-XXX" ARE valid experiment identifiers — treat as lab data
+- K-test: "<hypothesis>" IS a request to evaluate whether the stated hypothesis holds across conditions
+- For K-test validation: check if trends across conditions (A, B, C ...) support or contradict the hypothesis
+  - If rpm↑ → exp↑ and ttf↓ and foam↓ across all conditions → hypothesis VALID → GO
+  - If trend reverses or is non-monotone for key variables → CONTRADICTED → STOP
+  - If only some variables support it → PARTIAL → ITERATE
 
 RESPONSE FORMAT (always output this exact JSON block, then a plain-language summary):
 \`\`\`json
@@ -216,12 +421,16 @@ function computeDataCompleteness(input) {
   const numericHits = (text.match(
     /\b\d+(\.\d+)?\s*(%|mg|g|kg|ml|l|mm|nm|µm|°C|°F|K|MPa|GPa|ppm|mol|bar|Hz|rpm|wt\.?%|vol\.?%|cP|mPa|Pa[·\s]?s|N\/m|J\/g)\b/gi
   ) || []).length;
-  if      (numericHits >= 5) score += 40;
-  else if (numericHits >= 3) score += 30;
-  else if (numericHits >= 1) score += 18;
+  // Also count key=value pairs e.g. rpm=1400 exp=50 ttf=70 (each pair = 1 hit)
+  const kvHits = (text.match(/\b\w+=[\d.]+/g) || []).length;
+  const totalNumericHits = numericHits + Math.floor(kvHits / 2); // kvHits weighted at 0.5 each
+  if      (totalNumericHits >= 5) score += 40;
+  else if (totalNumericHits >= 3) score += 30;
+  else if (totalNumericHits >= 1) score += 18;
 
   // B. Experiment / batch / run identifiers
-  const hasExpId = /\b(EXP[-_]?\w+|B[-_]\d{1,4}|S[-_]\d{1,4}|batch\s*#?\d|sample\s*#?\d|run\s*#?\d|trial\s*#?\d|experiment\s*#?\d)\b/i.test(text);
+  const hasExpId = /\b(EXP[-_]?\w+|CE[-_]?\w+|B[-_]\d{1,4}|S[-_]\d{1,4}|batch\s*#?\d|sample\s*#?\d|run\s*#?\d|trial\s*#?\d|experiment\s*#?\d)\b/i.test(text)
+    || /^[A-Z]\s*:\s*\w+=[\d.]+/m.test(text); // condition rows A:, B:, C: count as identifiers
   if (hasExpId) score += 12;
 
   // C. Domain-specific terminology depth
@@ -331,6 +540,21 @@ export async function runPipeline(input) {
   const startedAt = Date.now();
   logger.info(`[pipeline] start: "${input.slice(0, 80)}"`);
 
+  // 0. WhatsApp key=value lab format — detect and enrich BEFORE any LLM call
+  const labParsed = parseWhatsAppLabInput(input);
+  let enrichedInput = input;
+  let kTestResult = null;
+  if (labParsed.isLabFormat) {
+    logger.info(`[pipeline] key=value lab format detected: expId=${labParsed.expId} conditions=${Object.keys(labParsed.conditions).join(',')} kTest=${!!labParsed.kTestHypothesis}`);
+    if (labParsed.kTestHypothesis) {
+      kTestResult = evaluateKTest(labParsed.conditions, labParsed.kTestHypothesis);
+      logger.info(`[pipeline] K-test verdict: ${kTestResult.verdict}`);
+    }
+    // Prepend structured context so LLM has full picture in plain English
+    const labContext = buildKeyValueLabContext(labParsed, kTestResult);
+    enrichedInput = `${labContext}\n\nOriginal message:\n${input}`;
+  }
+
   // 1. Domain gate
   const gate = checkDomainGate(input);
 
@@ -342,14 +566,14 @@ export async function runPipeline(input) {
   let llmConfidence = null;
   let ragUsed = false;
 
-  const ragAnswer = await callRag(input);
+  const ragAnswer = await callRag(enrichedInput);
   if (ragAnswer) {
     answer = ragAnswer;
     ragUsed = true;
     signals = { sufficient_data: true, variables_distinguishable: true };
   } else {
     try {
-      const llmResult = await callLlmDirect(input);
+      const llmResult = await callLlmDirect(enrichedInput);
       answer = llmResult.answer || '';
       signals = llmResult.signals || {};
       llmDecision = llmResult.llmDecision || null;
@@ -359,6 +583,23 @@ export async function runPipeline(input) {
       logger.error(`[pipeline] LLM failed: ${e.message}`);
       answer = `MATRIYA: שגיאה בעיבוד. ${e.message}`;
       missingData = ['experiment results', 'formulation parameters'];
+    }
+  }
+
+  // If we have a deterministic K-test result, override the LLM decision
+  // (deterministic code beats LLM for structured trend data)
+  if (kTestResult) {
+    const verdictMap = { VALID: 'GO', PARTIAL: 'ITERATE', CONTRADICTED: 'STOP', INCONCLUSIVE: 'ITERATE' };
+    const kDecision = verdictMap[kTestResult.verdict] || 'ITERATE';
+    if (!llmDecision || llmDecision === 'STOP') {
+      llmDecision = kDecision;
+      logger.info(`[pipeline] K-test override: verdict=${kTestResult.verdict} → llmDecision=${llmDecision}`);
+    }
+    // Prepend K-test summary to answer for David's reply
+    const kSummaryLine = `K-test "${labParsed.kTestHypothesis}": ${kTestResult.verdict}`;
+    answer = answer ? `${kSummaryLine}\n\n${answer}` : kSummaryLine;
+    if (kTestResult.contradictions.length > 0) {
+      missingData = kTestResult.contradictions.map(c => `Resolve: ${c}`);
     }
   }
 

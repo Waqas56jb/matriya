@@ -19,6 +19,7 @@ import {
   selectRankedSnippetList
 } from './lib/openaiFileSearchMatriya.js';
 import { hasFileSearchEvidence, hasVectorSearchEvidence } from './lib/ragEvidenceFailSafe.js';
+import { rowMetadataMatchesFilter } from './lib/vectorMetadataFilenameFilter.js';
 import {
   filterSnippetsByQueryDomain,
   filterRetrievalRowsByQueryDomain,
@@ -427,8 +428,26 @@ class RAGService {
         let domainSnippets = hasSpecificFileScope
           ? snippets
           : filterSnippetsByQueryDomain(query, snippets);
+        // ── HARD FILENAME FILTER (file-scoped queries only) ──────────────────
+        // OpenAI file_search does not enforce filename at the API level — it may return
+        // snippets from any file in the vector store. Post-filter to the requested file(s).
+        if (hasSpecificFileScope && domainSnippets.length > 0) {
+          const strictlyScoped = domainSnippets.filter(
+            s => rowMetadataMatchesFilter({ filename: s.filename ?? s.metadata?.filename }, filterMetadata)
+          );
+          if (strictlyScoped.length > 0) {
+            domainSnippets = strictlyScoped;
+            logger.info(`[rag] file-scope filter: ${snippets.length} → ${domainSnippets.length} snippets from requested file(s)`);
+          } else {
+            logger.warn(`[rag] file-scope filter removed ALL snippets (filename mismatch?) — falling back to pgvector`);
+            throw new Error('no_openai_domain_evidence: file-scoped snippets filtered to zero, falling back to pgvector');
+          }
+        }
         if (!hasFileSearchEvidence(domainSnippets) && detectStructuredDataInSnippets(snippets)) {
-          domainSnippets = snippets;
+          // When file-scoped, only allow structured-data snippets from the same file
+          domainSnippets = hasSpecificFileScope
+            ? snippets.filter(s => rowMetadataMatchesFilter({ filename: s.filename ?? s.metadata?.filename }, filterMetadata))
+            : snippets;
         }
         if (!hasFileSearchEvidence(domainSnippets)) {
           // No OpenAI domain evidence (e.g. file not yet synced to OpenAI) — fall through to pgvector.
@@ -518,9 +537,13 @@ class RAGService {
     searchResults = thresholdRows;
 
     // hasSpecificFileScope is defined at the top of generateAnswer (shared by both paths)
-    const domainRows = hasSpecificFileScope
-      ? searchResults
+    // For file-scoped queries: also hard-filter pgvector rows by filename (SQL WHERE may
+    // match 0 rows on name mismatch, or extra rows on partial-match; make it strict).
+    let pgRows = hasSpecificFileScope
+      ? searchResults.filter(r => rowMetadataMatchesFilter(r.metadata ?? {}, filterMetadata))
       : filterRetrievalRowsByQueryDomain(query, searchResults);
+    // If strict filter emptied everything fall back to unfiltered (avoids silent regression)
+    const domainRows = (hasSpecificFileScope && pgRows.length === 0) ? searchResults : pgRows;
     if (!domainRows.length || !hasVectorSearchEvidence(domainRows)) {
       return {
         query: query,
