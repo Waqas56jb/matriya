@@ -35,6 +35,9 @@ bower_components/
 .env.*
 !.env.example
 !.env*.example
+# Allow committed production env files (no secrets — only public URLs)
+!.env.production
+!**/.env.production
 *.pem
 *.key
 secrets.json
