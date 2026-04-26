@@ -1,0 +1,10 @@
+Laboratory Report — Fresco Colors Research
+Project: Intumescent Coating Development
+
+Experiment EXP-004 was repeated under modified conditions.
+Adhesion measured at 89.
+Expansion ratio: 22.0.
+APP = 30.
+
+Note: These measurements were taken after a 30-day aging period.
+The results indicate that aging reduces adhesion performance significantly.

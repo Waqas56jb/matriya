@@ -406,6 +406,21 @@ export const lab = {
   }
 };
 
+export const proposals = {
+  generate: (projectId, documentIds) =>
+    api.post('/api/proposals/generate', { project_id: projectId, document_ids: documentIds || [] }, { timeout: 120000 }).then(r => r.data),
+  get: (proposalId) =>
+    api.get(`/api/proposals/${proposalId}`).then(r => r.data),
+  latest: (projectId) =>
+    api.get(`/api/projects/${projectId}/proposals/latest`).then(r => r.data),
+  patch: (proposalId, body) =>
+    api.patch(`/api/proposals/${proposalId}`, body).then(r => r.data),
+  resolveConflict: (proposalId, body) =>
+    api.post(`/api/proposals/${proposalId}/resolve_conflict`, body).then(r => r.data),
+  approve: (proposalId) =>
+    api.post(`/api/proposals/${proposalId}/approve`).then(r => r.data),
+};
+
 export const runs = {
   list: (projectId, params) => api.get(`/api/projects/${projectId}/runs`, { params }).then(r => r.data),
   get: (projectId, runId) => api.get(`/api/projects/${projectId}/runs/${runId}`).then(r => r.data),

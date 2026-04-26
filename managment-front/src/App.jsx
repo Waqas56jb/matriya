@@ -1,5 +1,6 @@
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
+import ProposalScreen from './components/ProposalScreen';
 import { HiEye, HiEyeSlash, HiOutlineSparkles } from 'react-icons/hi2';
 import { BrowserRouter, Routes, Route, Link, NavLink, Outlet, useParams, useNavigate, Navigate, useLocation } from 'react-router-dom';
 import { projects as projectsApi, users as usersApi, tasks as tasksApi, milestones as milestonesApi, documents as documentsApi, notes as notesApi, projectFiles as projectFilesApi, rag as ragApi, gptRag as gptRagApi, chat as chatApi, emails as emailsApi, lab as labApi, auth as authApi, getStoredToken, getStoredUser, setAuth, clearAuth, getNetworkErrorMessage } from './api';
@@ -92,6 +93,7 @@ function AuthenticatedLayout({ user, onLogout }) {
             <Link to={`/project/${id}/section/rag`} className={section === 'rag' ? 'active' : ''}>📁 {t.navDocuments}</Link>
             <Link to={`/project/${id}/section/emails`} className={section === 'emails' ? 'active' : ''}>✉️ {t.navEmails}</Link>
             <Link to={`/project/${id}/section/settings`} className={section === 'settings' ? 'active' : ''}>⚙️ {t.navSettings}</Link>
+            <Link to={`/project/${id}/section/proposal`} className={section === 'proposal' ? 'active' : ''}>📋 Proposal</Link>
           </nav>
           <div className="sidebar-user">
             <div className="main-header-user" style={{ padding: '8px 0' }}>
@@ -456,7 +458,7 @@ function Home({ user, onLogout, dashboardMode = false }) {
   );
 }
 
-const TABS = ['overview', 'tasks', 'milestones', 'notes', 'lab', 'materials', 'rag', 'emails', 'chat', 'settings'];
+const TABS = ['overview', 'tasks', 'milestones', 'notes', 'lab', 'materials', 'rag', 'emails', 'chat', 'settings', 'proposal'];
 /** Dashboard tiles only — settings stays in sidebar (`/section/settings`). */
 const WIDGET_TABS = TABS.filter(id => id !== 'settings');
 const TAB_LABELS = { overview: `📊 ${t.overview}`, tasks: `📋 ${t.tasks}`, milestones: `🎯 ${t.milestones}`, notes: `📝 ${t.notes}`, lab: `🧪 ${t.labTab}`, materials: `🧱 ${t.materialLibraryTab}`, rag: `📁 ${t.docsManagementTab}`, emails: `✉️ ${t.emailsTab}`, chat: `💬 ${t.chat}`, settings: `⚙️ ${t.settings}` };
@@ -632,6 +634,7 @@ function ProjectView({ user, onLogout }) {
                   {fullScreenSection === 'emails' && <EmailsTab projectId={id} />}
                   {fullScreenSection === 'chat' && <ChatTab projectId={id} onUnreadChange={refreshChatUnread} />}
                   {fullScreenSection === 'settings' && <SettingsTab projectId={id} project={project} setProject={setProject} navigate={navigate} projectRole={projectRole} user={user} />}
+                  {fullScreenSection === 'proposal' && <ProposalScreen project={project} />}
                 </div>
               </div>
             </div>

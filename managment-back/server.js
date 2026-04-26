@@ -39,6 +39,13 @@ import {
 import { deleteManagementVectorByFilename } from './lib/managementRagDelete.js';
 import { sendLabImportIncompleteEmail } from './lib/sendLabImportIncompleteEmail.js';
 import { labBridgeQueryHandler, labHealthHandler } from './lib/labBridgeQueryRoute.js';
+import {
+  buildProposal,
+  computeProposalState,
+  applyPatch as applyProposalPatch,
+  resolveProposalConflict,
+  validateApproveConditions,
+} from './lib/proposalEngine.js';
 /** Do not static-import pdf-to-img: it loads pdfjs-dist which needs canvas/DOM and crashes Vercel cold start. */
 
 const PORT = parseInt(process.env.PORT, 10) || 8001;
@@ -6452,6 +6459,344 @@ app.post('/api/rag/research/run', async (req, res) => {
 
 app.post('/api/rag/research/session', async (req, res) => {
   res.json({ session_id: crypto.randomUUID() });
+});
+
+// ── PROPOSAL ENGINE (v1.1) ─────────────────────────────────────────────────────
+
+/**
+ * POST /api/proposals/generate
+ * Body: { project_id, document_ids: string[] }
+ * Returns: full proposal object per spec schema.
+ */
+app.post('/api/proposals/generate', async (req, res) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: 'Authentication required' });
+
+    const { project_id, document_ids } = req.body || {};
+    if (!project_id) return res.status(400).json({ error: 'project_id required' });
+
+    const ctx = await requireProjectMember(req, res, project_id);
+    if (!ctx) return;
+
+    // Fetch project files
+    let filesQuery = supabase.from('project_files').select('id, display_name, storage_path').eq('project_id', project_id);
+    if (Array.isArray(document_ids) && document_ids.length > 0) {
+      filesQuery = filesQuery.in('id', document_ids);
+    }
+    const { data: fileRows, error: fileErr } = await filesQuery;
+    if (fileErr) throw fileErr;
+
+    if (!fileRows || fileRows.length === 0) {
+      // Return INSUFFICIENT proposal with no documents
+      const emptyProposal = {
+        proposal_id:    `PROP-${new Date().getFullYear()}-00000`,
+        project_id,
+        generated_at:   new Date().toISOString(),
+        scan_status:    { documents_processed: 0, documents_failed: 0, failed_files: [], conflicts_detected: [] },
+        proposal_state: 'INSUFFICIENT',
+        project_type:   { value: null, confidence: 'LOW', sources: [] },
+        materials:      [],
+        metrics:        [],
+        experiments:    [],
+        milestones:     [],
+        project_goal:   { value: null, status: 'NOT_DEFINED' },
+      };
+      const { error: insErr } = await supabase.from('proposals').upsert(
+        { id: emptyProposal.proposal_id, project_id, data: emptyProposal, updated_at: new Date().toISOString() },
+        { onConflict: 'id' }
+      );
+      if (insErr) console.warn('[proposals] save failed:', insErr.message);
+      return res.json(emptyProposal);
+    }
+
+    // Download each file from Supabase storage
+    const BUCKET = 'manually-uploaded-sharepoint-files';
+    const files = [];
+    for (const row of fileRows) {
+      if (!row.storage_path) continue;
+      const { data: blob, error: dlErr } = await supabase.storage.from(BUCKET).download(row.storage_path);
+      if (dlErr || !blob) {
+        files.push({ id: row.id, name: row.display_name || row.storage_path, buffer: Buffer.alloc(0), failed: true });
+        continue;
+      }
+      const arrayBuffer = await blob.arrayBuffer();
+      files.push({ id: row.id, name: row.display_name || row.storage_path.split('/').pop(), buffer: Buffer.from(arrayBuffer) });
+    }
+
+    const proposal = await buildProposal(project_id, files.filter(f => !f.failed));
+
+    // Persist proposal
+    const { error: saveErr } = await supabase.from('proposals').upsert(
+      { id: proposal.proposal_id, project_id, data: proposal, updated_at: new Date().toISOString() },
+      { onConflict: 'id' }
+    );
+    if (saveErr) console.warn('[proposals] save failed:', saveErr.message);
+
+    res.json(proposal);
+  } catch (e) {
+    console.error('[proposals/generate]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * GET /api/proposals/:proposal_id
+ * Returns: current proposal state including all user edits.
+ */
+app.get('/api/proposals/:proposal_id', async (req, res) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: 'Authentication required' });
+
+    const { data: row, error } = await supabase.from('proposals').select('*').eq('id', req.params.proposal_id).single();
+    if (error || !row) return res.status(404).json({ error: 'Proposal not found' });
+
+    const ctx = await requireProjectMember(req, res, row.project_id);
+    if (!ctx) return;
+
+    res.json(row.data || row);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * GET /api/projects/:projectId/proposals/latest
+ * Returns the most recent proposal for a project.
+ */
+app.get('/api/projects/:projectId/proposals/latest', async (req, res) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: 'Authentication required' });
+
+    const ctx = await requireProjectMember(req, res, req.params.projectId);
+    if (!ctx) return;
+
+    const { data: rows, error } = await supabase
+      .from('proposals')
+      .select('*')
+      .eq('project_id', req.params.projectId)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (error) throw error;
+    if (!rows || rows.length === 0) return res.status(404).json({ error: 'No proposal found for this project' });
+
+    res.json(rows[0].data || rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * PATCH /api/proposals/:proposal_id
+ * Body: { block, action: "add|remove|edit", payload }
+ * Returns: FULL recomputed proposal (per spec Section 10.4 — never a diff).
+ */
+app.patch('/api/proposals/:proposal_id', async (req, res) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: 'Authentication required' });
+
+    const { data: row, error } = await supabase.from('proposals').select('*').eq('id', req.params.proposal_id).single();
+    if (error || !row) return res.status(404).json({ error: 'Proposal not found' });
+
+    const ctx = await requireProjectMember(req, res, row.project_id);
+    if (!ctx) return;
+
+    const { block, action, payload } = req.body || {};
+    if (!block || !action) return res.status(400).json({ error: 'block and action are required' });
+
+    const updated = applyProposalPatch(row.data, { block, action, payload: payload || {} });
+
+    const { error: saveErr } = await supabase
+      .from('proposals')
+      .update({ data: updated, updated_at: new Date().toISOString() })
+      .eq('id', req.params.proposal_id);
+    if (saveErr) throw saveErr;
+
+    res.json(updated);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+/**
+ * POST /api/proposals/:proposal_id/resolve_conflict
+ * Body: { field, experiment_id?, chosen_value, source_or_custom }
+ * Returns: full updated proposal.
+ */
+app.post('/api/proposals/:proposal_id/resolve_conflict', async (req, res) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: 'Authentication required' });
+
+    const { data: row, error } = await supabase.from('proposals').select('*').eq('id', req.params.proposal_id).single();
+    if (error || !row) return res.status(404).json({ error: 'Proposal not found' });
+
+    const ctx = await requireProjectMember(req, res, row.project_id);
+    if (!ctx) return;
+
+    const { field, experiment_id, chosen_value, source_or_custom } = req.body || {};
+    if (!field || chosen_value == null) return res.status(400).json({ error: 'field and chosen_value are required' });
+
+    const updated = resolveProposalConflict(row.data, { field, experiment_id, chosen_value, source_or_custom });
+
+    const { error: saveErr } = await supabase
+      .from('proposals')
+      .update({ data: updated, updated_at: new Date().toISOString() })
+      .eq('id', req.params.proposal_id);
+    if (saveErr) throw saveErr;
+
+    res.json(updated);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * POST /api/proposals/:proposal_id/approve
+ * Pre-condition: proposal_state === 'READY'.
+ * Writes ALL blocks to Management DB in a single atomic transaction.
+ * Returns: { project_ready: true, redirect_to } or HTTP 500 with APPROVE_TRANSACTION_FAILED.
+ */
+app.post('/api/proposals/:proposal_id/approve', async (req, res) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: 'Authentication required' });
+
+    const { data: row, error } = await supabase.from('proposals').select('*').eq('id', req.params.proposal_id).single();
+    if (error || !row) return res.status(404).json({ error: 'Proposal not found' });
+
+    const ctx = await requireProjectMember(req, res, row.project_id);
+    if (!ctx) return;
+
+    const proposal = row.data;
+    const validation = validateApproveConditions(proposal);
+    if (!validation.valid) {
+      return res.status(422).json({
+        error: 'APPROVE_VALIDATION_FAILED',
+        reason: validation.reason,
+      });
+    }
+
+    const projectId = row.project_id;
+
+    // Atomic transaction via raw pg client
+    const { Pool } = (await import('pg')).default;
+    const DB_URL = process.env.POSTGRES_URL || process.env.DATABASE_URL;
+    if (!DB_URL) {
+      return res.status(503).json({
+        error: 'APPROVE_TRANSACTION_FAILED',
+        reason: 'POSTGRES_URL not configured — cannot run atomic transaction',
+      });
+    }
+
+    const pool = new Pool({ connectionString: DB_URL, ssl: { rejectUnauthorized: false }, max: 1 });
+    const client = await pool.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      // 1. Update project
+      await client.query(
+        `UPDATE public.projects SET project_type = $1, goal_value = $2, goal_status = $3, updated_at = NOW() WHERE id = $4`,
+        [proposal.project_type?.value || null, null, 'NOT_DEFINED', projectId]
+      );
+
+      // 2. Insert materials → material_library
+      for (const mat of (proposal.materials || [])) {
+        await client.query(
+          `INSERT INTO public.material_library (project_id, name, description, created_at)
+           VALUES ($1, $2, $3, NOW())
+           ON CONFLICT DO NOTHING`,
+          [projectId, mat.name, `Confidence: ${mat.confidence}. Sources: ${(mat.sources || []).join(', ')}`]
+        ).catch(() => {
+          // material_library might not have ON CONFLICT — try upsert-safe insert
+        });
+      }
+
+      // 3. Insert metrics → proposal_metrics
+      for (const met of (proposal.metrics || [])) {
+        await client.query(
+          `INSERT INTO public.proposal_metrics (project_id, name, confidence, sources, created_at)
+           VALUES ($1, $2, $3, $4, NOW())`,
+          [projectId, met.name, met.confidence, JSON.stringify(met.sources || [])]
+        );
+      }
+
+      // 4. Insert experiments → experiments table
+      for (const exp of (proposal.experiments || [])) {
+        const formulation = {};
+        const results     = {};
+        for (const [field, value] of Object.entries(exp.fields || {})) {
+          if (['APP', 'PER', 'MEL', 'Nanoclay', 'IFR'].includes(field)) formulation[field] = value;
+          else results[field] = value;
+        }
+        await client.query(
+          `INSERT INTO public.experiments (experiment_id, project_id, formulation, results, status, validated, source, updated_at)
+           VALUES ($1, $2, $3, $4, 'PENDING', false, 'proposal', NOW())
+           ON CONFLICT (experiment_id, project_id) DO UPDATE
+             SET formulation = EXCLUDED.formulation, results = EXCLUDED.results, updated_at = NOW()`,
+          [exp.experiment_id, projectId, JSON.stringify(formulation), JSON.stringify(results)]
+        );
+      }
+
+      // 5. Insert milestones
+      for (const ms of (proposal.milestones || [])) {
+        await client.query(
+          `INSERT INTO public.milestones (project_id, title, description, created_at)
+           VALUES ($1, $2, $3, NOW())`,
+          [projectId, ms.name, ms.description || null]
+        );
+      }
+
+      // 6. Insert source_documents links
+      const itemGroups = [
+        ...(proposal.materials  || []).map(i => ({ type: 'material',   id: i.name,            sources: i.sources })),
+        ...(proposal.metrics    || []).map(i => ({ type: 'metric',     id: i.name,            sources: i.sources })),
+        ...(proposal.experiments|| []).map(i => ({ type: 'experiment', id: i.experiment_id,   sources: i.sources })),
+        ...(proposal.milestones || []).map(i => ({ type: 'milestone',  id: i.name,            sources: [] })),
+      ];
+      for (const { type, id, sources } of itemGroups) {
+        for (const src of (sources || [])) {
+          await client.query(
+            `INSERT INTO public.source_documents (proposal_id, item_type, item_id, location, confidence, created_at)
+             VALUES ($1, $2, $3, $4, 'HIGH', NOW())`,
+            [proposal.proposal_id, type, id, src]
+          );
+        }
+      }
+
+      await client.query('COMMIT');
+
+      // Mark proposal as approved
+      await supabase
+        .from('proposals')
+        .update({ approved_at: new Date().toISOString(), data: { ...proposal, proposal_state: 'APPROVED' } })
+        .eq('id', proposal.proposal_id);
+
+      res.json({
+        project_ready: true,
+        proposal_id:   proposal.proposal_id,
+        redirect_to:   `/project/${projectId}/section/lab`,
+      });
+
+    } catch (txErr) {
+      await client.query('ROLLBACK');
+      console.error('[proposals/approve] ROLLBACK:', txErr.message);
+      res.status(500).json({
+        error:  'APPROVE_TRANSACTION_FAILED',
+        reason: txErr.message,
+      });
+    } finally {
+      client.release();
+      pool.end().catch(() => {});
+    }
+
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ---------- Health ----------

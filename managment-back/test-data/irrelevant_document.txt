@@ -1,0 +1,25 @@
+PURCHASE ORDER AGREEMENT
+
+Supplier: Chemical Supplies Ltd.
+Buyer: Fresco Colors Research Laboratory
+Date: 01 January 2026
+
+Payment Terms: Net 30 days from invoice date.
+Delivery Schedule: Within 14 business days of order confirmation.
+Shipping Method: DHL Express, insured freight.
+
+Line Items:
+  1. Bulk chemical containers x 100 units — USD 4,500
+  2. Laboratory glassware set x 20 units — USD 1,200
+  3. Safety equipment kit x 5 units — USD 800
+
+Total Invoice Amount: USD 6,500
+Tax (17%): USD 1,105
+Grand Total: USD 7,605
+
+Terms and Conditions:
+All goods remain property of seller until full payment received.
+Returns accepted within 7 days of delivery with original packaging.
+Disputes subject to jurisdiction of local commercial court.
+
+Authorized Signature: ___________________
