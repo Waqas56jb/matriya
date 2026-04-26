@@ -1222,13 +1222,64 @@ const ASK_MATRIYA_EXCEL_CONTEXT_PREAMBLE =
 const ASK_MATRIYA_STRICT_DOCUMENT_ONLY_RULES = [
   'Grounding (mandatory): Use ONLY the text under "Documents:" below as your source of truth.',
   'Do NOT use outside knowledge, training data, or the open web: no extra facts, names, dates, laws, definitions, or background that do not appear in those documents.',
-  'You may paraphrase or quote only what is in the documents. Simple inferences are allowed only when they follow directly from stated text (e.g. counting or comparing numbers that appear in the documents).',
-  'If the documents do not contain enough information to answer, say so clearly in Hebrew — do NOT fill gaps with general knowledge.',
+  'Direct inference rule: You may only infer what follows DIRECTLY and MATHEMATICALLY from numbers or explicit statements in the document (e.g. addition, counting, ratio). General-knowledge inferences are FORBIDDEN.',
+  'If the documents do not contain enough information to answer, say clearly in Hebrew: "המסמך אינו מכיל מידע מספיק לשאלה זו." — do NOT fill gaps with general knowledge.',
+  'Inference marking (mandatory): If ANY part of your response goes beyond what is EXPLICITLY written in the document — even a reasonable guess — you MUST prefix that specific sentence or list item with: [הנחה — לא מצוין במסמך] (meaning: Assumption — not stated in the document). This applies to: timelines, responsibilities, equipment, quantities, steps, or any item not literally present in the document text.',
+  '"What is not defined?" questions: List ONLY items that are EXPLICITLY referenced or implied by the document context but whose values/details are ABSENT from the text. Do NOT generate generic lists (e.g. "usually a plan needs a timeline") — only list gaps that exist based on topics the document actually touches.',
   'Consistency: For the same evidence, prefer stable wording — same facts and order of points; avoid decorative variation or filler when the question and documents are unchanged.',
   'Respond in Hebrew (עברית) only. Do not use Arabic.'
 ].join('\n');
 
-/** POST /ask-matriya (לשונית «Ask Matriya» + «שאל על המסמכים» בהעלאה) — near-deterministic decoding when answering from indexed file text. */
+/**
+ * David requirement: sources must only show the document(s) that actually contributed
+ * to the answer — not every file that was loaded into context.
+ *
+ * Strategy: split fileContext into per-file sections (--- filename ---), then
+ * check token overlap between each section and the LLM reply. Files with
+ * meaningful overlap are "used"; files with no overlap are excluded.
+ * Fallback: if nothing matches (very short/paraphrased answers), show max 1 file.
+ */
+function inferContributingFilesFromReply(reply, filteredFilenames, fileContext) {
+  if (!reply || !fileContext || filteredFilenames.length === 0) return filteredFilenames.slice(0, 1);
+  if (filteredFilenames.length === 1) return filteredFilenames;
+
+  const replyLower = reply.replace(/\s+/g, ' ').toLowerCase();
+  // Tokenise reply into meaningful words (3+ chars)
+  const replyWords = new Set(
+    replyLower.split(/[\s,.!?;:()\[\]"']+/).filter(w => w.length >= 3)
+  );
+
+  const scored = filteredFilenames.map(fn => {
+    const marker = `--- ${fn} ---`;
+    const start = fileContext.indexOf(marker);
+    if (start === -1) return { fn, score: 0 };
+    const afterHeader = fileContext.indexOf('\n', start) + 1;
+    const nextMarker = fileContext.indexOf('\n---', afterHeader);
+    const section = (nextMarker > 0 ? fileContext.slice(afterHeader, nextMarker) : fileContext.slice(afterHeader))
+      .replace(/\s+/g, ' ').toLowerCase();
+    const sectionWords = section.split(/[\s,.!?;:()\[\]"']+/).filter(w => w.length >= 3);
+    // Count how many section words appear in the reply
+    let hits = 0;
+    for (const w of sectionWords) {
+      if (replyWords.has(w)) hits++;
+    }
+    const score = sectionWords.length > 0 ? hits / sectionWords.length : 0;
+    return { fn, score, hits };
+  });
+
+  // Keep files with enough overlap (at least 3 hits OR top scorer if all are low)
+  const threshold = 3;
+  const passing = scored.filter(x => x.hits >= threshold);
+  if (passing.length > 0) {
+    // Return top-3 by score
+    return passing.sort((a, b) => b.score - a.score).slice(0, 3).map(x => x.fn);
+  }
+  // Fallback: top-1 by score (at least show the most likely contributor)
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, 1).map(x => x.fn);
+}
+
+
 const ASK_MATRIYA_DOCUMENTS_TEMPERATURE = 0;
 const ASK_MATRIYA_DOCUMENTS_SEED = 918_273_645;
 
@@ -1535,7 +1586,7 @@ ${fileContext}`
       buildAskMatriyaLlmContract({
         message,
         text: reply,
-        sources: filteredFilenames.map((fn) => ({
+        sources: inferContributingFilesFromReply(reply, filteredFilenames, fileContext).map((fn) => ({
           filename: fn,
           document_name: fn,
           content: `מקור: ${fn}`

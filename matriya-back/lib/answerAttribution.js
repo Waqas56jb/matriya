@@ -7,8 +7,12 @@ function hash16(parts) {
   return crypto.createHash('sha256').update(parts.join('\0')).digest('hex').slice(0, 16);
 }
 
-/** Default max sources for document flow; research flow uses MATRIYA_MAX_ATTRIBUTION_SOURCES (default 3). */
-const DEFAULT_MAX_ITEMS = 48;
+/**
+ * Default max **unique filenames** shown in sources.
+ * Previously this was 48 (rows), causing all documents to appear.
+ * David requirement: only the document(s) that actually answered the question.
+ */
+const DEFAULT_MAX_ITEMS = 3;
 
 /** Max characters per source excerpt in API/UI (מקורות / ציטוטים). Env MATRIYA_SOURCE_PREVIEW_CHARS overrides default. */
 const DEFAULT_PREVIEW_LENGTH = 1200;
@@ -34,12 +38,16 @@ export function buildAnswerSourcesFromRetrieval(results, opts = {}) {
   const maxItems = opts.maxItems ?? DEFAULT_MAX_ITEMS;
   const arr = Array.isArray(results) ? results : [];
   const out = [];
+  const seenFilenames = new Set();
   let seq = 0;
   for (const item of arr) {
     if (out.length >= maxItems) break;
     const text = String(item?.document ?? item?.text ?? '').trim();
     if (!text) continue;
     const document_name = String(item?.metadata?.filename ?? item?.metadata?.name ?? 'Unknown');
+    // Deduplicate by filename — only one source entry per unique document
+    if (seenFilenames.has(document_name)) continue;
+    seenFilenames.add(document_name);
     const idPart = item?.id != null && item.id !== '' ? String(item.id) : null;
     const h = hash16([document_name, text.slice(0, 400)]);
     const source_id = idPart ? `row:${idPart}` : `retrieval:${seq}:${h}`;
