@@ -325,10 +325,16 @@ const NO_RANKING_OR_RECOMMENDATION_HE =
   'שאלות דירוג, השוואת עדיפות או «מה הכי טוב / מה מומלץ / מה עדיף»: אסור לקבוע מנצח, מומלץ או «הכי טוב» אלא אם ציטוט מהמסמכים אומר זאת במפורש. אחרת — רק תיאור ניטרלי של מה שכן מופיע בציטוטים, או המשפט הקנוני על חוסר מידע. ' +
   'English: For ranking or “best/recommended/preferred” questions: never crown a winner unless an excerpt explicitly states it; otherwise neutral description from quotes only, or the canonical no-data Hebrew sentence. ';
 
+const INTERPRETIVE_EVALUATIVE_HE =
+  'שאלות פרשנות/הערכה (למשל: חדשנות, «מה החדשות», חשיבות, למה זה משנה, השפעה, ערך, «הרעיון המרכזי» במובן מופשט): אם הציטוטים אינם מנוסחים במפורש לנושא השאלה, השב רק: «אין במסמכים ניסוח מפורש לגבי [נושא].» — או הוסף משפטי פרשנות רק אם כל משפט כזה מתחיל ב־[הנחה — לא מצוין במסמך]. ' +
+  'אסור להציג פרשנות כעובדה בלי תויג. ' +
+  'English: For interpretive questions (innovation, significance, central idea in abstract sense): if excerpts do not explicitly state the answer, use the no-explicit-text sentence OR tag every interpretive line with [הנחה — לא מצוין במסמך].';
+
 const INSTRUCTIONS_CONTEXT =
   'You retrieve evidence from file_search for downstream agents. Use ONLY the attached vector store. ' +
   'חוקי תשובה: מותר לקחת כמה ציטוטים, לקצר אותם ולארגן למשפטים ברורים. אסור להוסיף מידע שלא בציטוטים, להשלים פערים או להסיק מעבר למה שכתוב — טרנספורמציה של הציטוטים בלבד. ' +
   NO_RANKING_OR_RECOMMENDATION_HE +
+  INTERPRETIVE_EVALUATIVE_HE +
   'שאלות כלליות (נושא המסמך, על מה מדובר): חובה לספק מספר ציטוטים ולבנות מהם תיאור כללי או סיכום מבוסס מקור — בלי נושאים או פרטים שלא עולים מהציטוטים. ' +
   'Label excerpts with source filenames. No general knowledge for facts. ' +
   FAIL_SAFE_NO_EVIDENCE_HE;
@@ -339,6 +345,7 @@ export const MATRIYA_FILE_SEARCH_INSTRUCTIONS_ANSWER =
   'חוקי תשובה (חובה): מותר לקחת כמה ציטוטים, לקצר אותם, ולארגן אותם למשפטים ברורים. ' +
   'אסור להוסיף מידע שלא מופיע בציטוטים, להשלים פערים, או להסיק מעבר למה שכתוב בציטוטים. התשובה = טרנספורמציה של הציטוטים בלבד. ' +
   NO_RANKING_OR_RECOMMENDATION_HE +
+  INTERPRETIVE_EVALUATIVE_HE +
   'שאלות כלליות (למשל «על מה המסמך מדבר», מה נושא המסמך): חייבים לענות — לשלב מספר ציטוטים לתיאור כללי או סיכום מבוסס מקור; זו לא תשובה עובדתית נקודתית אחת. כל חלק בסיכום חייב להישען על תוכן הציטוטים — בלי נושאים או פרטים שלא עולים מהם. ' +
   'English: For broad/overview questions, you must produce a coherent high-level summary from multiple excerpts — source-based only, no unsupported themes. For specific questions, same quote rules as above. ' +
   'Cite source filenames. Respond in Hebrew (עברית) unless the user explicitly asks otherwise. Do not use Arabic. ' +

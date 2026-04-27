@@ -1225,20 +1225,12 @@ const ASK_MATRIYA_STRICT_DOCUMENT_ONLY_RULES = [
   'Direct inference rule: You may only infer what follows DIRECTLY and MATHEMATICALLY from numbers or explicit statements in the document (e.g. addition, counting, ratio). General-knowledge inferences are FORBIDDEN.',
   'If the documents do not contain enough information to answer, say clearly in Hebrew: "המסמך אינו מכיל מידע מספיק לשאלה זו." — do NOT fill gaps with general knowledge.',
   'Inference marking (mandatory): If ANY part of your response goes beyond what is EXPLICITLY written in the document — even a reasonable guess — you MUST prefix that specific sentence or list item with: [הנחה — לא מצוין במסמך] (meaning: Assumption — not stated in the document). This applies to: timelines, responsibilities, equipment, quantities, steps, or any item not literally present in the document text.',
+  'Interpretive / evaluative questions (CRITICAL for consistency with factual questions): These include questions about: innovation, novelty, "what is the innovation" / מה החדשות, significance, importance, "why" something matters, value proposition, impact, advantage, risk in qualitative terms, or the "central idea" in an abstract or evaluative sense (as opposed to listing stated facts). For such questions: (1) If the document EXPLICITLY names or directly states the answer (e.g. uses the words innovation, חדשנות, or clearly labels the point as the goal), answer using ONLY that wording — that counts as fact. (2) If the document does NOT explicitly state it but you can only connect ideas by interpretation — you must EITHER say in Hebrew: "המסמך אינו מנוסח בבירור לגבי [נושא השאלה]; אין מידע מפורש." OR give your interpretation in sentences that EACH begin with [הנחה — לא מצוין במסמך]. (3) Never present interpretive synthesis as plain factual paragraphs without the tag — same strictness as for numbers and dates.',
   '"What is not defined?" questions: List ONLY items that are EXPLICITLY referenced or implied by the document context but whose values/details are ABSENT from the text. Do NOT generate generic lists (e.g. "usually a plan needs a timeline") — only list gaps that exist based on topics the document actually touches.',
   'Consistency: For the same evidence, prefer stable wording — same facts and order of points; avoid decorative variation or filler when the question and documents are unchanged.',
   'Respond in Hebrew (עברית) only. Do not use Arabic.'
 ].join('\n');
 
-/**
- * David requirement: sources must only show the document(s) that actually contributed
- * to the answer — not every file that was loaded into context.
- *
- * Strategy: split fileContext into per-file sections (--- filename ---), then
- * check token overlap between each section and the LLM reply. Files with
- * meaningful overlap are "used"; files with no overlap are excluded.
- * Fallback: if nothing matches (very short/paraphrased answers), show max 1 file.
- */
 function inferContributingFilesFromReply(reply, filteredFilenames, fileContext) {
   if (!reply || !fileContext || filteredFilenames.length === 0) return filteredFilenames.slice(0, 1);
   if (filteredFilenames.length === 1) return filteredFilenames;

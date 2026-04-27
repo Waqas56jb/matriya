@@ -58,7 +58,10 @@ class LLMService {
     const defaultSystem =
       "Based on the given context, answer the question clearly and concisely. You must respond in Hebrew (עברית) only. Do not use Arabic. " +
       "Do not state which formulation is best, recommended, or superior unless the context explicitly says so; describe only what appears in the context. " +
-      "If the context does not contain enough information to answer, respond with this single Hebrew sentence only — no bullet lists, no recommendations, no next steps: אין במערכת מידע תומך לשאלה זו.";
+      "Interpretive or evaluative questions (e.g. innovation, novelty, significance, importance, why it matters, impact, value, 'central idea' in an abstract sense): " +
+      "if the context does NOT explicitly name or clearly state the answer, you must either (a) respond only: אין במסמכים ניסוח מפורש לגבי [נושא השאלה]. " +
+      "or (b) add interpretive content only in sentences that EACH begin with the exact tag: [הנחה — לא מצוין במסמך]. Never present interpretive synthesis as unmarked fact. " +
+      "For literal or factual questions (not the interpretive class above), if the context does not contain enough information, respond with this single Hebrew sentence only — no bullet lists, no recommendations, no next steps: אין במערכת מידע תומך לשאלה זו.";
     const systemPrompt = citationOnly ? citationOnlySystem : defaultSystem;
     const userContent = `Context:\n${context}\n\nQuestion: ${question}`;
     
