@@ -1,0 +1,148 @@
+================================================================================
+FORMAL PROPOSAL — PHASE 2 / v1.1 — PROJECT INITIALIZATION CONTRACT ONLY
+================================================================================
+To:     David
+From:   Waqas
+
+Date:   (replace when issuing)
+Status: Proposal — no development, deploy, migrations, env changes, or merges
+        until written approval.
+
+-------------------------------------------------------------------------------
+PRICE (PHASE 2 v1.1 ONLY)  |  SCHEDULE (v1.1 ONLY)
+-------------------------------------------------------------------------------
+  USD $2,000                |  7 calendar days (full allocation for this phase)
+
+*v1.2 is OUT OF SCOPE for this document — separate proposal if needed.*
+
+================================================================================
+1. EVIDENCE-BASED BASELINE (CODE FACTS — NO GUESSING)
+================================================================================
+Grounded in: managment-back/server.js, managment-back/lib/proposalEngine.js,
+managment-front/src/components/ProposalScreen.jsx, managment-front/src/api.js.
+
+David's requirement                         | Current code reality
+---------------------------------------------+----------------------------------
+User creates project                         | Implemented: POST /api/projects
+                                             | -> projects + project_members
+User uploads documents                       | Implemented: POST /api/projects/
+                                             | :projectId/files -> project_files
+                                             | + Supabase Storage immediately on
+                                             | successful upload
+MATRIYA generates structured proposal        | Implemented: POST /api/proposals/
+                                             | generate -> buildProposal() in
+                                             | proposalEngine.js ; JSON blocks:
+                                             | project_type/goal, materials,
+                                             | metrics, experiments, milestones,
+                                             | scan_status, proposal_state
+User reviews/edits                           | Implemented: ProposalScreen.jsx
+                                             | route /project/:id/section/proposal
+                                             | PATCH /api/proposals/:id ,
+                                             | POST .../resolve_conflict
+Only after Approve -> data enters ops tables | Partially aligned: approve
+                                             | POST /api/proposals/:id/approve
+                                             | uses BEGIN/COMMIT; writes projects,
+                                             | material_library, proposal_metrics,
+                                             | experiments, milestones,
+                                             | source_documents. project_files meta
+                                             | exists before approve (needed for
+                                             | generate) — unavoidable unless
+                                             | product stages bytes differently
+
+Important honesty:
+Phase 2 v1.1 is not "from zero greenfield" for all layers — much is already
+implemented. This contract focuses on production readiness, schema completeness,
+acceptance alignment, bug fixes, and proof — not pretending the subsystem is
+fully missing.
+
+================================================================================
+2. PROPOSED SCOPE (v1.1) — INCLUDED WORK
+================================================================================
+1. DB schema parity vs approve-handler: proposals, approved_at / data updates,
+   projects columns used in approve (project_type, goal_*), material_library,
+   proposal_metrics, experiments, milestones, source_documents. One migration
+   pack for Supabase (additive / IF NOT EXISTS style where appropriate).
+
+2. Verify POSTGRES_URL / DATABASE_URL on managment-back (Railway) so atomic
+   approve succeeds (approve uses raw pg client).
+
+3. Harden: validation, empty states, INSUFFICIENT / READY transitions, rollback
+   behavior — documented.
+
+4. UI: ProposalScreen aligned to finalized acceptance checklist (approve blocks,
+   conflict UX) — only gaps that FAIL acceptance today.
+
+5. Acceptance test pack: scripted steps + live UI screenshots + SQL proof (agreed
+   SELECT / row-count checks).
+
+================================================================================
+3. FILES / MODULES LIKELY AFFECTED
+================================================================================
+- managment-back/server.js (proposal routes ~6464–6800), proposalEngine.js
+- managment-front: ProposalScreen.jsx, ProposalScreen.css, App.jsx routing
+- managment-front/src/api.js (proposals group)
+- managment-back/migrations/ or sql/ — new migration file(s)
+
+Out of scope here: matriya-back RAG rules unless blocker for proposal content.
+
+================================================================================
+4. DATABASE TABLES / MIGRATIONS
+================================================================================
+Tables touched by approve (must exist + match columns):
+  projects       (updates: project_type, goal_* per handler)
+  proposals
+  material_library
+  proposal_metrics
+  experiments
+  milestones
+  source_documents
+
+Staging: proposal JSON in proposals.data until approve -> operational inserts.
+
+DDL delivered as *.sql in repo + run instructions for Supabase (prod only after
+you authorize).
+
+================================================================================
+5. ACCEPTANCE TESTS (PASS = ALL PASS — FINAL WORDING CAN BE AGREED WITH DAVID)
+================================================================================
+Suggested minimum:
+1. Create project -> upload supported file -> Generate proposal -> OK JSON ->
+   persisted row in proposals.
+
+2. Edit one block -> PATCH persists.
+
+3. If conflicts: resolve until proposal allows approve when READY (per
+   validateApproveConditions in code).
+
+4. Approve -> HTTP success -> transaction proof (experiments / milestones rows;
+   proposals shows approved/APPROVED per implementation).
+
+5. Controlled failure -> ROLLBACK; no partial commit.
+
+Deliverables: screenshots per step + agreed DB verification (queries / export).
+
+================================================================================
+6. WHAT IS NOT INCLUDED (v1.1 ONLY)
+================================================================================
+- v1.2 Data Governance Patch (separate contract / price).
+
+- Performance tuning unrelated to v1.1 PASS.
+
+- Railway/Vercel env changes except those strictly necessary for approve — names
+  first, your approval.
+
+- matriya-back unrelated features.
+
+- Email ingest / SharePoint changes.
+
+================================================================================
+7. PREREQUISITES BEFORE START (AFTER APPROVAL)
+================================================================================
+- Written GO v1.1.
+
+- Confirmation that proposals + dependent tables exist on prod, or permission to
+  apply migration in an agreed window.
+
+================================================================================
+END (PHASE 2 v1.1 — $2,000 — 7 days)
+================================================================================
