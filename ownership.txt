@@ -81,13 +81,116 @@ DAVID’S CHECKLIST — ANSWERED POINT-BY-POINT
 
 
 ================================================================================
-NON-ACTIONS (per David)
+SECURITY — WHY THIS FILE DOES NOT CONTAIN API KEYS OR PASSWORDS
 ================================================================================
-• No new feature work started for this document.  
-• No deploy.  
-• No env var changes.  
-• No migrations.  
-• No merge to `main` for this file beyond normal version control (this file is documentation only).
+• **Real secrets (OpenAI, Twilio, JWT, DB URLs, service role keys, etc.) must NEVER be committed to GitHub** — anyone with repo access could steal them; history is forever.  
+• **“100% ownership” for David = legal + billing + account access**, not a text file of secrets in the repo.  
+• **Correct handover:** David (or his org) holds **owner** on: GitHub org/repo, **Railway** projects, **Vercel** projects, **Supabase** project, **OpenAI** API billing, **Twilio** account, **Resend** (if used), **Azure** (SharePoint). Waqas uses **“Transfer” / add David as owner** in each dashboard, then **rotate** any key that ever lived on a contractor machine.  
+• **Where values actually live today:** **Railway** → Service → Variables (matriya-back, managment-back). **Vercel** → Project → Environment Variables (frontends). **Supabase** → Project Settings → API / Database. **OpenAI platform** → API keys. **Twilio** → Console.  
+• This document lists **names and purposes only** — the **inventory of “everything that exists”** without creating a leak.
+
+
+================================================================================
+LOCAL .ENV FILES (NOT IN GIT — TYPICAL PATHS)
+================================================================================
+These paths are **gitignored** (see root `.gitignore`). Developers keep **one file per service** on disk; production uses **cloud env**, not these files on the server.
+
+| Service | Typical local file | Notes |
+|---------|-------------------|--------|
+| matriya-back | `matriya-back/.env` | Full backend: DB, JWT, OpenAI, Twilio, management URLs, etc. |
+| managment-back | `managment-back/.env` | Supabase, OpenAI, Postgres for lab bridge, Resend, SharePoint, CORS. |
+| matriya-front | `matriya-front/.env` / `.env.production` | `REACT_APP_*` — some committed template URLs only; **no secrets** in public client env except **anon** key is public by design if present. |
+| managment-front | `managment-front/.env` / `.env.production` | `VITE_*` — same note on Supabase anon. |
+
+**Committed templates (placeholders only, not live secrets):**  
+`matriya-back/vercel-env-matriya-back.txt`, `managment-back/vercel-env-maneger-back.txt` — copy-paste **names** for Vercel/Railway UI; replace values in the dashboard, not in git.
+
+
+================================================================================
+FULL ENVIRONMENT VARIABLE INVENTORY (NAMES + PURPOSE — NO VALUES)
+================================================================================
+Source: `CLAUDE.md` + codebase. “Req” = required for typical production.
+
+--- matriya-front ---
+REACT_APP_API_BASE_URL (Req) — matriya-back base URL  
+REACT_APP_MANAGEMENT_API_URL — managment-back base URL  
+REACT_APP_MANAGEMENT_FRONT_URL — management UI URL  
+
+--- managment-front ---
+VITE_MANEGER_API_URL (Req) — managment-back base URL  
+VITE_SUPABASE_URL — Supabase project URL (bucket upload from browser)  
+VITE_SUPABASE_ANON_KEY — Supabase **anon** key (public in client; still rotate if repo is public)  
+
+--- matriya-back (core list) ---
+JWT_SECRET (Req) — sign/verify user JWTs  
+API_PORT — default 8000  
+API_HOST — bind host  
+EXPRESS_BODY_LIMIT — JSON body max (e.g. 15mb)  
+POSTGRES_URL / POSTGRES_PRISMA_URL / SUPABASE_DB_URL — DB connection (one required)  
+SUPABASE_URL — project URL  
+SUPABASE_KEY or SUPABASE_SERVICE_ROLE_KEY — server-side Supabase  
+OPENAI_API_KEY — RAG / file_search / Ask Matriya when OpenAI path used  
+OPENAI_API_BASE — API base URL override  
+OPENAI_RAG_MODEL — completion model  
+MATRIYA_OPENAI_VECTOR_STORE_ID — OpenAI vector store id  
+LLM_PROVIDER — together | huggingface | openai (per config)  
+TOGETHER_API_KEY, TOGETHER_MODEL — Together AI  
+HF_API_TOKEN, HF_MODEL — Hugging Face  
+EMBEDDING_MODEL — local embedding model name  
+MATRIYA_LLM_TEMPERATURE — default 0  
+UPLOAD_DIR, MAX_FILE_SIZE, CHUNK_SIZE, CHUNK_OVERLAP  
+COLLECTION_NAME — pgvector logical collection (`rag_documents`)  
+CHROMA_DB_PATH — legacy/local chroma path if referenced  
+MANAGEMENT_BACK_URL / MATRIYA_MANAGEMENT_API_URL — managment-back URL for lab/materials bridges  
+MATRIYA_MANAGEMENT_MATERIALS_KEY — shared secret header for materials API  
+MATRIYA_PRE_LLM_MIN_SIMILARITY, MATRIYA_PRE_LLM_MIN_CHUNKS  
+MATRIYA_RETRIEVAL_SIMILARITY_THRESHOLD  
+MATRIYA_MAX_ATTRIBUTION_SOURCES  
+MATRIYA_DOMAIN_MIN_QUERY_OVERLAP  
+MATRIYA_GENERATION_MIN_CHUNKS, MATRIYA_GENERATION_MIN_TOPK_SIMILARITY_SUM, MATRIYA_GENERATION_TOPK_SUM_K  
+B_INTEGRITY_MAX_GROWTH_RATIO, B_INTEGRITY_NO_PROGRESS_CYCLES, B_INTEGRITY_METRIC_CAP, B_INTEGRITY_MAX_DROP_PERCENT  
+KERNEL_V16_STRICT  
+USE_OPENAI_FILE_SEARCH — enables OpenAI file_search + auto-sync path (see `openaiMatriyaConfig.js`)  
+VERCEL, VERCEL_ENV, NODE_ENV — runtime detection  
+TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_FROM, TWILIO_WHATSAPP_NUMBER, TWILIO_WHATSAPP_REPLY, TWILIO_WEBHOOK_PUBLIC_URL  
+DAVID_WHATSAPP, RACHEL_WHATSAPP, WHATSAPP_WHITELIST_ENABLED, SKIP_TWILIO_SIG_CHECK  
+MATRIYA_PROVISION_SECRET, MATRIYA_INTERNAL_KEY — cross-service provisioning / internal hooks  
+FINANCE_API_URL — optional finance microservice  
+MATRIYA_DISABLE_PUBLIC_SIGNUP / DISABLE_MATRIYA_PUBLIC_SIGNUP — signup policy  
+(Any additional `MATRIYA_*` tuning vars — scan `matriya-back/config.js` and `server.js` if a key is missing here.)  
+
+--- managment-back ---
+PORT — listen port (8001 local)  
+SUPABASE_URL / NEXT_PUBLIC_SUPABASE_URL (Req)  
+SUPABASE_SERVICE_ROLE_KEY (Req) — **secret** — server only  
+MATRIYA_BACK_URL — matriya-back URL for auth proxy  
+MANEGER_MATERIALS_SUMMARY_SERVER_KEY — materials summary key  
+OPENAI_API_KEY, OPENAI_RAG_MODEL — project GPT RAG  
+MANEGER_GPT_RAG_*, GPT_RAG_AUTO_SYNC_DEBOUNCE_MS — sync tuning  
+RESEND_API_KEY, RESEND_FROM_EMAIL, RESEND_INBOUND_WEBHOOK_SECRET, RESEND_REPLY_DOMAIN  
+PUBLIC_API_BASE_URL — public API URL for webhooks/email  
+SHAREPOINT_TENANT_ID, SHAREPOINT_CLIENT_ID, SHAREPOINT_CLIENT_SECRET  
+CORS_ORIGINS, CORS_ALLOW_VERCEL_PREVIEWS  
+AUTH_LOGIN_RATE_LIMIT_MAX, DISABLE_AUTH_RATE_LIMIT  
+UPLOAD_RATE_LIMIT_MAX, API_RATE_LIMIT_MAX  
+POSTGRES_URL / DATABASE_URL — lab bridge SQL  
+
+--- Cross-cutting ---
+All **values** for the above: **export from Railway/Vercel/Supabase/OpenAI/Twilio dashboards** after David has owner access — **do not** rely on a single `.txt` in the repo for secrets.
+
+
+================================================================================
+FOR DAVID — “YOU HAVE THE ASSET” CHECKLIST (ACCESS, NOT PLAINTEXT KEYS IN GIT)
+================================================================================
+□ GitHub: **Owner** or **Admin** on `shoshan19-prog/Matriya-System-Project`  
+□ Railway: **Owner** on services **matriya-system-project-production**, **steadfast-success-production-02d1**, any finance service  
+□ Vercel: **Owner** on projects hosting **matriya-system-project** (and management front if used)  
+□ Supabase: **Owner** on project **osrcrdroyhlvrtwpybtr** (or successor) — Database + API keys + Storage  
+□ OpenAI: **Billing admin** for API keys used by Matriya + Management RAG  
+□ Twilio: **Account owner** for WhatsApp / numbers / webhooks  
+□ Optional: Resend, Azure AD (SharePoint), domain DNS for Reply-To  
+After access: **rotate** keys that were on contractor laptops; **document** new storage in a **private** password manager (1Password, Bitwarden) — **not** in `ownership.txt`.
+
 
 ================================================================================
 END
