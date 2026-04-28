@@ -1,0 +1,94 @@
+================================================================================
+MATRIYA — OWNERSHIP & SOURCE OF TRUTH (David)
+Prepared: 2026-04-27 | Written baseline for repo / deploy / infra. No deploy run.
+================================================================================
+
+NAMES (roles)
+-------------
+• Product / client owner: David  
+• Primary engineering delivery: Waqas (developer; verify “2nd owner” formally with David)  
+
+================================================================================
+IMPORTANT: FOLDER VS REPO (local confusion clarified)
+================================================================================
+• The **production backend source** is NOT a standalone clone named only “matriya-back repo.”  
+• **`matriya-back/` on disk is a DIRECTORY inside monorepo**  
+  **`Matriya-System-Project` → https://github.com/shoshan19-prog/Matriya-System-Project**  
+• Any local folder labeled “matriya-back” that is its **own** git root is a **different checkout** unless `git remote` matches the table below.  
+• **Railway builds from `./matriya-back/` (and root config) inside this monorepo** when connected to GitHub.
+
+
+================================================================================
+SOURCE-OF-TRUTH TABLE — REPO · BRANCH · COMMIT · URLS · DB
+================================================================================
+Values below are from repository files + git at author time unless marked “VERIFY IN CLOUD”.
+Do not treat Railway/Vercel “last deployed SHA” as authoritative without Dashboard check.
+
+SERVICE          | REPO (GitHub)                          | BRANCH | LATEST COMMIT (local GitHub sync)          | DEPLOYMENT URL | DB / STORAGE | STATUS | OWNER / 2ND
+-----------------|----------------------------------------|--------|--------------------------------------------|----------------|--------------|--------|--------------
+matriya-back (core API, RAG, Matriya GPT sync, WhatsApp webhook, SPA static hosting if public/ bundled) | shoshan19-prog / **Matriya-System-Project** | **main** | **dd02f19** “fix: interpretive questions require explicit doc or [הנחה] tag” (`dd02f19b95d4d975a0fe7ab5212680d9e0418e64`) | **https://matriya-system-project-production.up.railway.app** | **Supabase PostgreSQL** (`rag_documents`, app tables) — pooler typical | Active (per committed URLs) | David / Waqas
+matriya-front (React CRA SPA, often built into matriya-back `public/` for same-origin) | Same monorepo | **main** | **dd02f19** | **SPA served from Railway backend** (`/`) + optional **https://matriya-system-project.vercel.app** (`REACT_APP_*` baked at build — see frontend `.env.production`) | n/a (calls APIs) | Active | David / Waqas
+managment-back (Management API: projects, lab bridge, GPT RAG for projects, SharePoint/email, etc.) | Same monorepo | **main** | **dd02f19** (same repo HEAD) — **deploy commit MUST be confirmed in Railway** | **https://steadfast-success-production-02d1.up.railway.app** | **Supabase** (often same **project ref** + Storage buckets) — **lab `/api/lab/query`** uses Postgres URL if set | Active (per committed URLs) | David / Waqas
+managment-front (Management UI, Vite) | Same monorepo | **main** | **dd02f19** (same repo HEAD) | **Typically Vercel-style host** — `VITE_*` URLs in `managment-front/.env.production` — **exact production hostname: VERIFY Dashboard** | n/a | Active | David / Waqas
+(Optional) matriya-finance / other Railway services — **FINANCE_API_URL…** referenced in env docs | Same or separate repo **not fixed in ownership.txt** — **VERIFY** | — | — | **https://captivating-liberation-production-3086.up.railway.app** (placeholder in codebase comments) | — | VERIFY | —
+
+
+================================================================================
+DAVID’S CHECKLIST — ANSWERED POINT-BY-POINT
+================================================================================
+1. **Which repo is the real production backend?**  
+   → **`https://github.com/shoshan19-prog/Matriya-System-Project`** — backend code paths: **`matriya-back/`** (Matriya API) & **`managment-back/`** (Management API). Railway hosts each separately.
+
+2. **Which branch does production deploy from?**  
+   → **`main`** (configured in repo; Railway must be set to **`main`** in project settings — VERIFY in Railway UI).
+
+3. **Latest deployed commit**  
+   → **Locally & origin `main`: `dd02f19`** / full SHA `dd02f19b95d4d975a0fe7ab5212680d9e0418e64`.  
+   → **Deployed SHA on Railway:** open **Railway → project → Deployments → active deployment → commit**. Must match expectation after each push.
+
+4. **Whether all latest code is pushed to GitHub**  
+   → **Yes at last check:** branch **up to date with `origin/main`**, working tree **clean**.
+
+5. **Whether any local-only code exists on Waqas’s machine**  
+   → **Cannot be guaranteed remotely.** On this checkout: **nothing uncommitted.** Any other folder/machine may drift — use **fresh clone + same remote** to reconcile.
+
+6. **Whether staging/preview exists**  
+   → **Not documented as a separate stable environment** in committed production env files — **assume production URLs only**. Vercel may create preview deployments per branch/PR → **VERIFY in Vercel** if previews are used policy-wise.
+
+7. **Which Supabase project is production**  
+   → **Production project ref embedded in committed client config:** **`osrcrdroyhlvrtwpybtr`** (URL shape `https://osrcrdroyhlvrtwpybtr.supabase.co`). Aligns DB + anon client usage for management front uploads.
+
+8. **Which Supabase project is staging/dev**  
+   → **None named in repo** as a second distinct project URL for staging. Developers may use local `.env` against same pooler/direct URL — treat as **“dev configs point at same Supabase unless you create a separate project.”** VERIFY team policy.
+
+9. **Env var NAMES only (no values)** — grouped by area (subset; full matrices in **`CLAUDE.md`** + per-service starters)
+
+   **matriya-back (representative)**  
+   `JWT_SECRET`, `API_PORT`, `API_HOST`, `POSTGRES_URL`, `POSTGRES_PRISMA_URL`, `SUPABASE_DB_URL`, `SUPABASE_URL`, `SUPABASE_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `OPENAI_API_KEY`, `OPENAI_API_BASE`, `OPENAI_RAG_MODEL`, `MATRIYA_OPENAI_VECTOR_STORE_ID`, `LLM_PROVIDER`, `TOGETHER_API_KEY`, `TOGETHER_MODEL`, `HF_API_TOKEN`, `HF_MODEL`, `EMBEDDING_MODEL`, `MATRIYA_LLM_TEMPERATURE`, `EXPRESS_BODY_LIMIT`, `COLLECTION_NAME`, `UPLOAD_DIR`, `MAX_FILE_SIZE`, `CHUNK_SIZE`, `CHUNK_OVERLAP`, `MANAGEMENT_BACK_URL`, `MATRIYA_MANAGEMENT_API_URL`, `MATRIYA_MANAGEMENT_MATERIALS_KEY`, `TWILIO_*`, `*_WHATSAPP*`, `MATRIYA_PROVISION_SECRET`, `MATRIYA_INTERNAL_KEY`, `FINANCE_API_URL`, `MATRIYA_DISABLE_PUBLIC_SIGNUP` / `DISABLE_MATRIYA_PUBLIC_SIGNUP`, `MATRIYA_*` retrieval gates, integrity flags (`B_INTEGRITY_*`, etc.) — extensive list → **`CLAUDE.md`**.
+
+   **matriya-front**  
+   `REACT_APP_API_BASE_URL`, `REACT_APP_MANAGEMENT_API_URL`, `REACT_APP_MANAGEMENT_FRONT_URL`
+
+   **managment-back**  
+   `PORT`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `MATRIYA_BACK_URL`, `OPENAI_API_KEY`, `OPENAI_RAG_MODEL`, `POSTGRES_URL`, `DATABASE_URL`, `CORS_ORIGINS`, `CORS_ALLOW_VERCEL_PREVIEWS`, `RESEND_*`, `SHAREPOINT_*`, `MANEGER_*` / `MANAGEMENT_*` legacy names, rate limits, `PUBLIC_API_BASE_URL`, etc. — **`CLAUDE.md`**.
+
+   **managment-front**  
+   `VITE_MANEGER_API_URL`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`
+
+10. **Whether `vercel-env-matriya-back.txt` ever contained real secrets**  
+   → **As committed in repo today:** file is a **template** — placeholders like `your-openai-key`, `your-jwt-secret`, `your-supabase-anon-key`, generic `PROJECT_REF` URLs. **It is not the live secret store.**  
+   → **If it was ever edited locally** with real keys and committed, that would be a **security incident** — **check git history** for that file. **Do not paste values into chat.**
+
+
+================================================================================
+NON-ACTIONS (per David)
+================================================================================
+• No new feature work started for this document.  
+• No deploy.  
+• No env var changes.  
+• No migrations.  
+• No merge to `main` for this file beyond normal version control (this file is documentation only).
+
+================================================================================
+END
+================================================================================
