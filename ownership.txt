@@ -193,5 +193,75 @@ After access: **rotate** keys that were on contractor laptops; **document** new 
 
 
 ================================================================================
+CONFIRMED CANONICAL REPO (DAVID — SOURCE OF TRUTH)
+================================================================================
+• **Repository:** `https://github.com/shoshan19-prog/Matriya-System-Project`
+
+**GitHub collaborator / owner access — how it works (no guessing):**
+• **Only the GitHub account that owns** `shoshan19-prog` **(or an org owner with admin rights)** can **Invite** another user with **Read / Write / Admin**.
+• A developer working in a **fork** or **shared clone** **cannot** grant org-level access from the IDE — that is **normal GitHub mechanics**, not secrecy.
+• **Action for full control:** David signs into GitHub → **Settings → Collaborators (or Organization members)** on **that** repository → **invite his account** with desired role (minimum **Read** for verification, **Admin** when he holds the product owner role).
+• If David currently has **no invitation**, it is an **account/permission step on GitHub**, not “missing from the codebase.”
+
+
+================================================================================
+WHATSAPP / TWILIO — EVIDENCE-BASED ANSWER (CODE, NOT ROADMAP FANTASY)
+================================================================================
+**Q: Is WhatsApp/Twilio implemented in the codebase?**
+
+**Answer: YES.**
+
+The product has **working code paths** for Twilio signature validation, inbound webhooks, outbound sends, optional Supabase logging, and a background poller. **Whether production shows traffic** depends on **Railway env**, **Twilio Console webhook URL**, and **Supabase tables applied** — verify in **dashboards + logs**, not only this file.
+
+**1) Primary implementation files (exact paths in repo):**
+• `matriya-back/routes/webhook/whatsapp.js` — main WhatsApp webhook router (docstring: **POST `/api/webhook/whatsapp`**).
+• `matriya-back/twilioGateway.js` — Twilio client, send, optional **`twilio_tickets`** logging.
+• `matriya-back/services/whatsappPipeline.js` — polls **`whatsapp_tasks`** (`PENDING` rows), sends replies.
+• `matriya-back/server.js` — mounts **`/api/webhook/whatsapp`**, also registers **`POST /api/whatsapp/inbound`**, **`GET /api/whatsapp/process-pending`**, **`POST /api/whatsapp/outbound`** (see file around lines ~148–186).
+• `matriya-back/agents/orchestration.js` — **`runPipeline`** used for WhatsApp decision flow (incl. structured lab parsing).
+
+**2) HTTP routes (names only — full URL = public host + path):**
+• **POST** `/api/webhook/whatsapp` — Twilio → MATRIYA pipeline (primary documented path in `whatsapp.js`).
+• **POST** `/api/whatsapp/inbound` — alternate inbound handler (**`handleInbound`** from `twilioGateway`).
+• **GET** `/api/whatsapp/inbound` — health string **`WhatsApp inbound OK`**.
+• **GET** `/api/whatsapp/process-pending` — processes pending tasks (cron/manual).
+• **POST** `/api/whatsapp/outbound` — outbound test/action path.
+
+**Production webhook URL shape (no secret values):** **`https://<MATRIYA_PUBLIC_HOST>/api/webhook/whatsapp`** — e.g. **`https://matriya-system-project-production.up.railway.app/api/webhook/whatsapp`** **if** Twilio is configured to that host. **Must match** **`TWILIO_WEBHOOK_PUBLIC_URL`** semantics in **`.env.example`** / Railway (see env list below).
+
+**3) Environment variable NAMES only (Twilio + related — values in Railway/Twilio only):**
+• `TWILIO_ACCOUNT_SID`
+• `TWILIO_AUTH_TOKEN`
+• `TWILIO_WHATSAPP_FROM` / **`TWILIO_WHATSAPP_NUMBER`** (sender)
+• `TWILIO_WEBHOOK_PUBLIC_URL`
+• `TWILIO_WEBHOOK_WHATSAPP_URL` (optional override for signature validation URL)
+• `SKIP_TWILIO_SIG_CHECK` (dev/testing only — **not** for production if you want strict signatures)
+• `DAVID_WHATSAPP`, `RACHEL_WHATSAPP` (routing / notify)
+• `WHATSAPP_WHITELIST_ENABLED`
+• `SUPABASE_URL` + `SUPABASE_KEY` / `SUPABASE_SERVICE_ROLE_KEY` (for **`whatsapp_tasks`** insert via Supabase client when configured)
+• `FINANCE_API_URL` — optional path for **finance** WhatsApp commands (`lib/financeWhatsAppCommands.js`)
+
+**4) Database tables (SQL in repo — must exist in Supabase for full behavior):**
+• **`whatsapp_tasks`** — `matriya-back/sql/whatsapp_tasks.sql` (+ **`matriya-back/sql/alter_whatsapp_tasks_add_columns.sql`** for extra columns). Used for queue/audit; pipeline polls **`PENDING`**.
+• **`whatsapp_whitelist`** — `matriya-back/sql/whatsapp_whitelist.sql` — used when **`WHATSAPP_WHITELIST_ENABLED`** is on (webhook checks **`whatsapp_whitelist`** in Supabase).
+• **`twilio_tickets`** — referenced in **`twilioGateway.js`** with **`sql/twilio_tickets.sql`** comment — outbound/inbound ticket log when enabled.
+• Webhook also references **`access_requests`** for whitelist/access flows (see **`routes/webhook/whatsapp.js`**).
+
+**5) Screenshots / live message proof — honesty clause:**
+• **This repository document cannot contain** screenshots of **your** Twilio account, **your** phone, or **your** live inbound messages (confidentiality + not stored in git).
+• **Proof David should use:** **Twilio Console** → **Monitor → Logs** → WhatsApp; **Railway** deployment logs for **`matriya-back`**; optional **Supabase Table Editor** rows in **`whatsapp_tasks`** after a test send.
+• If those logs show **zero** traffic, the code can still be **implemented** — **configuration** or **webhook URL** troubleshooting is separate from “implemented vs not implemented.”
+
+
+================================================================================
+PARTNERING / CONFIDENTIALITY (PROFESSIONAL LINEAR WORKFLOW)
+================================================================================
+• Repository access for the **client/product owner** is **standard**: invite the **correct GitHub username** under the **organization/repo that legally owns IP** — that is transparency, **not** an ethics violation by the developer.
+• **Secrets stay** in **Railway / Vercel / Supabase / Twilio** — shared **between authorized parties**, not pasted into **`ownership.txt`**.
+• Live verification can use **scheduled screen-share** with **minimal** transient exposure — **credentials should not remain** in unmanaged chat histories.
+• Product delivery completes when **acceptance tests** + **access handover** are done under an agreed **contract** (e.g. Phase 2 proposal documents).
+
+
+================================================================================
 END
 ================================================================================
