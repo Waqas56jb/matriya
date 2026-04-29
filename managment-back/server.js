@@ -2691,7 +2691,6 @@ app.post('/api/projects/:projectId/experiments', async (req, res) => {
       results,
       status,
       validated,
-      source: 'manual',
       updated_at: new Date().toISOString(),
     };
 
