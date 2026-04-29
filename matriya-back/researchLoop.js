@@ -10,6 +10,94 @@ import { evidenceFromSearchResults } from './lib/openaiFileSearchMatriya.js';
 
 const AGENT_ORDER = ['analysis', 'research', 'critic', 'synthesis'];
 
+/** Evidence channels — never mix structured DB metrics with RAG filenames as one authority. */
+export const EVIDENCE_CHANNELS = {
+  STRUCTURED_LAB_SOURCE: 'STRUCTURED_LAB_SOURCE',
+  RAG_CONTEXT_SOURCE: 'RAG_CONTEXT_SOURCE',
+  CODE_OR_EXAMPLE_SOURCE: 'CODE_OR_EXAMPLE_SOURCE',
+};
+
+function tagRagEvidenceSources(raw) {
+  const list = Array.isArray(raw) ? raw : [];
+  return list.map((s) => ({
+    ...s,
+    preview: s.excerpt,
+    document_name: `${s.filename} (RAG context — not numeric authority)`,
+    metadata: {
+      evidence_channel: EVIDENCE_CHANNELS.RAG_CONTEXT_SOURCE,
+      source: 'rag_documents',
+      rag_filename: s.filename,
+    },
+  }));
+}
+
+function buildStructuredLabEvidenceSources(selectedExperiments) {
+  return selectedExperiments.map((e) => {
+    const prov = e.provenance && typeof e.provenance === 'object' ? e.provenance : {};
+    const eid = e.experiment_id != null ? String(e.experiment_id) : '—';
+    const lines = [
+      ['experiment_id', e.experiment_id],
+      ['formula', e.formula],
+      ['expansion_ratio', e.expansion_ratio],
+      ['adhesion', e.adhesion],
+      ['viscosity', e.viscosity],
+      ['char_quality', e.char_quality],
+      ['experiment_outcome', e.experiment_outcome ?? e.status],
+    ]
+      .filter(([, v]) => v != null)
+      .map(([k, v]) => `${k}: ${v}`);
+    const seed =
+      prov.provenance_status === 'SEED_DATA_UNVERIFIED' ||
+      String(prov.source_file_reference || '').toLowerCase() === 'seed_data';
+    const notice = seed
+      ? 'Metrics come from structured lab row; original file provenance is not fully verified.'
+      : null;
+    const body = [...lines, ...(notice ? [`[${notice}]`] : [])].join('\n');
+    const stable = prov.source_table || 'public.lab_experiments';
+    return {
+      filename: stable,
+      excerpt: body,
+      preview: body,
+      document_name: `Structured lab metrics · ${eid}`,
+      metadata: {
+        evidence_channel: EVIDENCE_CHANNELS.STRUCTURED_LAB_SOURCE,
+        experiment_id: eid,
+        provenance: prov,
+        structured_lab_notice: notice,
+      },
+    };
+  });
+}
+
+function buildProvenanceSummary(selectedExperiments, ragTagged) {
+  const lines = [];
+  lines.push(
+    'Measured metrics source: authoritative structured export (tables public.lab_experiments / public.experiments — see provenance.source_table per row).'
+  );
+  const seedIds = selectedExperiments
+    .filter((e) => {
+      const p = e.provenance || {};
+      return (
+        p.provenance_status === 'SEED_DATA_UNVERIFIED' ||
+        String(p.source_file_reference || '').toLowerCase() === 'seed_data'
+      );
+    })
+    .map((e) => String(e.experiment_id || ''))
+    .filter(Boolean);
+  if (seedIds.length) {
+    lines.push(
+      `File provenance: seed_data / original file not fully verified for experiment_id(s): ${seedIds.join(', ')}.`
+    );
+  }
+  const ragNames = [...new Set((ragTagged || []).map((s) => s.filename).filter(Boolean))];
+  if (ragNames.length) {
+    lines.push(
+      `RAG context (supplementary documents): ${ragNames.join('; ')} — may mention experiment IDs; not proven as the numeric source unless lab row provenance explicitly links that file (source_file_reference / provenance_status).`
+    );
+  }
+  return lines.join('\n');
+}
+
 function getAgentPrompt(agentName, query, previousOutput, ragContext = null, hasLabData = false) {
   const prev = previousOutput ? `\n\nPrevious step output:\n${String(previousOutput).slice(0, 2000)}` : '';
   const docContext = ragContext ? `\n\nData and document context:\n${String(ragContext).slice(0, 5000)}` : '';
@@ -23,32 +111,39 @@ function getAgentPrompt(agentName, query, previousOutput, ragContext = null, has
       + ' STRICTLY FORBIDDEN: do not end your response with any phrase indicating missing data.'
     : '';
 
+  const provenanceSeparation = hasLabData
+    ? ' DATA GOVERNANCE (NON-NEGOTIABLE): Under STRUCTURED_LAB_SOURCE, measured metrics come ONLY from the Management database export (see provenance per experiment).'
+      + ' FORBIDDEN: stating or implying that those numbers originated from any RAG/document filename unless provenance.source_file_reference matches that file AND provenance_status is FILE_REFERENCE_PRESENT (never SEED_DATA_UNVERIFIED for file-specific claims).'
+      + ' RAG_CONTEXT_SOURCE excerpts may mention experiment IDs (e.g. EXP-009) — treat as supplementary text; they do NOT prove numeric measurements unless aligned with STRUCTURED_LAB_SOURCE.'
+      + ' FORBIDDEN: attributing a spreadsheet such as INT-TFX_Formulation_Analysis.xlsx or MATRIYA_Experiment_Template-1.xlsx as the numeric source unless explicitly verified by provenance for that experiment row.'
+    : '';
+
   const prompts = {
     analysis: {
-      system: 'You are the analysis agent for a materials science system.' + hebrewOnly + dataGroundingRule
+      system: 'You are the analysis agent for a materials science system.' + hebrewOnly + dataGroundingRule + provenanceSeparation
         + (hasLabData
-          ? ' Extract and list the exact numeric values (expansion_ratio, adhesion, viscosity, char_quality, status) for each experiment from the provided data. Present them as a clear comparison table or list.'
+          ? ' Extract and list the exact numeric values (expansion_ratio, adhesion, viscosity, char_quality, status) for each experiment from STRUCTURED_LAB_SOURCE only. Present them as a clear comparison table or list. Separate any document-only mentions from measured metrics.'
           : ' Analyze the query and previous context. Output a concise analysis.'),
       user: base
     },
     research: {
-      system: 'You are the research agent for a materials science system.' + hebrewOnly + dataGroundingRule
+      system: 'You are the research agent for a materials science system.' + hebrewOnly + dataGroundingRule + provenanceSeparation
         + (hasLabData
-          ? ' Using the exact numeric values provided, compare each experiment on all available metrics. Identify which experiment performs better on each metric and explain why.'
+          ? ' Using the exact numeric values from STRUCTURED_LAB_SOURCE, compare each experiment on all available metrics. Identify which experiment performs better on each metric and explain why. Do not merge RAG filenames into metric provenance.'
           : ' Based on the analysis and document context above, produce a short research summary.'),
       user: base
     },
     critic: {
-      system: 'You are the critic agent for a materials science system.' + hebrewOnly + dataGroundingRule
+      system: 'You are the critic agent for a materials science system.' + hebrewOnly + dataGroundingRule + provenanceSeparation
         + (hasLabData
-          ? ' Verify that the previous analysis used the actual data values. Check if all metrics were considered. Point out any metric that was missed or incorrectly interpreted.'
+          ? ' Verify that the previous analysis used STRUCTURED_LAB_SOURCE values only for numbers. Check if any metric was wrongly attributed to a RAG document filename.'
           : ' Review the research output critically. Point out gaps or strengths briefly.'),
       user: base
     },
     synthesis: {
-      system: 'You are the synthesis agent for a materials science system.' + hebrewOnly + dataGroundingRule
+      system: 'You are the synthesis agent for a materials science system.' + hebrewOnly + dataGroundingRule + provenanceSeparation
         + (hasLabData
-          ? ' Based on all the data and analysis above, make a CLEAR and DEFINITIVE recommendation: which experiment is better for production and why. State the winning experiment_id explicitly. Cite the specific numeric values that justify the decision. Do not hedge or give a non-answer.'
+          ? ' Based on STRUCTURED_LAB_SOURCE, make a CLEAR recommendation; cite experiment_id and numeric fields from that source only. If RAG text mentions the same IDs, label it explicitly as contextual document text, not as the measurement authority.'
           : ' Synthesize the analysis, research, and critique into a final concise conclusion.'),
       user: base
     }
@@ -117,7 +212,7 @@ export async function runLoop(sessionId, query, ragService, filterMetadata = nul
   try {
     if (ragService.generateAnswer) {
       const res = await ragService.generateAnswer(query, nResults, filterMetadata || null, false);
-      ragEvidenceSources = evidenceFromSearchResults(res.results || [], undefined, undefined, query, null);
+      ragEvidenceSources = tagRagEvidenceSources(evidenceFromSearchResults(res.results || [], undefined, undefined, query, null));
       let text = (res.context || res.results?.map(r => r.document || r.content).join('\n') || '').slice(0, maxContextChars);
       const hadFileFilter = filterMetadata && (
         (Array.isArray(filterMetadata.filenames) && filterMetadata.filenames.length > 0) ||
@@ -152,29 +247,37 @@ export async function runLoop(sessionId, query, ragService, filterMetadata = nul
     logger.warn(`RAG context for research step: ${e.message}`);
   }
 
-  // Inject pre-fetched lab experiments directly into agent context (enriches RAG with live DB data)
   const hasLabData = selectedExperiments.length > 0;
+  const structuredLabEvidenceSources = hasLabData ? buildStructuredLabEvidenceSources(selectedExperiments) : [];
+  const ragHeader =
+    '\n\n=== RAG_CONTEXT_SOURCE (evidence_channel: RAG_CONTEXT_SOURCE) ===\n'
+    + 'Supplementary indexed documents only. Mentions of experiment IDs here are NOT proof of numeric metrics unless aligned with STRUCTURED_LAB_SOURCE provenance.\n\n';
+
+  // Inject pre-fetched lab experiments directly into agent context (enriches RAG with live DB data)
   if (hasLabData) {
-    // Build a structured, human-readable table the LLM can parse unambiguously
-    const header = '=== LAB EXPERIMENT DATA (from live DB — use as primary evidence, do NOT say data is missing) ===';
-    const labLines = selectedExperiments.map(e => {
+    const structuredHeader =
+      '=== STRUCTURED_LAB_SOURCE (evidence_channel: STRUCTURED_LAB_SOURCE) ===\n'
+      + 'Authority: measured numeric metrics below come ONLY from the authoritative lab export (public.lab_experiments / public.experiments). Each experiment includes JSON provenance.\n'
+      + 'FORBIDDEN: citing any rag_documents filename as the origin of these numbers unless provenance.source_file_reference matches AND provenance_status is FILE_REFERENCE_PRESENT.\n\n';
+    const labLines = selectedExperiments.map((e) => {
+      const provJson = e.provenance && typeof e.provenance === 'object' ? JSON.stringify(e.provenance, null, 2) : '{}';
       const metrics = [
-        ['experiment_id',       e.experiment_id],
-        ['formula',             e.formula],
-        ['expansion_ratio',     e.expansion_ratio],
-        ['adhesion',            e.adhesion],
-        ['viscosity',           e.viscosity],
-        ['char_quality',        e.char_quality],
-        ['experiment_outcome',  e.experiment_outcome || e.status],
+        ['experiment_id', e.experiment_id],
+        ['formula', e.formula],
+        ['expansion_ratio', e.expansion_ratio],
+        ['adhesion', e.adhesion],
+        ['viscosity', e.viscosity],
+        ['char_quality', e.char_quality],
+        ['experiment_outcome', e.experiment_outcome || e.status],
       ]
         .filter(([, v]) => v != null)
         .map(([k, v]) => `  ${k}: ${v}`)
         .join('\n');
-      return `Experiment:\n${metrics}`;
+      return `Experiment:\nprovenance (JSON):\n${provJson}\nmetrics:\n${metrics}`;
     }).join('\n\n');
-    const hint = '\nNote: "experiment_outcome=production_formula" means this experiment is validated for production use.';
-    // Replace the entire ragContext with lab data as the primary source (prepend so it appears first)
-    ragContext = `${header}\n\n${labLines}\n${hint}\n\n` + (ragContext ? `Additional document context:\n${ragContext}` : '');
+    const hint =
+      '\nNote: experiment_outcome=production_formula / PASS means validated where applicable.\n';
+    ragContext = `${structuredHeader}\n${labLines}${hint}${ragHeader}` + (ragContext || '');
   }
 
   for (const agentName of AGENT_ORDER) {
@@ -187,12 +290,19 @@ export async function runLoop(sessionId, query, ragService, filterMetadata = nul
       hasLabData
     );
     if (error) {
+      const mergedEarly = [...structuredLabEvidenceSources, ...ragEvidenceSources];
       return {
         run_id: null,
         outputs,
         justifications,
         error: `Agent ${agentName} failed: ${error}`,
-        sources: ragEvidenceSources
+        sources: mergedEarly,
+        evidence_channels: {
+          STRUCTURED_LAB_SOURCE: structuredLabEvidenceSources,
+          RAG_CONTEXT_SOURCE: ragEvidenceSources,
+          CODE_OR_EXAMPLE_SOURCE: [],
+        },
+        provenance_summary: hasLabData ? buildProvenanceSummary(selectedExperiments, ragEvidenceSources) : null,
       };
     }
     const out = (output || '').trim();
@@ -224,7 +334,8 @@ export async function runLoop(sessionId, query, ragService, filterMetadata = nul
       viscosity:          e.viscosity ?? null,
       char_quality:       e.char_quality ?? null,
       experiment_outcome: e.experiment_outcome ?? e.status ?? null,
-      formula:            e.formula ?? null
+      formula:            e.formula ?? null,
+      provenance:         e.provenance && typeof e.provenance === 'object' ? e.provenance : null,
     }));
 
     // fields_used: every metric column that has at least one non-null value — persisted to DB
@@ -255,12 +366,20 @@ export async function runLoop(sessionId, query, ragService, filterMetadata = nul
     }
   }
 
+  const provenanceSummaryText = hasLabData ? buildProvenanceSummary(selectedExperiments, ragEvidenceSources) : null;
+
   return {
     run_id: runRecord?.id ?? null,
     outputs,
     justifications,
     duration_ms: durationMs,
-    sources: ragEvidenceSources
+    sources: [...structuredLabEvidenceSources, ...ragEvidenceSources],
+    evidence_channels: {
+      STRUCTURED_LAB_SOURCE: structuredLabEvidenceSources,
+      RAG_CONTEXT_SOURCE: ragEvidenceSources,
+      CODE_OR_EXAMPLE_SOURCE: [],
+    },
+    provenance_summary: provenanceSummaryText,
   };
 }
 

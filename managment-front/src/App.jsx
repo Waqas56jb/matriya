@@ -1280,7 +1280,7 @@ function LabTab({ projectId }) {
   const [saveExperimentIdOptional, setSaveExperimentIdOptional] = React.useState('');
   const [similarExperimentId, setSimilarExperimentId] = React.useState('');
   const [similarResult, setSimilarResult] = React.useState(null);
-  const [activeSection, setActiveSection] = React.useState('insights');
+  const [activeSection, setActiveSection] = React.useState('experiments');
   const [experimentContext, setExperimentContext] = React.useState('');
   /** Structured sheets from last .xlsx/.xls parse (for spreadsheet UI only). */
   const [labExcelSheets, setLabExcelSheets] = React.useState(null);
@@ -1303,7 +1303,7 @@ function LabTab({ projectId }) {
   const [compareLoading, setCompareLoading] = React.useState(false);
   const [compareError, setCompareError] = React.useState(null);
   // Dedicated experiment add form
-  const [expForm, setExpForm] = React.useState({ experiment_id: '', APP: '', PER: '', MEL: '', Nanoclay: '', IFR: '', expansion_ratio: '', char_quality: '', adhesion: '', viscosity: '', status: 'PENDING' });
+  const [expForm, setExpForm] = React.useState({ experiment_id: '', APP: '', PER: '', MEL: '', Nanoclay: '', IFR: '', expansion_ratio: '', char_quality: '', adhesion: '', viscosity: '', status: 'PENDING', notes: '' });
   const [expFormLoading, setExpFormLoading] = React.useState(false);
   const [expFormFeedback, setExpFormFeedback] = React.useState(null);
 
@@ -1998,6 +1998,18 @@ function LabTab({ projectId }) {
               </select>
             </div>
           </div>
+          <div style={{ marginBottom: 12 }}>
+            <label style={{ display: 'block', fontSize: '0.82rem', marginBottom: 3, color: 'var(--muted)' }}>{t.notes}</label>
+            <textarea
+              className="form-control"
+              dir="auto"
+              rows={3}
+              placeholder="הערות לגבי הניסוי..."
+              value={expForm.notes}
+              onChange={e => setExpForm(f => ({ ...f, notes: e.target.value }))}
+              style={{ width: '100%' }}
+            />
+          </div>
           {expForm.APP && expForm.PER && parseFloat(expForm.PER) !== 0 && (
             <p className="muted" style={{ marginBottom: 8, fontSize: '0.85rem' }}>
               APP:PER = {(parseFloat(expForm.APP) / parseFloat(expForm.PER)).toFixed(3)} (auto-computed)
@@ -2012,7 +2024,7 @@ function LabTab({ projectId }) {
               try {
                 const result = await labApi.addExperiment(projectId, expForm);
                 setExpFormFeedback({ ok: true, msg: `Saved: ${result.experiment?.experiment_id || 'experiment'}` });
-                setExpForm({ experiment_id: '', APP: '', PER: '', MEL: '', Nanoclay: '', IFR: '', expansion_ratio: '', char_quality: '', adhesion: '', viscosity: '', status: 'PENDING' });
+                setExpForm({ experiment_id: '', APP: '', PER: '', MEL: '', Nanoclay: '', IFR: '', expansion_ratio: '', char_quality: '', adhesion: '', viscosity: '', status: 'PENDING', notes: '' });
                 load();
               } catch (err) {
                 setExpFormFeedback({ ok: false, msg: err?.response?.data?.error || err.message || 'Save failed' });
@@ -2046,6 +2058,8 @@ function LabTab({ projectId }) {
                   {rs.IFR != null ? ` · IFR ${rs.IFR}` : ''}
                   {expRatio != null ? ` · ER ${expRatio}` : ''}
                   {(e.status || e.experiment_outcome) ? ` — ${e.status || e.experiment_outcome}` : ''}
+                  {fm.notes ? <span className="muted" style={{ fontSize: '0.82rem', display: 'block', marginTop: 2 }}>{String(fm.notes).slice(0, 80)}{String(fm.notes).length > 80 ? '…' : ''}</span> : null}
+                  {e.notes && !fm.notes ? <span className="muted" style={{ fontSize: '0.82rem', display: 'block', marginTop: 2 }}>{String(e.notes).slice(0, 80)}{String(e.notes).length > 80 ? '…' : ''}</span> : null}
                 </li>
               );
             })}

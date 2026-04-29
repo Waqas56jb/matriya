@@ -557,6 +557,12 @@ ALTER TABLE public.access_requests ADD COLUMN IF NOT EXISTS last_seen     timest
 ALTER TABLE public.access_requests ADD COLUMN IF NOT EXISTS reviewed_by   text;
 ALTER TABLE public.access_requests ADD COLUMN IF NOT EXISTS note          text;
 
+-- Lab row provenance (MATRIYA: structured metrics vs RAG/document context)
+ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS source_document_id text;
+ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS source_sheet text;
+ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS source_row_number integer;
+ALTER TABLE public.lab_experiments ADD COLUMN IF NOT EXISTS provenance_status text;
+
 -- ─────────────────────────────────────────────
 -- INDEXES
 -- ─────────────────────────────────────────────
