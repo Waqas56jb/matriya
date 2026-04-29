@@ -4,7 +4,8 @@ from typing import Optional, Dict, Any, Literal, Tuple
 
 # ============================================================
 # INTENT CLASSIFICATION
-# ============================================================
+
+# =============================================================
 
 AGG_KEYWORDS = {
     "max": ["highest", "max", "maximum", "largest", "top", "best"],
@@ -13,6 +14,7 @@ AGG_KEYWORDS = {
 
 SORT_KEYWORDS = ["by", "order by", "sorted by", "ranked by"]
 CONDITION_KEYWORDS = [">", "<", "=", ">=", "<=", "!=", "where", "and", "or"]
+
 
 
 def classify_intent(query: str) -> Literal["FILTER", "AGGREGATION", "SORT", "INVALID"]:
