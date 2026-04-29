@@ -442,7 +442,7 @@ app.get("/health", async (req, res) => {
     const collectionName = process.env.COLLECTION_NAME || "rag_documents";
     return res.json({
       status: "healthy",
-      version: "v1.1-fixes-31b836d",
+      version: "v1.1-matlib-c9a7c0d",
       vector_db: info,
       db_fingerprint: dbFingerprint,
       collection_name: collectionName,
