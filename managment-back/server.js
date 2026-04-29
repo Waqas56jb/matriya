@@ -6706,13 +6706,11 @@ app.post('/api/proposals/:proposal_id/approve', async (req, res) => {
       // 2. Insert materials → material_library
       for (const mat of (proposal.materials || [])) {
         await client.query(
-          `INSERT INTO public.material_library (project_id, name, description, created_at)
+          `INSERT INTO public.material_library (project_id, name, role_or_function, created_at)
            VALUES ($1, $2, $3, NOW())
-           ON CONFLICT DO NOTHING`,
+           ON CONFLICT (project_id, name) DO NOTHING`,
           [projectId, mat.name, `Confidence: ${mat.confidence}. Sources: ${(mat.sources || []).join(', ')}`]
-        ).catch(() => {
-          // material_library might not have ON CONFLICT — try upsert-safe insert
-        });
+        );
       }
 
       // 3. Insert metrics → proposal_metrics
@@ -6733,10 +6731,10 @@ app.post('/api/proposals/:proposal_id/approve', async (req, res) => {
           else results[field] = value;
         }
         await client.query(
-          `INSERT INTO public.experiments (experiment_id, project_id, formulation, results, status, validated, source, updated_at)
-           VALUES ($1, $2, $3, $4, 'PENDING', false, 'proposal', NOW())
-           ON CONFLICT (experiment_id, project_id) DO UPDATE
-             SET formulation = EXCLUDED.formulation, results = EXCLUDED.results, updated_at = NOW()`,
+          `INSERT INTO public.experiments (experiment_id, project_id, formulation, results, status, validated, updated_at)
+           VALUES ($1, $2, $3, $4, 'PENDING', false, NOW())
+           ON CONFLICT (experiment_id) DO UPDATE
+             SET formulation = EXCLUDED.formulation, results = EXCLUDED.results, project_id = EXCLUDED.project_id, updated_at = NOW()`,
           [exp.experiment_id, projectId, JSON.stringify(formulation), JSON.stringify(results)]
         );
       }
