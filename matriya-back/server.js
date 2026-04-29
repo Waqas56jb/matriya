@@ -3966,11 +3966,26 @@ app.post("/api/research/run", async (req, res) => {
         return res.status(500).json({ error: result.error, outputs: result.outputs || {}, justifications: result.justifications || [] });
       }
       const synthText = result.outputs?.synthesis || '';
-      // If the query explicitly asked "what is missing / list missing data", override GO → ITERATE
-      // so the response reflects "keep iterating by collecting more data" rather than "ready to test".
-      const isMissingDataQuery = /missing\s+data|what\s+(is|data|specific)\s+missing|list\s+missing|what.*needed.*data|identify.*missing/i.test(query);
+      // If the query is ASKING about missing data (e.g. "list missing data", "what is missing?"),
+      // override GO/INSUFFICIENT_DATA → ITERATE so response says "collect more data" rather than "ready to test".
+      // Negative: do NOT trigger if "missing data" appears only as a requested output field (e.g. "risks/missing data").
+      const isMissingDataQuery = (
+        /\blist\s+missing\s+data\b|\blist\s+data\s+(that\s+is\s+)?missing\b/i.test(query) ||
+        /\bwhat\s+(specific\s+)?data\s+(is\s+)?missing\b/i.test(query) ||
+        /\bwhat\s+is\s+(specific\s+)?missing\b/i.test(query) ||
+        /\bidentify.*missing.*data\b/i.test(query)
+      ) && !/^\d+\.\s+risks.*missing|return.*missing|propose.*missing/i.test(query);
       let decisionStatus = deriveSynthesisDecision(synthText);
-      if (isMissingDataQuery && decisionStatus === 'GO') decisionStatus = 'ITERATE';
+      // Fix Q3: missing-data queries must be ITERATE regardless of what the LLM puts in sub-items.
+      if (isMissingDataQuery && (decisionStatus === 'GO' || decisionStatus === 'INSUFFICIENT_DATA')) decisionStatus = 'ITERATE';
+      // Fix Q1: proposal queries where the material gate passed (earlyStopped=false) and lab experiments
+      // exist should never be INSUFFICIENT_DATA.  The LLM writes "NEED_MORE_DATA" inside a numbered
+      // sub-item ("6. risks/missing data: NEED_MORE_DATA") which is NOT the overall decision signal.
+      // With required materials present, a candidate CAN be proposed → downgrade to ITERATE.
+      const isProposalQueryLocal = /propose.*formul|candidate.*formul|suggest.*formula|next.*formul|formulat.*improve|create.*formul/i.test(query);
+      if (isProposalQueryLocal && !earlyStopped && allExps.length > 0 && decisionStatus === 'INSUFFICIENT_DATA') {
+        decisionStatus = 'ITERATE';
+      }
       // For ITERATE on a missing-data query, recommend NEED_MORE_DATA not TEST.
       const recommendedAction = (isMissingDataQuery && decisionStatus === 'ITERATE')
         ? 'NEED_MORE_DATA'
