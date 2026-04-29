@@ -1788,13 +1788,17 @@ app.get('/api/auth/me', (req, res) => {
 
 // ---------- Current user (for permissions) ----------
 async function getCurrentUser(req) {
+  if (req._cachedUser) return req._cachedUser;
   if (!req.headers.authorization || !MATRIYA_BACK_URL) return null;
   try {
     const r = await axios.get(`${MATRIYA_BACK_URL}/auth/me`, {
       headers: { Authorization: req.headers.authorization },
       timeout: 30000
     });
-    if (r.data && r.data.id != null) return r.data;
+    if (r.data && r.data.id != null) {
+      req._cachedUser = r.data;
+      return r.data;
+    }
   } catch (e) {
     if (process.env.NODE_ENV !== 'production') {
       const code = e.code || e.response?.status || e.message;
@@ -6667,6 +6671,8 @@ app.post('/api/proposals/:proposal_id/approve', async (req, res) => {
     const { data: row, error } = await supabase.from('proposals').select('*').eq('id', req.params.proposal_id).single();
     if (error || !row) return res.status(404).json({ error: 'Proposal not found' });
 
+    // Pass pre-fetched user to avoid a second matriya-back round-trip inside requireProjectMember
+    req._cachedUser = user;
     const ctx = await requireProjectMember(req, res, row.project_id);
     if (!ctx) return;
 
