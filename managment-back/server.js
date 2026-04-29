@@ -6680,116 +6680,109 @@ app.post('/api/proposals/:proposal_id/approve', async (req, res) => {
     }
 
     const projectId = row.project_id;
+    const errors = [];
 
-    // Atomic transaction via raw pg client
-    const { Pool } = (await import('pg')).default;
-    const DB_URL = process.env.POSTGRES_URL || process.env.DATABASE_URL;
-    if (!DB_URL) {
-      return res.status(503).json({
-        error: 'APPROVE_TRANSACTION_FAILED',
-        reason: 'POSTGRES_URL not configured — cannot run atomic transaction',
-      });
-    }
+    // 1. Update project goal fields
+    const { error: projErr } = await supabase
+      .from('projects')
+      .update({
+        project_type: proposal.project_type?.value || null,
+        goal_value:   null,
+        goal_status:  'NOT_DEFINED',
+        updated_at:   new Date().toISOString(),
+      })
+      .eq('id', projectId);
+    if (projErr) errors.push(`projects: ${projErr.message}`);
 
-    const pool = new Pool({ connectionString: DB_URL, ssl: { rejectUnauthorized: false }, max: 1 });
-    const client = await pool.connect();
-
-    try {
-      await client.query('BEGIN');
-
-      // 1. Update project
-      await client.query(
-        `UPDATE public.projects SET project_type = $1, goal_value = $2, goal_status = $3, updated_at = NOW() WHERE id = $4`,
-        [proposal.project_type?.value || null, null, 'NOT_DEFINED', projectId]
+    // 2. Insert materials → material_library
+    for (const mat of (proposal.materials || [])) {
+      const { error: matErr } = await supabase.from('material_library').upsert(
+        { project_id: projectId, name: mat.name, role_or_function: `Confidence: ${mat.confidence}. Sources: ${(mat.sources || []).join(', ')}` },
+        { onConflict: 'project_id,name', ignoreDuplicates: true }
       );
-
-      // 2. Insert materials → material_library
-      for (const mat of (proposal.materials || [])) {
-        await client.query(
-          `INSERT INTO public.material_library (project_id, name, role_or_function, created_at)
-           VALUES ($1, $2, $3, NOW())
-           ON CONFLICT (project_id, name) DO NOTHING`,
-          [projectId, mat.name, `Confidence: ${mat.confidence}. Sources: ${(mat.sources || []).join(', ')}`]
-        );
-      }
-
-      // 3. Insert metrics → proposal_metrics
-      for (const met of (proposal.metrics || [])) {
-        await client.query(
-          `INSERT INTO public.proposal_metrics (project_id, name, confidence, sources, created_at)
-           VALUES ($1, $2, $3, $4, NOW())`,
-          [projectId, met.name, met.confidence, JSON.stringify(met.sources || [])]
-        );
-      }
-
-      // 4. Insert experiments → experiments table
-      for (const exp of (proposal.experiments || [])) {
-        const formulation = {};
-        const results     = {};
-        for (const [field, value] of Object.entries(exp.fields || {})) {
-          if (['APP', 'PER', 'MEL', 'Nanoclay', 'IFR'].includes(field)) formulation[field] = value;
-          else results[field] = value;
-        }
-        await client.query(
-          `INSERT INTO public.experiments (experiment_id, project_id, formulation, results, status, validated, updated_at)
-           VALUES ($1, $2, $3, $4, 'PENDING', false, NOW())
-           ON CONFLICT (experiment_id) DO UPDATE
-             SET formulation = EXCLUDED.formulation, results = EXCLUDED.results, project_id = EXCLUDED.project_id, updated_at = NOW()`,
-          [exp.experiment_id, projectId, JSON.stringify(formulation), JSON.stringify(results)]
-        );
-      }
-
-      // 5. Insert milestones
-      for (const ms of (proposal.milestones || [])) {
-        await client.query(
-          `INSERT INTO public.milestones (project_id, title, description, created_at)
-           VALUES ($1, $2, $3, NOW())`,
-          [projectId, ms.name, ms.description || null]
-        );
-      }
-
-      // 6. Insert source_documents links
-      const itemGroups = [
-        ...(proposal.materials  || []).map(i => ({ type: 'material',   id: i.name,            sources: i.sources })),
-        ...(proposal.metrics    || []).map(i => ({ type: 'metric',     id: i.name,            sources: i.sources })),
-        ...(proposal.experiments|| []).map(i => ({ type: 'experiment', id: i.experiment_id,   sources: i.sources })),
-        ...(proposal.milestones || []).map(i => ({ type: 'milestone',  id: i.name,            sources: [] })),
-      ];
-      for (const { type, id, sources } of itemGroups) {
-        for (const src of (sources || [])) {
-          await client.query(
-            `INSERT INTO public.source_documents (proposal_id, item_type, item_id, location, confidence, created_at)
-             VALUES ($1, $2, $3, $4, 'HIGH', NOW())`,
-            [proposal.proposal_id, type, id, src]
-          );
-        }
-      }
-
-      await client.query('COMMIT');
-
-      // Mark proposal as approved
-      await supabase
-        .from('proposals')
-        .update({ approved_at: new Date().toISOString(), data: { ...proposal, proposal_state: 'APPROVED' } })
-        .eq('id', proposal.proposal_id);
-
-      res.json({
-        project_ready: true,
-        proposal_id:   proposal.proposal_id,
-        redirect_to:   `/project/${projectId}/section/lab`,
-      });
-
-    } catch (txErr) {
-      await client.query('ROLLBACK');
-      console.error('[proposals/approve] ROLLBACK:', txErr.message);
-      res.status(500).json({
-        error:  'APPROVE_TRANSACTION_FAILED',
-        reason: txErr.message,
-      });
-    } finally {
-      client.release();
-      pool.end().catch(() => {});
+      if (matErr) errors.push(`material_library(${mat.name}): ${matErr.message}`);
     }
+
+    // 3. Insert metrics → proposal_metrics
+    for (const met of (proposal.metrics || [])) {
+      const { error: metErr } = await supabase.from('proposal_metrics').insert({
+        project_id: projectId,
+        name:       met.name,
+        confidence: met.confidence,
+        sources:    met.sources || [],
+      });
+      if (metErr) errors.push(`proposal_metrics(${met.name}): ${metErr.message}`);
+    }
+
+    // 4. Insert experiments → experiments table
+    for (const exp of (proposal.experiments || [])) {
+      const formulation = {};
+      const results     = {};
+      for (const [field, value] of Object.entries(exp.fields || {})) {
+        if (['APP', 'PER', 'MEL', 'Nanoclay', 'IFR'].includes(field)) formulation[field] = value;
+        else results[field] = value;
+      }
+      const { error: expErr } = await supabase.from('experiments').upsert(
+        {
+          experiment_id: exp.experiment_id,
+          project_id:    projectId,
+          formulation,
+          results:       JSON.stringify(results),
+          status:        'PENDING',
+          validated:     false,
+          updated_at:    new Date().toISOString(),
+        },
+        { onConflict: 'experiment_id' }
+      );
+      if (expErr) errors.push(`experiments(${exp.experiment_id}): ${expErr.message}`);
+    }
+
+    // 5. Insert milestones
+    for (const ms of (proposal.milestones || [])) {
+      const { error: msErr } = await supabase.from('milestones').insert({
+        project_id:  projectId,
+        title:       ms.name,
+        description: ms.description || null,
+      });
+      if (msErr) errors.push(`milestones(${ms.name}): ${msErr.message}`);
+    }
+
+    // 6. Insert source_documents links
+    const itemGroups = [
+      ...(proposal.materials  || []).map(i => ({ type: 'material',   id: i.name,           sources: i.sources })),
+      ...(proposal.metrics    || []).map(i => ({ type: 'metric',     id: i.name,           sources: i.sources })),
+      ...(proposal.experiments|| []).map(i => ({ type: 'experiment', id: i.experiment_id,  sources: i.sources })),
+      ...(proposal.milestones || []).map(i => ({ type: 'milestone',  id: i.name,           sources: [] })),
+    ];
+    for (const { type, id, sources } of itemGroups) {
+      for (const src of (sources || [])) {
+        const { error: sdErr } = await supabase.from('source_documents').insert({
+          proposal_id: proposal.proposal_id,
+          item_type:   type,
+          item_id:     id,
+          location:    src,
+          confidence:  'HIGH',
+        });
+        if (sdErr) errors.push(`source_documents(${type}/${id}): ${sdErr.message}`);
+      }
+    }
+
+    if (errors.length > 0) {
+      console.error('[proposals/approve] partial errors:', errors);
+    }
+
+    // Mark proposal as approved
+    await supabase
+      .from('proposals')
+      .update({ approved_at: new Date().toISOString(), data: { ...proposal, proposal_state: 'APPROVED' } })
+      .eq('id', proposal.proposal_id);
+
+    res.json({
+      project_ready: true,
+      proposal_id:   proposal.proposal_id,
+      redirect_to:   `/project/${projectId}/section/lab`,
+      warnings:      errors.length > 0 ? errors : undefined,
+    });
 
   } catch (e) {
     res.status(500).json({ error: e.message });
