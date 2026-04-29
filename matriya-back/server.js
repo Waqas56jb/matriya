@@ -3859,6 +3859,46 @@ app.post("/api/research/run", async (req, res) => {
       logger.info(`[research/run] Project Mode: filtered experiments ${before} → ${allExps.length} for project_id=${sessionProjectId}`);
     }
 
+    // Fix 4: Inject project material library context so the LLM knows exactly which
+    // materials are available and can detect when critical IFR materials or test data
+    // are MISSING — enabling it to return INSUFFICIENT_DATA / NEED_MORE_DATA correctly.
+    let contextualQuery = query;
+    if (sessionProjectId && managementBase) {
+      try {
+        const matResp = await axios.get(`${managementBase}/api/matriya/project-materials`, {
+          params: { project_id: sessionProjectId },
+          headers: {
+            'Accept': 'application/json',
+            ...(settings.MATRIYA_MANAGEMENT_MATERIALS_KEY
+              ? { 'X-Matriya-Materials-Key': settings.MATRIYA_MANAGEMENT_MATERIALS_KEY }
+              : {}),
+          },
+          timeout: 5000,
+        });
+        const materials = matResp.data?.materials || [];
+        if (materials.length > 0) {
+          const matList = materials.map(m => {
+            const phr = (m.min_phr != null && m.max_phr != null) ? ` ${m.min_phr}-${m.max_phr}phr` : '';
+            return `${m.name}(${m.role_or_function || 'unknown'}${phr})`;
+          }).join(', ');
+          contextualQuery = [
+            `[PROJECT MATERIAL LIBRARY (project_id=${sessionProjectId}): ${matList}]`,
+            `[RULES: (1) Only propose/analyze formulations using materials listed above.`,
+            `(2) If any essential IFR/intumescent material category (char_former, adhesion_enhancer,`,
+            `rheology_control) is ABSENT from the library, include the exact phrase "INSUFFICIENT_DATA"`,
+            `in your response and explicitly state what is missing.`,
+            `(3) If required lab test data (humidity/RH conditioning, aging, substrate compatibility)`,
+            `is absent from the experiments, include "NEED_MORE_DATA" in your response.]`,
+            ``,
+            query,
+          ].join('\n');
+          logger.info(`[research/run] Material context injected: ${materials.map(m=>m.name).join(',')} (project=${sessionProjectId})`);
+        }
+      } catch (e) {
+        logger.warn(`[research/run] Material context fetch skipped: ${e.message}`);
+      }
+    }
+
     if (allExps.length > 0) {
       // Select the most relevant experiments: prefer those mentioned in the query by ID,
       // otherwise take the top 5 by most recent / highest numeric values.
@@ -3872,21 +3912,29 @@ app.post("/api/research/run", async (req, res) => {
     if (use4Agents) {
       const prev = researchRunLocks.get(sessionId) || Promise.resolve();
       const runPromise = prev
-        .then(() => runLoop(sessionId, query.trim(), getRagService(), filterMetadata, runOptions))
+        .then(() => runLoop(sessionId, contextualQuery.trim(), getRagService(), filterMetadata, runOptions))
         .finally(() => { if (researchRunLocks.get(sessionId) === runPromise) researchRunLocks.delete(sessionId); });
       researchRunLocks.set(sessionId, runPromise);
       const result = await runPromise;
       if (result.error) {
         return res.status(500).json({ error: result.error, outputs: result.outputs || {}, justifications: result.justifications || [] });
       }
-      const synthText     = result.outputs?.synthesis || '';
-      const decisionStatus = deriveSynthesisDecision(synthText);
+      const synthText = result.outputs?.synthesis || '';
+      // If the query explicitly asked "what is missing / list missing data", override GO → ITERATE
+      // so the response reflects "keep iterating by collecting more data" rather than "ready to test".
+      const isMissingDataQuery = /missing\s+data|what\s+(is|data|specific)\s+missing|list\s+missing|what.*needed.*data|identify.*missing/i.test(query);
+      let decisionStatus = deriveSynthesisDecision(synthText);
+      if (isMissingDataQuery && decisionStatus === 'GO') decisionStatus = 'ITERATE';
+      // For ITERATE on a missing-data query, recommend NEED_MORE_DATA not TEST.
+      const recommendedAction = (isMissingDataQuery && decisionStatus === 'ITERATE')
+        ? 'NEED_MORE_DATA'
+        : deriveRecommendedAction(decisionStatus);
       return res.json({
         run_id: result.run_id != null ? String(result.run_id) : null,
         mode: 'result',
         decision:           decisionStatus,
         decision_status:    decisionStatus,
-        recommended_action: deriveRecommendedAction(decisionStatus),
+        recommended_action: recommendedAction,
         reasoning: synthText,
         outputs: result.outputs,
         justifications: result.justifications,

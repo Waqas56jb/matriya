@@ -3552,6 +3552,36 @@ app.get('/api/matriya/lab-experiments-export', async (req, res) => {
 });
 
 /**
+ * GET /api/matriya/project-materials?project_id=xxx
+ * Returns the material_library for a specific project.
+ * Used by matriya-back to inject material context into LLM queries so the LLM
+ * can recognize when critical materials are MISSING and return INSUFFICIENT_DATA.
+ * Auth: same server-key mechanism as lab-experiments-export.
+ */
+app.get('/api/matriya/project-materials', async (req, res) => {
+  try {
+    const serverKey = MANEGER_MATERIALS_SUMMARY_SERVER_KEY;
+    const reqKey = (req.headers['x-matriya-materials-key'] || '').trim();
+    if (serverKey && reqKey !== serverKey) {
+      const user = await getCurrentUser(req).catch(() => null);
+      if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    }
+    const projectId = (req.query.project_id || '').trim();
+    if (!projectId) return res.status(400).json({ error: 'project_id is required' });
+    const { data, error } = await supabase
+      .from('material_library')
+      .select('name, role_or_function, min_phr, max_phr, notes')
+      .eq('project_id', projectId)
+      .order('name');
+    if (error) throw error;
+    return res.json({ project_id: projectId, materials: data || [] });
+  } catch (e) {
+    console.error('[project-materials] error:', e.message);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+/**
  * GET /api/lab/raw-debug
  * Returns raw Supabase rows (no transformation) from both experiments and lab_experiments tables.
  * Use this to diagnose what data actually exists in Supabase.
