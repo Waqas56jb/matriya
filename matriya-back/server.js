@@ -1,3 +1,4 @@
+
 /**
  * Express application for RAG system file ingestion
  */
@@ -95,6 +96,21 @@ const __dirname = dirname(__filename);
 
 // Initialize Express app
 const app = express();
+
+// Prevent crashes from pg pool "Connection terminated unexpectedly" on idle connection drops.
+// This is benign: pg will reconnect automatically on the next query.
+process.on('uncaughtException', (err) => {
+  if (
+    err.message?.includes('Connection terminated unexpectedly') ||
+    err.message?.includes('ECONNRESET') ||
+    err.code === 'ECONNRESET'
+  ) {
+    console.warn('[pg] connection dropped (handled, will reconnect):', err.message);
+  } else {
+    console.error('[UNCAUGHT EXCEPTION]', err);
+    process.exit(1);
+  }
+});
 // Trust first proxy (e.g. Vercel) so req.protocol / X-Forwarded-* match the public URL — used by Twilio webhook signature checks.
 app.set('trust proxy', 1);
 
@@ -3880,10 +3896,9 @@ app.post("/api/research/run", async (req, res) => {
         });
         const materials = matResp.data?.materials || [];
         if (materials.length > 0) {
-          const matList = materials.map(m => {
-            const phr = (m.min_phr != null && m.max_phr != null) ? ` ${m.min_phr}-${m.max_phr}phr` : '';
-            return `${m.name}(${m.role_or_function || 'unknown'}${phr})`;
-          }).join(', ');
+          const matList = materials.map(m =>
+            `${m.name}(${m.role_or_function || 'unknown'})`
+          ).join(', ');
 
           // Detect missing critical IFR roles deterministically
           const hasCharFormer = materials.some(m =>
