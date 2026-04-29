@@ -3570,7 +3570,7 @@ app.get('/api/matriya/project-materials', async (req, res) => {
     if (!projectId) return res.status(400).json({ error: 'project_id is required' });
     const { data, error } = await supabase
       .from('material_library')
-      .select('name, role_or_function, min_phr, max_phr, notes')
+      .select('name, role_or_function')
       .eq('project_id', projectId)
       .order('name');
     if (error) throw error;
