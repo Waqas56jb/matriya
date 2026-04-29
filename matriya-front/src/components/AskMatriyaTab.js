@@ -27,10 +27,31 @@ const DECISION_MODE_LABELS = {
 };
 
 const DECISION_LABELS = {
-    GO:      { text: 'GO',      cls: 'go' },
-    ITERATE: { text: 'ITERATE', cls: 'iterate' },
-    STOP:    { text: 'STOP',    cls: 'stop' },
+    GO:               { text: 'GO',               cls: 'go' },
+    ITERATE:          { text: 'ITERATE',           cls: 'iterate' },
+    STOP:             { text: 'STOP',              cls: 'stop' },
+    INSUFFICIENT_DATA:{ text: 'INSUFFICIENT_DATA', cls: 'stop' },
 };
+
+/**
+ * Fix 1: derive the displayed chip from reasoning keywords first,
+ * then fall back to the decision field value.
+ * Rules (David spec):
+ *   NEED_SELECTED_PROJECT | NO_PROJECT_DATA_FOUND  → STOP
+ *   NEED_MORE_DATA | INSUFFICIENT_DATA             → INSUFFICIENT_DATA
+ *   GO in reasoning                                → GO
+ *   decision field in DECISION_LABELS              → use as-is
+ *   otherwise                                      → ITERATE
+ */
+function deriveDecisionChip(decision, reasoning) {
+    const r = String(reasoning || '').toUpperCase();
+    if (r.includes('NEED_SELECTED_PROJECT') || r.includes('NO_PROJECT_DATA_FOUND')) return 'STOP';
+    if (r.includes('INSUFFICIENT_DATA') || r.includes('NEED_MORE_DATA'))            return 'INSUFFICIENT_DATA';
+    if (/\bGO\b/.test(r))                                                           return 'GO';
+    const d = String(decision || '').toUpperCase();
+    if (d in DECISION_LABELS) return d;
+    return 'ITERATE';
+}
 
 /** Safe coercions — never let unexpected types crash the render tree */
 function safeString(v) {
@@ -58,8 +79,9 @@ function DecisionMeta({ decisionData }) {
     const fieldsUsed = safeArray(rawFieldsUsed);
     const runIdStr  = rawRunId != null ? safeString(rawRunId) : null;
 
-    const label   = DECISION_MODE_LABELS[mode]    || { text: mode,     cls: 'error' };
-    const decLabel = DECISION_LABELS[decision]    || null;
+    const label    = DECISION_MODE_LABELS[mode] || { text: mode, cls: 'error' };
+    const chipKey  = deriveDecisionChip(decision, reasoning);
+    const decLabel = DECISION_LABELS[chipKey] || null;
 
     return (
         <div className="decision-meta">

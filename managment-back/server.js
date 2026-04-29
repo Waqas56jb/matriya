@@ -3403,14 +3403,22 @@ app.get('/api/matriya/lab-experiments-export', async (req, res) => {
     // "Usable" = row has at least one NUMERIC result field (expansion_ratio or adhesion).
     // Status/outcome alone does NOT count — a row with only status="PENDING" and no
     // numeric results is not queryable and must not cause the wrong table to be selected.
+    // results/formulation may be TEXT (JSON string) or JSONB object — handle both.
+    const parseJsonField = (v) => {
+      if (v == null) return {};
+      if (typeof v === 'object') return v;
+      if (typeof v === 'string') { try { const p = JSON.parse(v); return typeof p === 'object' && p ? p : {}; } catch (_) {} }
+      return {};
+    };
     const isUsable = (r, isCanonical) => {
       if (isCanonical) {
-        const res = (typeof r.results === 'object' && r.results) ? r.results : {};
-        const f   = (typeof r.formulation === 'object' && r.formulation) ? r.formulation : {};
+        const res = parseJsonField(r.results);
+        const f   = parseJsonField(r.formulation);
         // Must have actual numeric result OR real formulation data (not just status)
         return res['expansion_ratio'] != null
             || res['adhesion'] != null
             || res['viscosity'] != null
+            || res['experiment_outcome'] != null
             || Object.keys(f).some(k => ['APP','PER','MEL','IFR'].includes(k.toUpperCase()));
       }
       // lab_experiments: usable if has numeric result column or experiment_outcome
@@ -3432,10 +3440,10 @@ app.get('/api/matriya/lab-experiments-export', async (req, res) => {
     let canonical = [];
 
     if (useCanonical && !expErr && Array.isArray(expRows) && expRows.length > 0) {
-      // `experiments` table rows are already in canonical JSONB format
+      // `experiments` table rows may be JSONB objects or TEXT JSON strings — handle both.
       canonical = expRows.map(row => {
-        const f = (typeof row.formulation === 'object' && row.formulation) ? row.formulation : {};
-        const r = (typeof row.results === 'object' && row.results) ? row.results : {};
+        const f = parseJsonField(row.formulation);
+        const r = parseJsonField(row.results);
         const getNum = (obj, ...keys) => {
           for (const k of keys) {
             for (const [ok, ov] of Object.entries(obj)) {
@@ -3452,18 +3460,19 @@ app.get('/api/matriya/lab-experiments-export', async (req, res) => {
         const appPer = getNum(f, 'app:per', 'appPer', 'app_per') ?? (APP != null && PER != null && PER > 0 ? parseFloat((APP / PER).toFixed(4)) : null);
         const IFR  = getNum(f, 'ifr') ?? (APP != null && PER != null && MEL != null ? APP + PER + MEL : null);
         return {
-          experiment_id:   row.experiment_id,
-          project_id:      row.project_id,
+          experiment_id:      row.experiment_id,
+          project_id:         row.project_id,
           APP, PER, MEL,
-          'APP:PER':       appPer,
+          'APP:PER':          appPer,
           IFR,
-          Nanoclay:        getNum(f, 'nanoclay', 'cloisite', 'clay'),
-          expansion_ratio: getNum(r, 'expansion_ratio', 'expansion'),
-          char_quality:    r['char_quality'] || r['char'] || null,
-          adhesion:        getNum(r, 'adhesion'),
-          viscosity:       getNum(r, 'viscosity'),
-          status:          row.status || null,
-          formula:         f['formula'] || null,
+          Nanoclay:           getNum(f, 'nanoclay', 'cloisite', 'clay'),
+          expansion_ratio:    getNum(r, 'expansion_ratio', 'expansion'),
+          char_quality:       r['char_quality'] || r['char'] || null,
+          adhesion:           getNum(r, 'adhesion'),
+          viscosity:          getNum(r, 'viscosity'),
+          experiment_outcome: r['experiment_outcome'] || row.status || null,
+          status:             row.status || null,
+          formula:            f['formula'] || row.formulation || null,
         };
       });
     } else {

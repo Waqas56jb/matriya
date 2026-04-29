@@ -2246,21 +2246,38 @@ function deriveFieldsUsed(selectedExperiments) {
  * Derive a deterministic GO / ITERATE / STOP decision from the synthesis agent output.
  * Priority: explicit keyword → recommendation language → default ITERATE.
  */
+/**
+ * Fix 2: decision_status must be one of GO | ITERATE | STOP | INSUFFICIENT_DATA.
+ * recommended_action is derived separately from decision_status.
+ */
 function deriveSynthesisDecision(synthesis) {
   if (!synthesis) return 'STOP';
   const s = synthesis.toLowerCase();
-  // Explicit decision keywords first
-  if (/\bgo\b/.test(s)) return 'GO';
-  if (/\bstop\b/.test(s)) return 'STOP';
-  if (/\biterate\b/.test(s)) return 'ITERATE';
+  // Explicit decision keywords — check INSUFFICIENT_DATA before STOP
+  if (/\binsufficient[_\s]data\b/.test(s))                                                    return 'INSUFFICIENT_DATA';
+  if (/need[_\s]more[_\s]data|need[_\s]selected[_\s]project|no[_\s]project[_\s]data/.test(s)) return 'INSUFFICIENT_DATA';
+  if (/\bgo\b/.test(s))                                                                        return 'GO';
+  if (/\bstop\b/.test(s))                                                                      return 'STOP';
+  if (/\biterate\b/.test(s))                                                                   return 'ITERATE';
   // Positive recommendation → GO
   if (/ניסוי.*ממליץ|ממליץ.*ניסוי|מומלץ|עדיף|מנצח|טוב יותר|הטוב ביותר|winner|recommend|preferred|better performing/.test(s)) return 'GO';
   // Explicit EXP-id recommendation → GO
   if (/exp-\d/.test(s) && /(recommend|winner|preferred|better|best|ממליץ|מומלץ|עדיף|מנצח)/.test(s)) return 'GO';
-  // Missing data / incomplete → STOP
-  if (/אין מידע|אין נתונים|no data|no supporting|insufficient/.test(s)) return 'STOP';
+  // Missing data / incomplete → INSUFFICIENT_DATA
+  if (/אין מידע|אין נתונים|no data|no supporting|insufficient/.test(s)) return 'INSUFFICIENT_DATA';
   // Default: ITERATE (partial evidence, needs more)
   return 'ITERATE';
+}
+
+/** Fix 2: recommended_action derived from decision_status. */
+function deriveRecommendedAction(decisionStatus) {
+  switch (decisionStatus) {
+    case 'GO':               return 'TEST';
+    case 'ITERATE':          return 'TEST';
+    case 'INSUFFICIENT_DATA':return 'NEED_MORE_DATA';
+    case 'STOP':             return 'STOP';
+    default:                 return 'STOP';
+  }
 }
 
 //   3. Minimum evidence: support >= 2 AND total >= 3.
@@ -3691,6 +3708,27 @@ app.post("/api/research/run", async (req, res) => {
       return res.status(404).json({ error: 'Session not found' });
     }
 
+    // Fix 3: Deterministic gate — if Project Mode is active but no project_id selected, return STOP immediately.
+    // project_mode is active when: (a) body explicitly sets project_mode:true, OR (b) session has a project_id.
+    const sessionProjectId = session.project_id || null;
+    const projectModeRequested = req.body?.project_mode === true;
+    if (projectModeRequested && !sessionProjectId) {
+      const stopMsg = 'NEED_SELECTED_PROJECT: No project is selected. Select a project to use Project Mode.';
+      return res.json({
+        run_id:             null,
+        mode:               'result',
+        decision:           'STOP',
+        decision_status:    'STOP',
+        recommended_action: 'NEED_SELECTED_PROJECT',
+        reasoning:          'NEED_SELECTED_PROJECT',
+        outputs:            { synthesis: stopMsg, analysis: stopMsg },
+        selected_experiments: [],
+        fields_used:        [],
+        sources:            [],
+        data:               [],
+      });
+    }
+
     const kcShutdown = session.kernel_context && session.kernel_context.possibility_shutdown;
     if (use4Agents && kcShutdown) {
       return res.status(409).json({
@@ -3813,6 +3851,13 @@ app.post("/api/research/run", async (req, res) => {
       }
     }
 
+    // Fix 3: Filter experiments to selected project if session has project_id (Project Mode isolation).
+    if (sessionProjectId) {
+      const before = allExps.length;
+      allExps = allExps.filter(e => String(e.project_id || '') === String(sessionProjectId));
+      logger.info(`[research/run] Project Mode: filtered experiments ${before} → ${allExps.length} for project_id=${sessionProjectId}`);
+    }
+
     if (allExps.length > 0) {
       // Select the most relevant experiments: prefer those mentioned in the query by ID,
       // otherwise take the top 5 by most recent / highest numeric values.
@@ -3833,11 +3878,14 @@ app.post("/api/research/run", async (req, res) => {
       if (result.error) {
         return res.status(500).json({ error: result.error, outputs: result.outputs || {}, justifications: result.justifications || [] });
       }
-      const synthText = result.outputs?.synthesis || '';
+      const synthText     = result.outputs?.synthesis || '';
+      const decisionStatus = deriveSynthesisDecision(synthText);
       return res.json({
         run_id: result.run_id != null ? String(result.run_id) : null,
         mode: 'result',
-        decision: deriveSynthesisDecision(synthText),
+        decision:           decisionStatus,
+        decision_status:    decisionStatus,
+        recommended_action: deriveRecommendedAction(decisionStatus),
         reasoning: synthText,
         outputs: result.outputs,
         justifications: result.justifications,
