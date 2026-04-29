@@ -8,7 +8,6 @@
 - Set per-user role: Admin, Operator, Viewer, Blocked
 - Generate username + password for management frontend
 
-
 - Reset user password from admin panel
 - Force logout any active user instantly
 
