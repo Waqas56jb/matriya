@@ -10,6 +10,7 @@
 - Reset user password from admin panel
 - Force logout any active user instantly
 
+
 ## User & Session Visibility
 - See all currently logged-in users live
 - View active WhatsApp sessions in real time
