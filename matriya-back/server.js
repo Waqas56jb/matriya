@@ -442,7 +442,7 @@ app.get("/health", async (req, res) => {
     const collectionName = process.env.COLLECTION_NAME || "rag_documents";
     return res.json({
       status: "healthy",
-      version: "v1.1-matlib-c9a7c0d",
+      version: "v1.1-matgate-final",
       vector_db: info,
       db_fingerprint: dbFingerprint,
       collection_name: collectionName,
@@ -3859,10 +3859,13 @@ app.post("/api/research/run", async (req, res) => {
       logger.info(`[research/run] Project Mode: filtered experiments ${before} → ${allExps.length} for project_id=${sessionProjectId}`);
     }
 
-    // Fix 4: Inject project material library context so the LLM knows exactly which
-    // materials are available and can detect when critical IFR materials or test data
-    // are MISSING — enabling it to return INSUFFICIENT_DATA / NEED_MORE_DATA correctly.
+    // Fix 4: Deterministic material-library gate + context injection for Project Mode.
+    // (a) For formulation-proposal queries: if the project lacks char_former (a critical IFR
+    //     material), return INSUFFICIENT_DATA immediately without calling the LLM.
+    // (b) For all other project-mode queries: inject the material library as context so the LLM
+    //     knows what is available and can correctly flag limitations.
     let contextualQuery = query;
+    let earlyStopped = false;
     if (sessionProjectId && managementBase) {
       try {
         const matResp = await axios.get(`${managementBase}/api/matriya/project-materials`, {
@@ -3881,18 +3884,46 @@ app.post("/api/research/run", async (req, res) => {
             const phr = (m.min_phr != null && m.max_phr != null) ? ` ${m.min_phr}-${m.max_phr}phr` : '';
             return `${m.name}(${m.role_or_function || 'unknown'}${phr})`;
           }).join(', ');
+
+          // Detect missing critical IFR roles deterministically
+          const hasCharFormer = materials.some(m =>
+            (m.role_or_function || '').toLowerCase().includes('char'));
+          const missingEssential = [];
+          if (!hasCharFormer) missingEssential.push('char_former/carbon-source (e.g. PER)');
+
+          // Gate A: if this is a proposal query AND critical material is absent → STOP immediately
+          const isProposalQuery = /propose.*formul|candidate.*formul|suggest.*formula|next.*formul|formulat.*improve|create.*formul/i.test(query);
+          if (isProposalQuery && missingEssential.length > 0) {
+            const stopMsg = `INSUFFICIENT_DATA: Project material library [${matList}] is missing critical IFR component(s): ${missingEssential.join(', ')}. Cannot propose a reliable candidate formulation without these materials. Add the missing materials to the project material library first.`;
+            logger.info(`[research/run] Material gate blocked proposal — missing: ${missingEssential.join(',')}`);
+            earlyStopped = true;
+            return res.json({
+              run_id:             null,
+              mode:               'result',
+              decision:           'INSUFFICIENT_DATA',
+              decision_status:    'INSUFFICIENT_DATA',
+              recommended_action: 'NEED_MORE_DATA',
+              reasoning:          stopMsg,
+              outputs:            { synthesis: stopMsg, analysis: stopMsg },
+              selected_experiments: [],
+              fields_used:        [],
+              sources:            [],
+              data:               [],
+            });
+          }
+
+          // Gate B: for non-proposal queries, inject material context + missing-material note
+          const missingNote = missingEssential.length > 0
+            ? `MISSING CRITICAL MATERIALS: ${missingEssential.join(', ')} — use ITERATE (not GO) for analysis.`
+            : 'All essential IFR material categories are present.';
           contextualQuery = [
             `[PROJECT MATERIAL LIBRARY (project_id=${sessionProjectId}): ${matList}]`,
-            `[RULES: (1) Only propose/analyze formulations using materials listed above.`,
-            `(2) If any essential IFR/intumescent material category (char_former, adhesion_enhancer,`,
-            `rheology_control) is ABSENT from the library, include the exact phrase "INSUFFICIENT_DATA"`,
-            `in your response and explicitly state what is missing.`,
-            `(3) If required lab test data (humidity/RH conditioning, aging, substrate compatibility)`,
-            `is absent from the experiments, include "NEED_MORE_DATA" in your response.]`,
+            `[${missingNote}]`,
+            `[RULES: (1) Only use materials listed above. (2) If critical materials are missing, use ITERATE not GO. (3) If humidity/RH/aging test data is absent, include "NEED_MORE_DATA".]`,
             ``,
             query,
           ].join('\n');
-          logger.info(`[research/run] Material context injected: ${materials.map(m=>m.name).join(',')} (project=${sessionProjectId})`);
+          logger.info(`[research/run] Material context injected: ${materials.map(m=>m.name).join(',')} (missing: ${missingEssential.join(',') || 'none'})`);
         }
       } catch (e) {
         logger.warn(`[research/run] Material context fetch skipped: ${e.message}`);
