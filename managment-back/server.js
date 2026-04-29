@@ -2696,7 +2696,7 @@ app.post('/api/projects/:projectId/experiments', async (req, res) => {
 
     const { data, error } = await supabase
       .from('experiments')
-      .upsert(row, { onConflict: 'project_id,experiment_id' })
+      .upsert(row, { onConflict: 'experiment_id' })
       .select()
       .single();
 
