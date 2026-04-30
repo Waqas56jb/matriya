@@ -6834,6 +6834,412 @@ app.post('/api/proposals/:proposal_id/approve', async (req, res) => {
   }
 });
 
+// =============================================================================
+// v1.2 — Data Governance + Contract/Approval Workflow
+// =============================================================================
+
+// Valid governance statuses and roles
+const GOVERNANCE_STATUSES = ['draft', 'pending_approval', 'approved', 'locked', 'archived', 'restricted', 'rejected'];
+const RBAC_ROLES_V2       = ['owner', 'admin', 'researcher', 'lab_user', 'viewer', 'external'];
+
+// Role write-access matrix: which roles can mutate (POST/PATCH/DELETE)
+const ROLE_CAN_WRITE = { owner: true, admin: true, researcher: true, lab_user: true, viewer: false, external: false };
+// Role approve-access: which roles can approve/reject/lock records
+const ROLE_CAN_APPROVE = { owner: true, admin: true, researcher: false, lab_user: false, viewer: false, external: false };
+
+// Get the project role_v2 for a user.
+// Existing 'owner' in the role column always wins — role_v2 default 'member'
+// must never downgrade a project owner.
+async function getProjectRoleV2(projectId, userId, username) {
+  if (username === 'admin') return 'owner';
+  const { data } = await supabase
+    .from('project_members')
+    .select('role, role_v2')
+    .eq('project_id', projectId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (!data) return null;
+  if (data.role === 'owner') return 'owner';   // existing owners are never downgraded
+  return data.role_v2 || data.role || 'member';
+}
+
+// Middleware helper: require project member + resolve role_v2
+async function requireMemberWithRole(req, res, projectId) {
+  const ctx = await requireProjectMember(req, res, projectId);
+  if (!ctx) return null; // already responded
+  const roleV2 = await getProjectRoleV2(projectId, ctx.user.id, ctx.user.username);
+  return { ...ctx, roleV2 };
+}
+
+// Full governance-aware audit log writer (extends base auditLog)
+function auditLogGovernance({
+  projectId, userId, username, action, entityType, entityId,
+  beforeValue = null, afterValue = null, reason = null, approvalStatus = null, requestId = null
+}) {
+  supabase.from('audit_log').insert({
+    project_id:      projectId || null,
+    user_id:         userId ?? null,
+    username:        username || null,
+    action,
+    entity_type:     entityType,
+    entity_id:       entityId ? String(entityId) : null,
+    record_type:     entityType,
+    record_id:       entityId ? String(entityId) : null,
+    before_value:    beforeValue && typeof beforeValue === 'object' ? beforeValue : null,
+    after_value:     afterValue  && typeof afterValue  === 'object' ? afterValue  : null,
+    reason:          reason || null,
+    approval_status: approvalStatus || null,
+    request_id:      requestId || null,
+    details:         null,
+  }).then(() => {}).catch(() => {});
+}
+
+// Write an approval_logs row (append-only)
+async function writeApprovalLog({ recordType, recordId, projectId, action, previousStatus, newStatus, actor, reason = null, metadata = {} }) {
+  await supabase.from('approval_logs').insert({
+    record_type:     recordType,
+    record_id:       String(recordId),
+    project_id:      projectId || null,
+    action,
+    previous_status: previousStatus || null,
+    new_status:      newStatus || null,
+    actor,
+    reason:          reason || null,
+    metadata,
+  });
+}
+
+// -----------------------------------------------------------------------
+// CONTRACT ENDPOINTS
+// -----------------------------------------------------------------------
+
+// List contracts for a project
+app.get('/api/projects/:projectId/contracts', async (req, res) => {
+  const { projectId } = req.params;
+  const ctx = await requireMemberWithRole(req, res, projectId);
+  if (!ctx) return;
+  const { data, error } = await supabase
+    .from('project_contracts')
+    .select('*')
+    .eq('project_id', projectId)
+    .order('created_at', { ascending: false });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ contracts: data || [] });
+});
+
+// Create contract (draft)
+app.post('/api/projects/:projectId/contracts', async (req, res) => {
+  const { projectId } = req.params;
+  const ctx = await requireMemberWithRole(req, res, projectId);
+  if (!ctx) return;
+  if (!ROLE_CAN_WRITE[ctx.roleV2]) return res.status(403).json({ error: 'Insufficient role to create contracts' });
+
+  const { title, description } = req.body;
+  if (!title || !String(title).trim()) return res.status(400).json({ error: 'title is required' });
+
+  const { data, error } = await supabase.from('project_contracts').insert({
+    project_id:  projectId,
+    title:       String(title).trim(),
+    description: description || null,
+    status:      'draft',
+    created_by:  ctx.user.username,
+  }).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+
+  auditLogGovernance({ projectId, userId: ctx.user.id, username: ctx.user.username, action: 'contract_created', entityType: 'contract', entityId: data.id, afterValue: data, approvalStatus: 'draft', requestId: req.requestId });
+  res.status(201).json({ contract: data });
+});
+
+// Get single contract (with terms)
+app.get('/api/projects/:projectId/contracts/:contractId', async (req, res) => {
+  const { projectId, contractId } = req.params;
+  const ctx = await requireMemberWithRole(req, res, projectId);
+  if (!ctx) return;
+
+  const { data: contract, error } = await supabase.from('project_contracts').select('*').eq('id', contractId).eq('project_id', projectId).maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!contract) return res.status(404).json({ error: 'Contract not found' });
+
+  const { data: terms } = await supabase.from('contract_terms').select('*').eq('contract_id', contractId).order('sort_order');
+  res.json({ contract, terms: terms || [] });
+});
+
+// Update contract metadata (draft/rejected only)
+app.patch('/api/projects/:projectId/contracts/:contractId', async (req, res) => {
+  const { projectId, contractId } = req.params;
+  const ctx = await requireMemberWithRole(req, res, projectId);
+  if (!ctx) return;
+  if (!ROLE_CAN_WRITE[ctx.roleV2]) return res.status(403).json({ error: 'Insufficient role' });
+
+  const { data: existing, error: fetchErr } = await supabase.from('project_contracts').select('*').eq('id', contractId).eq('project_id', projectId).maybeSingle();
+  if (fetchErr) return res.status(500).json({ error: fetchErr.message });
+  if (!existing) return res.status(404).json({ error: 'Contract not found' });
+  if (['locked', 'approved'].includes(existing.status)) return res.status(403).json({ error: `Cannot edit a contract with status: ${existing.status}` });
+
+  const { title, description } = req.body;
+  const updates = {};
+  if (title) updates.title = String(title).trim();
+  if (description !== undefined) updates.description = description;
+  updates.updated_at = new Date().toISOString();
+
+  const { data, error } = await supabase.from('project_contracts').update(updates).eq('id', contractId).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+
+  auditLogGovernance({ projectId, userId: ctx.user.id, username: ctx.user.username, action: 'contract_updated', entityType: 'contract', entityId: contractId, beforeValue: existing, afterValue: data, requestId: req.requestId });
+  res.json({ contract: data });
+});
+
+// Save / replace terms for a contract
+app.post('/api/projects/:projectId/contracts/:contractId/terms', async (req, res) => {
+  const { projectId, contractId } = req.params;
+  const ctx = await requireMemberWithRole(req, res, projectId);
+  if (!ctx) return;
+  if (!ROLE_CAN_WRITE[ctx.roleV2]) return res.status(403).json({ error: 'Insufficient role' });
+
+  const { data: contract, error: cErr } = await supabase.from('project_contracts').select('status').eq('id', contractId).eq('project_id', projectId).maybeSingle();
+  if (cErr) return res.status(500).json({ error: cErr.message });
+  if (!contract) return res.status(404).json({ error: 'Contract not found' });
+  if (['locked', 'approved'].includes(contract.status)) return res.status(403).json({ error: `Cannot edit terms of a contract with status: ${contract.status}` });
+
+  const { terms } = req.body;
+  if (!Array.isArray(terms) || terms.length === 0) return res.status(400).json({ error: 'terms must be a non-empty array' });
+  for (const t of terms) {
+    if (!t.term_key || !t.term_value) return res.status(400).json({ error: 'Each term requires term_key and term_value' });
+  }
+
+  // Delete existing terms and insert new ones
+  await supabase.from('contract_terms').delete().eq('contract_id', contractId);
+  const rows = terms.map((t, i) => ({ contract_id: contractId, term_key: String(t.term_key), term_value: String(t.term_value), term_type: t.term_type || 'general', sort_order: t.sort_order ?? i, created_by: ctx.user.username }));
+  const { data, error } = await supabase.from('contract_terms').insert(rows).select();
+  if (error) return res.status(500).json({ error: error.message });
+
+  auditLogGovernance({ projectId, userId: ctx.user.id, username: ctx.user.username, action: 'contract_terms_saved', entityType: 'contract', entityId: contractId, afterValue: { terms_count: rows.length }, requestId: req.requestId });
+  res.status(201).json({ terms: data, count: data.length });
+});
+
+// Get terms for a contract
+app.get('/api/projects/:projectId/contracts/:contractId/terms', async (req, res) => {
+  const { projectId, contractId } = req.params;
+  const ctx = await requireMemberWithRole(req, res, projectId);
+  if (!ctx) return;
+  const { data, error } = await supabase.from('contract_terms').select('*').eq('contract_id', contractId).order('sort_order');
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ terms: data || [] });
+});
+
+// Submit contract for approval
+app.post('/api/projects/:projectId/contracts/:contractId/submit', async (req, res) => {
+  const { projectId, contractId } = req.params;
+  const ctx = await requireMemberWithRole(req, res, projectId);
+  if (!ctx) return;
+  if (!ROLE_CAN_WRITE[ctx.roleV2]) return res.status(403).json({ error: 'Insufficient role' });
+
+  const { data: existing, error: fetchErr } = await supabase.from('project_contracts').select('*').eq('id', contractId).eq('project_id', projectId).maybeSingle();
+  if (fetchErr) return res.status(500).json({ error: fetchErr.message });
+  if (!existing) return res.status(404).json({ error: 'Contract not found' });
+  if (!['draft', 'rejected'].includes(existing.status)) return res.status(400).json({ error: `Cannot submit contract with status: ${existing.status}` });
+
+  const { data, error } = await supabase.from('project_contracts').update({ status: 'pending_approval', updated_at: new Date().toISOString() }).eq('id', contractId).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+
+  await writeApprovalLog({ recordType: 'contract', recordId: contractId, projectId, action: 'submitted', previousStatus: existing.status, newStatus: 'pending_approval', actor: ctx.user.username, reason: req.body.reason || null });
+  auditLogGovernance({ projectId, userId: ctx.user.id, username: ctx.user.username, action: 'contract_submitted', entityType: 'contract', entityId: contractId, beforeValue: { status: existing.status }, afterValue: { status: 'pending_approval' }, approvalStatus: 'pending_approval', requestId: req.requestId });
+  res.json({ contract: data });
+});
+
+// Approve contract (owner/admin only)
+app.post('/api/projects/:projectId/contracts/:contractId/approve', async (req, res) => {
+  const { projectId, contractId } = req.params;
+  const ctx = await requireMemberWithRole(req, res, projectId);
+  if (!ctx) return;
+  if (!ROLE_CAN_APPROVE[ctx.roleV2]) return res.status(403).json({ error: 'Only owner or admin can approve contracts' });
+
+  const { data: existing, error: fetchErr } = await supabase.from('project_contracts').select('*').eq('id', contractId).eq('project_id', projectId).maybeSingle();
+  if (fetchErr) return res.status(500).json({ error: fetchErr.message });
+  if (!existing) return res.status(404).json({ error: 'Contract not found' });
+  if (existing.status !== 'pending_approval') return res.status(400).json({ error: `Cannot approve contract with status: ${existing.status}` });
+
+  const now = new Date().toISOString();
+  const { data, error } = await supabase.from('project_contracts').update({ status: 'approved', reviewed_by: ctx.user.username, reviewed_at: now, approved_at: now, updated_at: now }).eq('id', contractId).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+
+  await writeApprovalLog({ recordType: 'contract', recordId: contractId, projectId, action: 'approved', previousStatus: 'pending_approval', newStatus: 'approved', actor: ctx.user.username, reason: req.body.reason || null });
+  auditLogGovernance({ projectId, userId: ctx.user.id, username: ctx.user.username, action: 'contract_approved', entityType: 'contract', entityId: contractId, beforeValue: { status: 'pending_approval' }, afterValue: { status: 'approved' }, approvalStatus: 'approved', requestId: req.requestId });
+  res.json({ contract: data });
+});
+
+// Reject contract (owner/admin only)
+app.post('/api/projects/:projectId/contracts/:contractId/reject', async (req, res) => {
+  const { projectId, contractId } = req.params;
+  const ctx = await requireMemberWithRole(req, res, projectId);
+  if (!ctx) return;
+  if (!ROLE_CAN_APPROVE[ctx.roleV2]) return res.status(403).json({ error: 'Only owner or admin can reject contracts' });
+
+  const { reason } = req.body;
+  const { data: existing, error: fetchErr } = await supabase.from('project_contracts').select('*').eq('id', contractId).eq('project_id', projectId).maybeSingle();
+  if (fetchErr) return res.status(500).json({ error: fetchErr.message });
+  if (!existing) return res.status(404).json({ error: 'Contract not found' });
+  if (!['pending_approval'].includes(existing.status)) return res.status(400).json({ error: `Cannot reject contract with status: ${existing.status}` });
+
+  const now = new Date().toISOString();
+  const { data, error } = await supabase.from('project_contracts').update({ status: 'rejected', reviewed_by: ctx.user.username, reviewed_at: now, updated_at: now }).eq('id', contractId).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+
+  await writeApprovalLog({ recordType: 'contract', recordId: contractId, projectId, action: 'rejected', previousStatus: 'pending_approval', newStatus: 'rejected', actor: ctx.user.username, reason: reason || null });
+  auditLogGovernance({ projectId, userId: ctx.user.id, username: ctx.user.username, action: 'contract_rejected', entityType: 'contract', entityId: contractId, beforeValue: { status: 'pending_approval' }, afterValue: { status: 'rejected' }, approvalStatus: 'rejected', requestId: req.requestId });
+  res.json({ contract: data });
+});
+
+// -----------------------------------------------------------------------
+// GOVERNANCE ENDPOINTS — generic record lifecycle (experiments, files, materials)
+// -----------------------------------------------------------------------
+
+const GOVERNED_TABLES = {
+  experiment:  'experiments',
+  lab_experiment: 'lab_experiments',
+  file:        'project_files',
+  material:    'material_library',
+};
+
+// Submit any governed record for approval
+app.post('/api/projects/:projectId/records/:recordType/:recordId/submit', async (req, res) => {
+  const { projectId, recordType, recordId } = req.params;
+  const table = GOVERNED_TABLES[recordType];
+  if (!table) return res.status(400).json({ error: `Unknown record type: ${recordType}` });
+
+  const ctx = await requireMemberWithRole(req, res, projectId);
+  if (!ctx) return;
+  if (!ROLE_CAN_WRITE[ctx.roleV2]) return res.status(403).json({ error: 'Insufficient role to submit records' });
+
+  const idCol = recordType === 'lab_experiment' ? 'experiment_id' : 'id';
+  const { data: existing, error: fetchErr } = await supabase.from(table).select('evidence_identity_status').eq(idCol, recordId).maybeSingle();
+  if (fetchErr) return res.status(500).json({ error: fetchErr.message });
+  if (!existing) return res.status(404).json({ error: `${recordType} not found` });
+  if (!['draft', 'rejected'].includes(existing.evidence_identity_status)) return res.status(400).json({ error: `Cannot submit record with status: ${existing.evidence_identity_status}` });
+
+  const { error } = await supabase.from(table).update({ evidence_identity_status: 'pending_approval' }).eq(idCol, recordId);
+  if (error) return res.status(500).json({ error: error.message });
+
+  await writeApprovalLog({ recordType, recordId, projectId, action: 'submitted', previousStatus: existing.evidence_identity_status, newStatus: 'pending_approval', actor: ctx.user.username });
+  auditLogGovernance({ projectId, userId: ctx.user.id, username: ctx.user.username, action: `${recordType}_submitted`, entityType: recordType, entityId: recordId, beforeValue: { evidence_identity_status: existing.evidence_identity_status }, afterValue: { evidence_identity_status: 'pending_approval' }, approvalStatus: 'pending_approval', requestId: req.requestId });
+  res.json({ record_id: recordId, record_type: recordType, evidence_identity_status: 'pending_approval' });
+});
+
+// Approve any governed record (owner/admin only)
+app.post('/api/projects/:projectId/records/:recordType/:recordId/approve', async (req, res) => {
+  const { projectId, recordType, recordId } = req.params;
+  const table = GOVERNED_TABLES[recordType];
+  if (!table) return res.status(400).json({ error: `Unknown record type: ${recordType}` });
+
+  const ctx = await requireMemberWithRole(req, res, projectId);
+  if (!ctx) return;
+  if (!ROLE_CAN_APPROVE[ctx.roleV2]) return res.status(403).json({ error: 'Only owner or admin can approve records' });
+
+  const idCol = recordType === 'lab_experiment' ? 'experiment_id' : 'id';
+  const { data: existing, error: fetchErr } = await supabase.from(table).select('evidence_identity_status').eq(idCol, recordId).maybeSingle();
+  if (fetchErr) return res.status(500).json({ error: fetchErr.message });
+  if (!existing) return res.status(404).json({ error: `${recordType} not found` });
+  if (existing.evidence_identity_status !== 'pending_approval') return res.status(400).json({ error: `Cannot approve record with status: ${existing.evidence_identity_status}` });
+
+  const now = new Date().toISOString();
+  const { error } = await supabase.from(table).update({ evidence_identity_status: 'approved', reviewed_by: ctx.user.username, reviewed_at: now }).eq(idCol, recordId);
+  if (error) return res.status(500).json({ error: error.message });
+
+  await writeApprovalLog({ recordType, recordId, projectId, action: 'approved', previousStatus: 'pending_approval', newStatus: 'approved', actor: ctx.user.username, reason: req.body.reason || null });
+  auditLogGovernance({ projectId, userId: ctx.user.id, username: ctx.user.username, action: `${recordType}_approved`, entityType: recordType, entityId: recordId, beforeValue: { evidence_identity_status: 'pending_approval' }, afterValue: { evidence_identity_status: 'approved' }, approvalStatus: 'approved', requestId: req.requestId });
+  res.json({ record_id: recordId, record_type: recordType, evidence_identity_status: 'approved' });
+});
+
+// Reject any governed record (owner/admin only)
+app.post('/api/projects/:projectId/records/:recordType/:recordId/reject', async (req, res) => {
+  const { projectId, recordType, recordId } = req.params;
+  const table = GOVERNED_TABLES[recordType];
+  if (!table) return res.status(400).json({ error: `Unknown record type: ${recordType}` });
+
+  const ctx = await requireMemberWithRole(req, res, projectId);
+  if (!ctx) return;
+  if (!ROLE_CAN_APPROVE[ctx.roleV2]) return res.status(403).json({ error: 'Only owner or admin can reject records' });
+
+  const { reason } = req.body;
+  const idCol = recordType === 'lab_experiment' ? 'experiment_id' : 'id';
+  const { data: existing, error: fetchErr } = await supabase.from(table).select('evidence_identity_status').eq(idCol, recordId).maybeSingle();
+  if (fetchErr) return res.status(500).json({ error: fetchErr.message });
+  if (!existing) return res.status(404).json({ error: `${recordType} not found` });
+  if (existing.evidence_identity_status !== 'pending_approval') return res.status(400).json({ error: `Cannot reject record with status: ${existing.evidence_identity_status}` });
+
+  const now = new Date().toISOString();
+  const { error } = await supabase.from(table).update({ evidence_identity_status: 'rejected', reviewed_by: ctx.user.username, reviewed_at: now }).eq(idCol, recordId);
+  if (error) return res.status(500).json({ error: error.message });
+
+  await writeApprovalLog({ recordType, recordId, projectId, action: 'rejected', previousStatus: 'pending_approval', newStatus: 'rejected', actor: ctx.user.username, reason: reason || null });
+  auditLogGovernance({ projectId, userId: ctx.user.id, username: ctx.user.username, action: `${recordType}_rejected`, entityType: recordType, entityId: recordId, beforeValue: { evidence_identity_status: 'pending_approval' }, afterValue: { evidence_identity_status: 'rejected' }, approvalStatus: 'rejected', requestId: req.requestId });
+  res.json({ record_id: recordId, record_type: recordType, evidence_identity_status: 'rejected', reason: reason || null });
+});
+
+// Lock any governed record (owner/admin only — locked records cannot be edited)
+app.post('/api/projects/:projectId/records/:recordType/:recordId/lock', async (req, res) => {
+  const { projectId, recordType, recordId } = req.params;
+  const table = GOVERNED_TABLES[recordType];
+  if (!table) return res.status(400).json({ error: `Unknown record type: ${recordType}` });
+
+  const ctx = await requireMemberWithRole(req, res, projectId);
+  if (!ctx) return;
+  if (!ROLE_CAN_APPROVE[ctx.roleV2]) return res.status(403).json({ error: 'Only owner or admin can lock records' });
+
+  const idCol = recordType === 'lab_experiment' ? 'experiment_id' : 'id';
+  const { data: existing, error: fetchErr } = await supabase.from(table).select('evidence_identity_status').eq(idCol, recordId).maybeSingle();
+  if (fetchErr) return res.status(500).json({ error: fetchErr.message });
+  if (!existing) return res.status(404).json({ error: `${recordType} not found` });
+
+  const { error } = await supabase.from(table).update({ evidence_identity_status: 'locked' }).eq(idCol, recordId);
+  if (error) return res.status(500).json({ error: error.message });
+
+  await writeApprovalLog({ recordType, recordId, projectId, action: 'locked', previousStatus: existing.evidence_identity_status, newStatus: 'locked', actor: ctx.user.username });
+  auditLogGovernance({ projectId, userId: ctx.user.id, username: ctx.user.username, action: `${recordType}_locked`, entityType: recordType, entityId: recordId, beforeValue: { evidence_identity_status: existing.evidence_identity_status }, afterValue: { evidence_identity_status: 'locked' }, requestId: req.requestId });
+  res.json({ record_id: recordId, record_type: recordType, evidence_identity_status: 'locked' });
+});
+
+// -----------------------------------------------------------------------
+// APPROVAL LOGS — read history for a project
+// -----------------------------------------------------------------------
+
+app.get('/api/projects/:projectId/approval-logs', async (req, res) => {
+  const { projectId } = req.params;
+  const ctx = await requireMemberWithRole(req, res, projectId);
+  if (!ctx) return;
+
+  const { record_type, record_id, limit = 50 } = req.query;
+  let query = supabase.from('approval_logs').select('*').eq('project_id', projectId).order('created_at', { ascending: false }).limit(Number(limit) || 50);
+  if (record_type) query = query.eq('record_type', record_type);
+  if (record_id)   query = query.eq('record_id', record_id);
+
+  const { data, error } = await query;
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ logs: data || [], count: (data || []).length });
+});
+
+// -----------------------------------------------------------------------
+// RBAC — member role management (owner-only)
+// -----------------------------------------------------------------------
+
+// Update a member's role_v2
+app.patch('/api/projects/:projectId/members/:userId/role', async (req, res) => {
+  const { projectId, userId } = req.params;
+  const ctx = await requireMemberWithRole(req, res, projectId);
+  if (!ctx) return;
+  if (ctx.roleV2 !== 'owner' && ctx.user.username !== 'admin') return res.status(403).json({ error: 'Only project owner can change member roles' });
+
+  const { role_v2 } = req.body;
+  if (!RBAC_ROLES_V2.includes(role_v2)) return res.status(400).json({ error: `Invalid role_v2. Must be one of: ${RBAC_ROLES_V2.join(', ')}` });
+
+  const { data: before } = await supabase.from('project_members').select('role_v2').eq('project_id', projectId).eq('user_id', userId).maybeSingle();
+  const { data, error } = await supabase.from('project_members').update({ role_v2 }).eq('project_id', projectId).eq('user_id', userId).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+
+  auditLogGovernance({ projectId, userId: ctx.user.id, username: ctx.user.username, action: 'member_role_updated', entityType: 'project_member', entityId: userId, beforeValue: before, afterValue: { role_v2 }, requestId: req.requestId });
+  res.json({ member: data });
+});
+
 // ---------- Health ----------
 app.get('/health', async (req, res) => {
   const start = Date.now();
