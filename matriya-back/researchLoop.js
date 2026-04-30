@@ -143,8 +143,8 @@ function getAgentPrompt(agentName, query, previousOutput, ragContext = null, has
     synthesis: {
       system: 'You are the synthesis agent for a materials science system.' + hebrewOnly + dataGroundingRule + provenanceSeparation
         + (hasLabData
-          ? ' Based on STRUCTURED_LAB_SOURCE, make a CLEAR recommendation; cite experiment_id and numeric fields from that source only. If RAG text mentions the same IDs, label it explicitly as contextual document text, not as the measurement authority.'
-          : ' Synthesize the analysis, research, and critique into a final concise conclusion.'),
+          ? ' Based on STRUCTURED_LAB_SOURCE, write a clear analysis in plain Hebrew text: cite each experiment_id, compare numeric values, and state which performs better and why. STRICTLY FORBIDDEN: do NOT write "decision_status:", "recommended_action:", or any other structured field label in your output — those values are computed separately by the backend. Output only your analysis, comparison, and conclusion in plain text.'
+          : ' Synthesize the analysis, research, and critique into a final concise conclusion in plain Hebrew text. STRICTLY FORBIDDEN: do NOT write "decision_status:" or "recommended_action:" labels in your output.'),
       user: base
     }
   };
@@ -329,6 +329,7 @@ export async function runLoop(sessionId, query, ragService, filterMetadata = nul
   if (selectedExperiments.length > 0) {
     outputs.selected_experiments = selectedExperiments.map(e => ({
       experiment_id:      e.experiment_id,
+      project_id:         e.project_id ?? null,
       expansion_ratio:    e.expansion_ratio ?? null,
       adhesion:           e.adhesion ?? null,
       viscosity:          e.viscosity ?? null,

@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # MATRIYA v1.1 - ALL 8 CONTROLLED TEST QUERIES (LOCAL)
 # Flow: POST /research/session (with project_id) → 
 #       POST /api/research/run (with session_id)
@@ -8,7 +8,7 @@
 $OutputEncoding = [System.Text.Encoding]::UTF8
 chcp 65001 | Out-Null
 
-$BASE           = "http://localhost:8000"
+$BASE           = "https://matriya-system-project-production.up.railway.app"
 $ACTIVE_ID      = "aaaaaaaa-0001-0001-0001-000000000001"
 $INCOMPLETE_ID  = "bbbbbbbb-0002-0002-0002-000000000002"
 

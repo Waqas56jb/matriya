@@ -3968,6 +3968,16 @@ app.post("/api/research/run", async (req, res) => {
         return res.status(500).json({ error: result.error, outputs: result.outputs || {}, justifications: result.justifications || [] });
       }
       const synthText = result.outputs?.synthesis || '';
+      // Sanitize reasoning: strip lines where the LLM outputs structural field labels like
+      // "decision_status: EXP-004 performs better" or "recommended_action: Continue with EXP-004".
+      // These values must only appear in the computed JSON fields — never in the reasoning text.
+      // We derive decision/action from the ORIGINAL synthText, then sanitize for the response.
+      const reasoningText = synthText
+        .split('\n')
+        .filter(line => !/^\s*(decision[_\s]status|recommended[_\s]action)\s*[:\-]/i.test(line))
+        .join('\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
       // If the query is ASKING about missing data (e.g. "list missing data", "what is missing?"),
       // override GO/INSUFFICIENT_DATA → ITERATE so response says "collect more data" rather than "ready to test".
       // Negative: do NOT trigger if "missing data" appears only as a requested output field (e.g. "risks/missing data").
@@ -4004,7 +4014,7 @@ app.post("/api/research/run", async (req, res) => {
         decision:           decisionStatus,
         decision_status:    decisionStatus,
         recommended_action: recommendedAction,
-        reasoning: synthText,
+        reasoning: reasoningText,
         outputs: result.outputs,
         justifications: result.justifications,
         selected_experiments: result.outputs?.selected_experiments || [],
