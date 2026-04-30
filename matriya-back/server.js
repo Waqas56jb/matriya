@@ -3920,6 +3920,7 @@ app.post("/api/research/run", async (req, res) => {
               decision:           'INSUFFICIENT_DATA',
               decision_status:    'INSUFFICIENT_DATA',
               recommended_action: 'NEED_MORE_DATA',
+              selected_project_id: sessionProjectId || null,
               reasoning:          stopMsg,
               outputs:            { synthesis: stopMsg, analysis: stopMsg },
               selected_experiments: [],
@@ -4038,6 +4039,7 @@ app.post("/api/research/run", async (req, res) => {
     const kernelResult = await kernel.processUserIntent(query.trim(), null, null, null);
     return res.json({
       use_4_agents: false,
+      selected_project_id: sessionProjectId || null,
       decision: kernelResult.decision,
       state: kernelResult.state,
       answer: kernelResult.answer,
