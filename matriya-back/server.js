@@ -3882,6 +3882,7 @@ app.post("/api/research/run", async (req, res) => {
     //     knows what is available and can correctly flag limitations.
     let contextualQuery = query;
     let earlyStopped = false;
+    let materialGateMissing = false; // true when project is missing critical IFR materials
     if (sessionProjectId && managementBase) {
       try {
         const matResp = await axios.get(`${managementBase}/api/matriya/project-materials`, {
@@ -3905,6 +3906,7 @@ app.post("/api/research/run", async (req, res) => {
             (m.role_or_function || '').toLowerCase().includes('char'));
           const missingEssential = [];
           if (!hasCharFormer) missingEssential.push('char_former/carbon-source (e.g. PER)');
+          if (missingEssential.length > 0) materialGateMissing = true;
 
           // Gate A: if this is a proposal query AND critical material is absent → STOP immediately
           const isProposalQuery = /propose.*formul|candidate.*formul|suggest.*formula|next.*formul|formulat.*improve|create.*formul/i.test(query);
@@ -3984,6 +3986,12 @@ app.post("/api/research/run", async (req, res) => {
       // With required materials present, a candidate CAN be proposed → downgrade to ITERATE.
       const isProposalQueryLocal = /propose.*formul|candidate.*formul|suggest.*formula|next.*formul|formulat.*improve|create.*formul/i.test(query);
       if (isProposalQueryLocal && !earlyStopped && allExps.length > 0 && decisionStatus === 'INSUFFICIENT_DATA') {
+        decisionStatus = 'ITERATE';
+      }
+      // Fix Q5: when the project is missing critical materials (materialGateMissing=true) and the
+      // LLM declares GO (e.g. identifies a "winner" experiment), cap to ITERATE — the project does
+      // not have all required components to greenlight a formulation test.
+      if (materialGateMissing && !earlyStopped && decisionStatus === 'GO') {
         decisionStatus = 'ITERATE';
       }
       // For ITERATE on a missing-data query, recommend NEED_MORE_DATA not TEST.
