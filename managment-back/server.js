@@ -993,16 +993,20 @@ async function _ingestInboundAttachment(projectId, emailId, attachment) {
     // Insert project_files row (try with source_email_id first, fall back without it)
     let fileRow = null;
     const { data: r1, error: e1 } = await supabase.from('project_files').insert({
-      project_id: projectId,
-      original_name: filename,
+      project_id:          projectId,
+      file_name:           filename,
+      original_name:       filename,
+      file_type:           mime || null,
       folder_display_name: 'Email Attachments',
-      source_email_id: emailId,
+      source_email_id:     emailId,
     }).select().single();
 
     if (e1) {
       const { data: r2, error: e2 } = await supabase.from('project_files').insert({
-        project_id: projectId,
-        original_name: filename,
+        project_id:          projectId,
+        file_name:           filename,
+        original_name:       filename,
+        file_type:           mime || null,
         folder_display_name: 'Email Attachments',
       }).select().single();
       if (e2 || !r2) {
@@ -1111,8 +1115,10 @@ async function _ingestInboundEmailToRag(projectId, emailId, fromEmail, subject, 
     ].join('\n');
     const buffer = Buffer.from(content, 'utf8');
     const { data: fileRow, error: fileErr } = await supabase.from('project_files').insert({
-      project_id: projectId,
-      original_name: filename,
+      project_id:          projectId,
+      file_name:           filename,
+      original_name:       filename,
+      file_type:           'text/plain',
       folder_display_name: 'Emails'
     }).select().single();
     if (fileErr || !fileRow) {
@@ -4331,8 +4337,10 @@ async function createProjectFileFromBuffer(projectId, ctx, buffer, originalName,
   const auditSource = options.auditSource || 'email_attachment';
   const syncReasonTag = options.syncReason || 'email/buffer';
   const { data: row, error: insertErr } = await supabase.from('project_files').insert({
-    project_id: projectId,
-    original_name: name,
+    project_id:          projectId,
+    file_name:           name,
+    original_name:       name,
+    file_type:           contentType || null,
     folder_display_name: folderDisplayName || null
   }).select().single();
   if (insertErr) throw insertErr;
@@ -4668,10 +4676,22 @@ app.post('/api/projects/:projectId/files', limiterUpload, upload.single('file'),
   const utf8Name = req.body && typeof req.body.originalName === 'string' && req.body.originalName.trim();
   const originalName = (utf8Name ? req.body.originalName.trim() : null) || file.originalname || 'file';
   const folderDisplayName = req.body && typeof req.body.folder_display_name === 'string' && req.body.folder_display_name.trim() ? req.body.folder_display_name.trim() : null;
+
+  // Guard: file_name is NOT NULL in project_files — must be set before insert.
+  const file_name = originalName;
+  if (!file_name) {
+    return res.status(400).json({ error: 'file_name is required' });
+  }
+  console.log('[upload] insert payload:', { file_name, mimetype: file.mimetype, size: file.size });
+
   try {
     const { data: row, error: insertErr } = await supabase.from('project_files').insert({
-      project_id: projectId,
-      original_name: originalName,
+      project_id:          projectId,
+      file_name:           file_name,
+      original_name:       originalName,
+      file_type:           file.mimetype || null,
+      uploaded_by:         ctx.user.username || null,
+      created_by:          ctx.user.username || null,
       folder_display_name: folderDisplayName || null
     }).select().single();
     if (insertErr) throw insertErr;
