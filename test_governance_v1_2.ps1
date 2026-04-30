@@ -5,7 +5,11 @@ chcp 65001 | Out-Null
 $BASE = "http://localhost:8001"
 
 # ---- Auth: login as admin to get token ----
-$loginBody = @{ username = "waqas56jb@gmail.com"; password = "Hamza@123!" } | ConvertTo-Json
+# Credentials: set TEST_USERNAME and TEST_PASSWORD as environment variables before running.
+# e.g.:  $env:TEST_USERNAME = "your@email.com"; $env:TEST_PASSWORD = "YourPass"
+$testUser = if ($env:TEST_USERNAME) { $env:TEST_USERNAME } else { Read-Host "Username" }
+$testPass = if ($env:TEST_PASSWORD) { $env:TEST_PASSWORD } else { (Read-Host "Password" -AsSecureString | ConvertFrom-SecureString -AsPlainText) }
+$loginBody = @{ username = $testUser; password = $testPass } | ConvertTo-Json
 try {
   $auth = Invoke-RestMethod -Uri "$BASE/api/auth/login" -Method POST -Body $loginBody -ContentType "application/json" -TimeoutSec 10
   $token = $auth.access_token
