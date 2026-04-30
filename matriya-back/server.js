@@ -3998,14 +3998,23 @@ app.post("/api/research/run", async (req, res) => {
       if (isProposalQueryLocal && !earlyStopped && allExps.length > 0 && decisionStatus === 'INSUFFICIENT_DATA') {
         decisionStatus = 'ITERATE';
       }
-      // Fix Q5: when the project is missing critical materials (materialGateMissing=true) and the
-      // LLM declares GO (e.g. identifies a "winner" experiment), cap to ITERATE — the project does
-      // not have all required components to greenlight a formulation test.
+      // Fix Q5/comparison gate: when the project is missing critical materials
+      // (materialGateMissing=true), cap any GO → ITERATE so we never greenlight a test
+      // when the material library is incomplete.
       if (materialGateMissing && !earlyStopped && decisionStatus === 'GO') {
         decisionStatus = 'ITERATE';
       }
-      // For ITERATE on a missing-data query, recommend NEED_MORE_DATA not TEST.
-      const recommendedAction = (isMissingDataQuery && decisionStatus === 'ITERATE')
+      // Deterministic post-comparison gate (David v1.1 smoke-test requirement):
+      // When the project material library is incomplete (materialGateMissing=true), ANY query
+      // — comparison, "which is better", "can we proceed", "recommend next test" — must return
+      // NEED_MORE_DATA, never TEST.  deriveRecommendedAction maps ITERATE → TEST which is
+      // correct for complete projects but wrong here.
+      // isMissingDataQuery covers explicit "list missing data" queries; materialGateMissing
+      // covers all other query types on an incomplete project.
+      const recommendedAction = (
+        (isMissingDataQuery && decisionStatus === 'ITERATE') ||
+        (materialGateMissing && !earlyStopped)
+      )
         ? 'NEED_MORE_DATA'
         : deriveRecommendedAction(decisionStatus);
       return res.json({
