@@ -2476,6 +2476,12 @@ function RagTab({ projectId }) {
   const onFileChange = async (e) => {
     const fileList = e.target.files;
     if (!fileList?.length) return;
+    // Frontend pre-upload gate: block if backend signals vector_store.write is missing
+    if (gptRagStatus?.rag_upload_blocked) {
+      setError('RAG upload disabled — missing permission: vector_store.write. Contact admin to update the OpenAI API key in Railway.');
+      e.target.value = '';
+      return;
+    }
     setError(null);
     const files = Array.from(fileList);
     const folderDisplayName = files[0]?.webkitRelativePath ? files[0].webkitRelativePath.split('/')[0].trim() || null : null;
@@ -2760,10 +2766,31 @@ function RagTab({ projectId }) {
             aria-label={t.uploadFolderOption}
             tabIndex={-1}
           />
+          {gptRagStatus?.rag_upload_blocked && (
+            <div
+              style={{
+                background: '#2d1a1a',
+                border: '1px solid #c0392b',
+                borderRadius: 6,
+                padding: '8px 12px',
+                marginBottom: 8,
+                color: '#e74c3c',
+                fontSize: '0.85rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8
+              }}
+            >
+              <span>🔒</span>
+              <span>RAG upload disabled — missing permission: <strong>vector_store.write</strong>. Ask admin to update the OpenAI API key.</span>
+            </div>
+          )}
           <button
             type="button"
             className="rag-file-button"
             onClick={() => setShowUploadTypeChoice(true)}
+            disabled={!!gptRagStatus?.rag_upload_blocked}
+            title={gptRagStatus?.rag_upload_blocked ? 'RAG upload disabled — missing permission: vector_store.write' : undefined}
           >
             {t.chooseFileMultiple}
           </button>
