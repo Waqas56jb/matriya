@@ -4011,9 +4011,10 @@ app.post("/api/research/run", async (req, res) => {
       return res.json({
         run_id: result.run_id != null ? String(result.run_id) : null,
         mode: 'result',
-        decision:           decisionStatus,
-        decision_status:    decisionStatus,
-        recommended_action: recommendedAction,
+        decision:             decisionStatus,
+        decision_status:      decisionStatus,
+        recommended_action:   recommendedAction,
+        selected_project_id:  sessionProjectId || null,
         reasoning: reasoningText,
         outputs: result.outputs,
         justifications: result.justifications,
