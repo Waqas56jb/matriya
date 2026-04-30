@@ -3914,6 +3914,7 @@ app.post("/api/research/run", async (req, res) => {
             const stopMsg = `INSUFFICIENT_DATA: Project material library [${matList}] is missing critical IFR component(s): ${missingEssential.join(', ')}. Cannot propose a reliable candidate formulation without these materials. Add the missing materials to the project material library first.`;
             logger.info(`[research/run] Material gate blocked proposal — missing: ${missingEssential.join(',')}`);
             earlyStopped = true;
+            // Always include selected_project_id so client always gets the real UUID back.
             return res.json({
               run_id:             null,
               mode:               'result',
