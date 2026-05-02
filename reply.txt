@@ -1,0 +1,283 @@
+﻿================================================================================
+TO:       David Shoshan — MATRIYA Lab Architect
+FROM:     Waqas Naveed — MATRIYA Engineering / Delivery
+RE:       Revised D.3 & D.4 EXECUTABLE PLAN (no placeholders) | Your corrections absorbed |
+          Submission per your directive 6 May 2026, 18:00 IDT
+CITATION: Your message prescribing WHO/WHERE proof / timelines / rollback authority /
+          WRAP target — *[paste verbatim quote + sent timestamp upon transmission — Rule E]*
+
+DOCUMENT STATUS: **Revised plan ACCEPTED — schedule LOCKED** (per your directive after
+6 May submission). **`[cite your acceptance message + timestamp — Rule E]`**
+
+================================================================================
+PART Y — ACCEPTANCE & LOCKED SCHEDULE (**your confirmation on record**)
+
+  • **8 May 2026, 18:00 IDT** — **Staging migration** (**executed by David Shoshan**).
+
+  • **8 May 2026** (same calendar day) — **`fix/chai-scope-domain-token-overlap-v110`** branch
+    **created** (**Waqas Naveed**).
+
+  • **10 May 2026, 18:00 IDT** — **Production migration** (**executed by David Shoshan**).
+
+  • **10 May 2026, 20:00 IDT** — **Proof package** from **Waqas Naveed** (**Email + WhatsApp**).
+
+  • **12 May 2026, 18:00 IDT** — **chai-scope** fix merged **or** technical memo delivered.
+
+  • **12 May 2026, evening** — **WRAP GO decision**.
+
+We **continue under GO (4 May)** on **`claude/decision-run-v110`**.
+
+-------------------------------------------------------------------------------
+PART X — STAGING GATE LOCKED (**your confirmation — execution authorized**)
+
+  • **[B2]** is **explicitly CONFIRMED** as a **HARD staging gate** — staging **never** clears without
+        successful **[B2]** completion.
+
+  • **Proceed with execution per locked schedule** (Part Y).
+
+  • **Mandatory coordination:** **Waqas Naveed** shall **notify David Shoshan (Email + WhatsApp) in
+        advance BEFORE the staging migration run ([B1])** — **no silent execution window** —
+        sufficient lead time for Supabase DDL readiness and verifier prep.
+
+**(Rule E cue:** paste your **Confirmed / hard gate / notify before staging** message + sent
+timestamp when filing this appendix.)
+
+
+
+================================================================================
+PART Z — D.3(b) MANDATORY STAGING VALIDATION (**your correction — LOCKED requirement**)
+
+  • **Staging is NOT GREEN** unless **all** staging checks below succeed — including **[B2]**.
+
+  **[B1] Migration executed** on staging Supabase (David) — DDL from repo migration file.
+
+  **[B2] MANDATORY SMOKE (Waqas) — unconditional**
+
+        Even when **no** deployed backend is routed to staging DB:
+
+          1. Run **matriya-back locally** (or equivalent isolated Node process) with **POSTGRES_URL**
+             / **DATABASE_URL** (or Sequelize pool URL) pointing at the **staging** Supabase
+             Postgres database — **staging connection only**, not production.
+
+          2. **`POST http://localhost:<port>/decision/run`** with a **valid §2.2 contract body**
+             (e.g. **`lab`** fixture path that completes without external LLM dependencies; or
+             **`question`** path if staging has a valid **`research_sessions`** row and David
+             authorizes that traffic — **coordinate with David** so the call persists an audit row).
+
+          3. On **that same staging database**, **`SELECT`** until **confirmed:**
+
+             **≥ 1 row** in **`decision_audit_log`** where **`decision_run_v11_audit IS NOT NULL`.**
+
+             (Optional narrow check aligned with prod proof posture: verify the triggering run’s trace
+             appears in the **`decision_run_v11_audit`** JSON payload.)
+
+          4. **Waqas** reports **PASS/FAIL** to **David** by **Email + WhatsApp** same day (**8 May**
+             window, before prod cutover verbal OK).
+
+      **FAILURE at [B2] ⇒ staging NOT GREEN ⇒ no production migration** until remediated
+      (**David Shoshan — authority via Email / WhatsApp**).
+
+
+================================================================================
+PART B — D.3 MIGRATION (FULLY ASSIGNABLE RUNBOOK — `decision_audit_log`)
+
+Migration file (immutable in repo):
+
+  matriya-back/migrations/decision_run_v110_audit.sql
+
+Statements:
+
+  ALTER TABLE decision_audit_log ALTER COLUMN session_id DROP NOT NULL;
+
+  ALTER TABLE decision_audit_log
+    ADD COLUMN IF NOT EXISTS decision_run_v11_audit JSONB DEFAULT NULL;
+
+--------------------------------------------------------------------------------
+(a) WHO — EXECUTION & VERIFICATION (**no DBA lane on this engagement**)
+
+  • **Execution + approval (Supabase owner):** **David Shoshan**
+        — Applies DDL in Supabase SQL editor / approved path; **go/no-go** for staging and production.
+
+  • **Verifier:** **Waqas Naveed**
+        — Confirms DDL success in UI or CLI echo; runs smoke checklist; validates proof query output,
+          aligns text results with Email proof package.
+
+--------------------------------------------------------------------------------
+(b)(c) WHEN & WHERE (**staging-first**, fixed calendar — **Israel Daylight Time**)
+
+  • **Staging — complete by:** **Thursday 8 May 2026, 18:00 IDT**
+
+        Environment: Supabase staging project (**same schema lineage as prod**).
+
+        **[B1] + [B2]** mandatory sequence — **`[B2]`** defined verbatim in **Part Z** (**local
+        `POST /decision/run` against staging DB** + **`decision_audit_log.decision_run_v11_audit`
+        non-null proof**).
+
+        Auxiliary: **`GET /health`** on any running local instance used for the smoke.
+
+        **Staging is not green without [B2].**
+
+        **Proceed to prod only after David confirms staging OK** (Email / WhatsApp) **including
+        verifier sign-off that [B2] passed.**
+
+  • **Production — complete by:** **Saturday 10 May 2026, 18:00 IDT**
+
+        Actions: Execute same migration script on production Supabase.
+
+  • **Proof package — submitted by:** **Saturday 10 May 2026, 20:00 IDT**
+
+        **After** prod migration and traffic or scripted audit write path producing rows.
+
+--------------------------------------------------------------------------------
+(d) ROLLBACK — AUTHORITY (**no incident-commander tier**)
+
+  • Any decision to **stop**, **freeze**, **`ROLLBACK`**, **reverse DDL**, **restore backup**, or
+    **defer** remediation is taken **only by David Shoshan**, communicated explicitly via **Email** or
+    **WhatsApp**.
+
+  • **Waqas Naveed** executes **technical steps only** when and as **David instructs**.
+
+  Technical reference (informational — not authorised without David’s signal):
+
+      — If failure inside a single reversible transaction wrapper: **`ROLLBACK;`** per PostgreSQL norms.
+
+      — Post-apply: optional reverse script class (e.g. `DROP COLUMN IF EXISTS decision_run_v11_audit`;
+        `session_id SET NOT NULL` **only** if data state permits — never run blindly) — **never run
+        on prod without David’s written or WhatsApp‑logged OK.**
+
+--------------------------------------------------------------------------------
+(e) PROOF CHANNEL (**no JIRA / no vault artefacts**)
+
+  **Delivery:**
+
+    1. **Email:** Full text output of mandatory query (copy/paste rows or structured paste).
+
+    2. **WhatsApp:** **Screenshot(s)** showing the query and result grid (same 5‑row posture).
+
+    3. **Archival:** David archives evidence in **Google Drive** (**David’s ledger**).
+
+  **Mandatory SQL (exact posture):**
+
+      SELECT id, decision, decision_run_v11_audit
+      FROM decision_audit_log
+      WHERE decision_run_v11_audit IS NOT NULL
+      ORDER BY id DESC
+      LIMIT 5;
+
+--------------------------------------------------------------------------------
+PART C — D.4 CHAI‑SCOPE (TESTABLE PLAN — FIXED DATES)
+
+Failing assertion (engineering record): **`scripts/verify-chai-scope.mjs`** —
+“**Domain: chunk with no query-token hits is dropped**” — under
+**`MATRIYA_DOMAIN_MIN_QUERY_OVERLAP='2'`** with Hebrew iron query (per script: `מה אחוז ברזל בתוסף`) versus glucose-only chunk body.
+
+**(a)** **Branch:** **`fix/chai-scope-domain-token-overlap-v110`**
+
+**(b)** **Owner:** **Waqas Naveed** — accepts accountability for branch lifecycle, RCA, merge or memo.
+
+**(c)** **Branch creation date:** **Thursday 8 May 2026** (branch exists upstream / remote visible).
+
+**(d)** **Fix merged OR technical memo submitted:** **Monday 12 May 2026, 18:00 IDT** (deadline).
+
+**(e)** **PASS criterion:**
+
+        **npm run verify:chai-scope → EXIT 0**
+
+        **npm run test:unit → EXIT 0**
+
+**(f)** Decision rule:**
+        Prefer **code fix** restoring green CI aligned with **`domainAndGenerationGate`** policy;
+        if policy ambiguity remains unresolved, **technical justification memo** to David for
+        adjudication — **memo does not substitute green CI unless David accepts in writing**.
+
+--------------------------------------------------------------------------------
+PART D — WRAP GO INTEGRATION
+
+**WRAP GO** — **Tuesday 12 May 2026, evening**, **subject only to**:
+
+  ✓ **D.3** staging + prod + **Email + WhatsApp proof** by **10 May 20:00 IDT**
+
+  ✓ **D.4** **deadline outcomes** (**12 May 18:00 IDT**) satisfied as above
+
+-------------------------------------------------------------------------------
+PART E — RULE E NOTE
+
+Attributed statements about your position retain **verbatim extract + transmitted timestamp**.
+
+--------------------------------------------------------------------------------
+PART F — EMAIL / WHATSAPP ACK (send when you transmit this record)
+
+Dear David,
+
+Thank you — acknowledged. **[B2]** is recorded as a **hard staging gate**. We **proceed per the locked
+schedule** and will contact you (**Email + WhatsApp**) **before** your staging DDL run **([B1])** so
+timing aligns.
+
+Respectfully,  
+**Waqas Naveed**
+
+--------------------------------------------------------------------------------
+PART G — SIGN‑OFF (document control)
+
+**Waqas Naveed**
+
+================================================================================
+PART H — SEND NOW (AnyDesk — availability + readiness)
+
+Dear David,
+
+Thank you — I’m happy to pair on AnyDesk for staging validation (**steps 1–5** exactly as you listed —
+SQL Editor DDL, **`POST /decision/run`** on staging DB, **`SELECT … LIMIT 5`** live).
+
+**My availability (IDT) — pick one slot or counter-propose:**
+
+  • **[Option A]** *[fill: e.g. TODAY / tomorrow + window]*
+
+  • **[Option B]** *[fill: alternate window]*
+
+  • **[Option C]** *[fill: fallback]*
+
+I will have **AnyDesk ready**, local **matriya-back** checkout on **`claude/decision-run-v110`**, and can
+wire **staging** **`POSTGRES_URL`** / **`DATABASE_URL`** during the session. **`MATRIYA_BACK_URL`**
+health check only if needed — **`/decision/run`** is on same server.
+
+Please send **your AnyDesk ID / session link** when you confirm the slot — I’ll notify **Email +
+WhatsApp** **[B1] pre-flight** per our locked plan as soon as you acknowledge the time.
+
+Best,  
+**Waqas Naveed**
+
+--------------------------------------------------------------------------------
+PART W — LIVE STAGING SESSION (AnyDesk joint validation — invited by David)
+
+**(Rule E:** paste verbatim AnyDesk-invite email + transmitted timestamp.)
+
+  • Joint session — your steps **1 → 5** scripted below.
+
+  1. Supabase SQL Editor (**staging**) → run:
+
+         ALTER TABLE decision_audit_log ALTER COLUMN session_id DROP NOT NULL;
+
+         ALTER TABLE decision_audit_log
+           ADD COLUMN IF NOT EXISTS decision_run_v11_audit JSONB DEFAULT NULL;
+
+  2. **`POST /decision/run`** with backend pointed at **staging Postgres** (**[B2]**).
+
+  3. Proof query (**live screen share**):
+
+         SELECT id, decision, decision_run_v11_audit
+         FROM decision_audit_log
+         WHERE decision_run_v11_audit IS NOT NULL
+         ORDER BY id DESC
+         LIMIT 5;
+
+  4. Review rows together → **staging green evidence**.
+
+--------------------------------------------------------------------------------
+APPENDIX — Schema file honesty
+
+`matriya-back/migrations/decision_run_v110_audit.sql` — **13 lines**, two DDL operations + comments.
+
+================================================================================
+END — REVISED EXECUTABLE PLAN (+ AnyDesk staging runbook annex)
+================================================================================

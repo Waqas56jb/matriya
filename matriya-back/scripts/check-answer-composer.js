@@ -111,14 +111,18 @@ assert.ok(Array.isArray(withExt.external_context) && withExt.external_context.le
 
 const keys = Object.keys(valid).sort();
 assert.deepStrictEqual(keys, [
+  'action_required',
   'answer',
   'blocked_reason',
   'constraint_rules',
+  'data_source',
   'decision_status',
   'decision_trace',
   'evidence',
   'external_context',
   'next_step',
+  'source_authority',
+  'source_isolation_confirmed',
 ]);
 assert.ok(Array.isArray(valid.constraint_rules));
 

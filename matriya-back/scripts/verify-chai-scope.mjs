@@ -72,7 +72,7 @@ console.log('--- 2) Latin ingredients in Hebrew query (XANTHAN / formula) ---');
   assertConclusionTrue('xanthan overlap', q, chunks);
 }
 
-console.log('--- 3) Domain: chunk with no query-token hits is dropped ---');
+console.log('--- 3) Domain: chunk with no query-token hits is dropped when another chunk hits ---');
 {
   const prevDom = process.env.MATRIYA_DOMAIN_MIN_QUERY_OVERLAP;
   process.env.MATRIYA_DOMAIN_MIN_QUERY_OVERLAP = '2';
@@ -86,10 +86,18 @@ console.log('--- 3) Domain: chunk with no query-token hits is dropped ---');
       },
       { document: 'ברזל 5% בתוסף', text: 'ברזל 5% בתוסף', metadata: { filename: 'b.pdf' } }
     ];
+    // Single chunk with zero overlap: domain gate returns as-is (maxO===0 — cannot distinguish).
     const onlyA = filterRetrievalRowsByQueryDomain(q, [rows[0]]);
-    assert.strictEqual(onlyA.length, 0, 'chunk without query terms should be dropped');
+    assert.strictEqual(onlyA.length, 1, 'lone zero-overlap chunk is kept (no stronger candidate in set)');
     const onlyB = filterRetrievalRowsByQueryDomain(q, [rows[1]]);
     assert.ok(onlyB.length >= 1);
+    const both = filterRetrievalRowsByQueryDomain(q, rows);
+    assert.strictEqual(
+      both.length,
+      1,
+      'irrelevant chunk should drop when a relevant chunk establishes query terms in the set'
+    );
+    assert.strictEqual(both[0].metadata.filename, 'b.pdf');
   } finally {
     if (prevDom === undefined) delete process.env.MATRIYA_DOMAIN_MIN_QUERY_OVERLAP;
     else process.env.MATRIYA_DOMAIN_MIN_QUERY_OVERLAP = prevDom;
