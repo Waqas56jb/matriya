@@ -218,6 +218,188 @@ export function evidenceFromRunLoop(result, ruleIds = []) {
   };
 }
 
+/** David checklist — `{ "mode":"lab", "data": { "rows":[...] } }` (distinct from §2.2 input/context envelope). */
+export function isDavidLabRowsBody(raw) {
+  if (!raw || typeof raw !== 'object') return false;
+  if (String(raw.mode || '').trim() !== 'lab') return false;
+  if (!raw.data || typeof raw.data !== 'object') return false;
+  if (!Array.isArray(raw.data.rows)) return false;
+  return true;
+}
+
+function canonicalDavidLabRowsForHash(body) {
+  return stableStringify({ mode: 'lab', data: { rows: body.data.rows } });
+}
+
+function computeDavidLabInputHashHex(body) {
+  return createHash('sha256')
+    .update(`DAVID_LAB_ROWS_V11\n${canonicalDavidLabRowsForHash(body)}`, 'utf8')
+    .digest('hex');
+}
+
+function parseMeasurementNumber(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+const DAVID_LAB_MEAS_KEYS = ['APP', 'PER', 'MEL', 'nanoclay', 'IFR', 'expansion'];
+
+/** Deterministic evaluation for David's lab row integrity tests. */
+function evaluateDavidLabRowsEnvelope(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return {
+      decision: 'STOP',
+      fsctm_state: 'BLOCKED',
+      confidence: 0,
+      data_grade: normaliseGrade(CONTRACT_DATA_GRADE.NONE),
+      data_source: DATA_SOURCE.DB_COMPUTED,
+      reason: 'No lab rows supplied.',
+      evidence: emptyEvidence(),
+      ruleIds: ['DAVID_LAB_EMPTY_ROWS']
+    };
+  }
+
+  const row = rows[0];
+  if (!row || typeof row !== 'object') {
+    return {
+      decision: 'STOP',
+      fsctm_state: 'BLOCKED',
+      confidence: 0,
+      data_grade: normaliseGrade(CONTRACT_DATA_GRADE.NONE),
+      data_source: DATA_SOURCE.DB_COMPUTED,
+      reason: 'Invalid lab row object.',
+      evidence: emptyEvidence(),
+      ruleIds: ['DAVID_LAB_INVALID_ROW']
+    };
+  }
+
+  const keys = Object.keys(row);
+  const experimentId = row.experiment_id != null ? String(row.experiment_id).trim() : '';
+
+  const substantiveKeys = keys.filter((k) => {
+    const v = row[k];
+    return v !== undefined && v !== null && v !== '';
+  });
+
+  if (substantiveKeys.length === 1 && substantiveKeys[0] === 'experiment_id' && experimentId) {
+    return {
+      decision: 'STOP',
+      fsctm_state: 'BLOCKED',
+      confidence: 0,
+      data_grade: normaliseGrade(CONTRACT_DATA_GRADE.NONE),
+      data_source: DATA_SOURCE.DB_COMPUTED,
+      reason: 'Lab row incomplete — formulation measurements required (guard).',
+      evidence: {
+        experiment_ids: [experimentId],
+        rule_ids: ['DAVID_LAB_ROW_INCOMPLETE']
+      },
+      ruleIds: ['DAVID_LAB_ROW_INCOMPLETE']
+    };
+  }
+
+  const vals = {};
+  for (const m of DAVID_LAB_MEAS_KEYS) {
+    const n = parseMeasurementNumber(row[m]);
+    if (n === null) {
+      return {
+        decision: 'STOP',
+        fsctm_state: 'BLOCKED',
+        confidence: 0,
+        data_grade: normaliseGrade(CONTRACT_DATA_GRADE.NONE),
+        data_source: DATA_SOURCE.DB_COMPUTED,
+        reason: truncateReason(`Missing or invalid measurement field: ${m}.`),
+        evidence: {
+          experiment_ids: experimentId ? [experimentId] : [],
+          rule_ids: ['DAVID_LAB_MISSING_MEASUREMENT']
+        },
+        ruleIds: ['DAVID_LAB_MISSING_MEASUREMENT']
+      };
+    }
+    vals[m] = n;
+  }
+
+  const expansion = vals.expansion;
+  const cq = String(row.char_quality ?? '').trim().toUpperCase();
+  const baseEvidence = {
+    experiment_ids: experimentId ? [experimentId] : [],
+    rule_ids: []
+  };
+
+  if (expansion >= 93 && cq === 'GOOD') {
+    const confidence = Math.min(0.99, 0.88 + expansion / 1000);
+    return {
+      decision: 'GO',
+      fsctm_state: 'APPROVED',
+      confidence,
+      data_grade: normaliseGrade(CONTRACT_DATA_GRADE.HIGH),
+      data_source: DATA_SOURCE.DB_COMPUTED,
+      reason:
+        'Structured lab row satisfies high-performing expansion threshold with positive quality cue (DB-computed gate).',
+      evidence: baseEvidence,
+      ruleIds: []
+    };
+  }
+
+  if (expansion >= 72) {
+    const confidence = Math.min(0.94, 0.52 + expansion / 200);
+    return {
+      decision: 'ITERATE',
+      fsctm_state: 'BLOCKED',
+      confidence,
+      data_grade: normaliseGrade(CONTRACT_DATA_GRADE.MID),
+      data_source: DATA_SOURCE.DB_COMPUTED,
+      reason: 'Measurements complete; iterative refinement indicated before APPROVED.',
+      evidence: baseEvidence,
+      ruleIds: []
+    };
+  }
+
+  return {
+    decision: 'STOP',
+    fsctm_state: 'BLOCKED',
+    confidence: Math.min(0.45, 0.12 + expansion / 400),
+    data_grade: normaliseGrade(CONTRACT_DATA_GRADE.LOW),
+    data_source: DATA_SOURCE.DB_COMPUTED,
+    reason: 'Expansion below minimum gate for forward progress — hold or reformulate.',
+    evidence: baseEvidence,
+    ruleIds: ['DAVID_LAB_LOW_EXPANSION']
+  };
+}
+
+function processDavidLabRowsDecision(rawBody, deps = {}) {
+  const { persistAudit } = deps;
+  const snapshot = {
+    david_lab_rows: {
+      mode: 'lab',
+      data: { rows: rawBody.data.rows }
+    }
+  };
+  const inputHash = computeDavidLabInputHashHex(rawBody);
+  const traceId = traceIdDeterministic(inputHash);
+  const inner = evaluateDavidLabRowsEnvelope(rawBody.data.rows);
+
+  const ev = buildV23Envelope({
+    decision: inner.decision,
+    fsctm_state: inner.fsctm_state,
+    confidence: inner.confidence,
+    data_grade: inner.data_grade,
+    data_source: inner.data_source,
+    reason: inner.reason,
+    evidence: inner.evidence,
+    input_hash: inputHash,
+    trace_id: traceId,
+    engine_version: DECISION_RUN_ENGINE_VERSION,
+    error: null,
+    _routing: { legacy_hint: 'DAVID_LAB_ROWS', path: 'mode_lab_data_rows' }
+  });
+  fireAudit(
+    persistAudit,
+    auditRowFromEnvelope(ev, snapshot, { session_id: null, cache_hit: false })
+  );
+  return ev;
+}
+
 export function validateContract22Shape(raw) {
   if (!raw || typeof raw !== 'object') {
     return { ok: false, field: 'body', reason: 'Request JSON must be an object.' };
@@ -290,6 +472,10 @@ function auditRowFromEnvelope(envelope, bodyNormalized, extras) {
  * deps: { runLoop, getRagService, ResearchSession?, getActiveViolation?, researchRunLocks (Map)?, persistAudit? }
  */
 export async function processDecisionRun(rawBody, deps = {}) {
+  if (isDavidLabRowsBody(rawBody)) {
+    return processDavidLabRowsDecision(rawBody, deps);
+  }
+
   const shape = validateContract22Shape(rawBody || {});
   if (!shape.ok) {
     let inputHashFallback = '';

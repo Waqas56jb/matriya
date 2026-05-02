@@ -45,9 +45,10 @@ class Settings {
     this.CHUNK_SIZE = parseInt(process.env.CHUNK_SIZE) || 500;
     this.CHUNK_OVERLAP = parseInt(process.env.CHUNK_OVERLAP) || 100;
     
-    // API Settings
+    // API Settings — Railway/heroku inject PORT; local dev uses API_PORT (default 8000).
     this.API_HOST = process.env.API_HOST || "0.0.0.0";
-    this.API_PORT = parseInt(process.env.API_PORT) || 8000;
+    const portRaw = parseInt(process.env.PORT || process.env.API_PORT || "8000", 10);
+    this.API_PORT = Number.isFinite(portRaw) ? portRaw : 8000;
     /**
      * JSON / urlencoded body size cap. Default Express is 100kb — too small for POST /ask-matriya when
      * "כל הקבצים" sends hundreds of long logical paths (413 Payload Too Large).

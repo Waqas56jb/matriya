@@ -1,18 +1,23 @@
 /**
- * Staging checklist (David): after Supabase DDL (migrations/decision_run_v110_audit.sql),
- * hit POST /decision/run and run the proof SELECT on the same DB the API uses.
+ * David staging / prod checklist (WhatsApp):
+ *   5. GET /health — expect HTTP 200
+ *   6. POST /decision/run ×3 with valid payloads (migration must be applied first)
+ *      SQL:
+ *      SELECT id, decision, decision_run_v11_audit ... LIMIT 5;
+ *      SELECT COUNT(*) FROM decision_audit_log WHERE decision_run_v11_audit IS NOT NULL;
  *
- * Step 3: POST /decision/run — uses input.type "lab" (no research session required; still
- *         persists decision_run_v11_audit with session_id null).
- * Step 4: SELECT id, decision, decision_run_v11_audit ... LIMIT 5
+ * Prerequisites: DDL in migrations/decision_run_v110_audit.sql on the SAME DB as the API.
  *
  * Env:
- *   MATRIYA_API_BASE — API root, no trailing slash (default http://127.0.0.1:8000)
- *   POSTGRES_URL | POSTGRES_PRISMA_URL | SUPABASE_DB_URL | DATABASE_URL — must match the API DB
- *   STAGING_DECISION_PROJECT_ID, STAGING_DECISION_MODEL_ID — optional strings for contract body
+ *   MATRIYA_API_BASE | API_BASE_URL — API root, no trailing slash
+ *   POSTGRES_URL | POSTGRES_PRISMA_URL | SUPABASE_DB_URL | DATABASE_URL — for SQL (must match API DB)
+ *   STAGING_RESEARCH_SESSION_ID — optional UUID; if set, call #3 uses type "question" (real loop path).
+ *       If unset, call #3 is another bounded "lab" invocation with distinct context (still valid §2.3).
+ *   STAGING_DECISION_PROJECT_ID — optional prefix for synthetic project ids
  */
 
 import axios from 'axios';
+import crypto from 'crypto';
 import dotenv from 'dotenv';
 import path from 'path';
 import pg from 'pg';
@@ -34,67 +39,153 @@ const conn =
   process.env.DATABASE_URL ||
   '';
 
-const body = {
-  input: { type: 'lab', data: {} },
-  context: {
-    project_id: process.env.STAGING_DECISION_PROJECT_ID || 'staging-validation',
-    model_id: process.env.STAGING_DECISION_MODEL_ID || 'smoke-1.1.0'
-  }
-};
+const projPrefix =
+  process.env.STAGING_DECISION_PROJECT_ID || 'staging-proof';
 
-console.log(`POST ${base}/decision/run (lab scope — audit row expected)\n`);
-let res;
-try {
-  res = await axios.post(`${base}/decision/run`, body, {
+async function decisionRun(payload, label) {
+  console.log(`\n--- POST /decision/run (${label}) ---`);
+  const res = await axios.post(`${base}/decision/run`, payload, {
     headers: { 'Content-Type': 'application/json' },
-    timeout: 120000,
-    validateStatus: () => true
+    timeout: 300000,
+    validateStatus: () => true,
   });
+  console.log(`HTTP ${res.status}`);
+  if (res.status !== 200) {
+    console.error(JSON.stringify(res.data, null, 2));
+    throw new Error(`${label}: expected HTTP 200, got ${res.status}`);
+  }
+  console.log(JSON.stringify(res.data, null, 2));
+  return res.data;
+}
+
+console.log(`\nTarget API: ${base}\n`);
+
+const local = conn ? /localhost|127\.0\.0\.1/i.test(conn) : false;
+const pool = conn
+  ? new pg.Pool({
+      connectionString: conn,
+      ssl: local ? false : { rejectUnauthorized: false },
+      max: 1,
+    })
+  : null;
+
+// Step 5 — /health → 200 OK
+console.log('--- Step 5: GET /health ---');
+let health;
+try {
+  health = await axios.get(`${base}/health`, { timeout: 60000, validateStatus: () => true });
 } catch (e) {
-  console.error('Request failed:', e.message);
+  console.error('Health request failed:', e.message);
+  if (pool) await pool.end().catch(() => {});
+  process.exit(1);
+}
+console.log(`HTTP ${health.status}`);
+console.log(JSON.stringify(health.data, null, 2));
+if (health.status !== 200) {
+  console.error('\nExpected 200 OK on /health — fix POSTGRES_URL / deploy / DB before continuing.');
+  if (pool) await pool.end().catch(() => {});
   process.exit(1);
 }
 
-console.log('HTTP', res.status);
-console.log(JSON.stringify(res.data, null, 2));
-
-if (res.status !== 200) {
-  console.error('\n/decision/run did not return 200 — fix API or URL before SQL proof.');
-  process.exit(1);
+let countBefore = null;
+if (pool) {
+  const b = await pool.query(`
+    SELECT COUNT(*)::int AS n FROM decision_audit_log WHERE decision_run_v11_audit IS NOT NULL
+  `);
+  countBefore = b.rows[0]?.n ?? 0;
+  console.log(`\n--- COUNT before 3× /decision/run: ${countBefore}`);
 }
 
-if (!conn) {
-  console.warn(
-    '\nNo POSTGRES_URL / POSTGRES_PRISMA_URL / SUPABASE_DB_URL / DATABASE_URL — skipped proof SELECT.'
-  );
+// Step 6 — three /decision/run calls (“real” distinct contract inputs)
+
+const uuid = crypto.randomUUID();
+const sessionQuestion = process.env.STAGING_RESEARCH_SESSION_ID?.trim();
+
+const payloads = [];
+
+payloads.push({
+  label: '1/3 bounded lab',
+  body: {
+    input: { type: 'lab', data: {} },
+    context: { project_id: `${projPrefix}:${uuid}`, model_id: 'run-1bounded' },
+  },
+});
+
+payloads.push({
+  label: '2/3 bounded message',
+  body: {
+    input: { type: 'message', data: { note: 'staging smoke message path' } },
+    context: { project_id: `${projPrefix}:${uuid}`, model_id: 'run-2bounded' },
+  },
+});
+
+if (sessionQuestion) {
+  payloads.push({
+    label: '3/3 question + research loop (needs valid session)',
+    body: {
+      input: {
+        type: 'question',
+        data: {
+          session_id: sessionQuestion,
+          query:
+            process.env.STAGING_DECISION_QUERY ||
+            'List formulation constraints referenced in uploaded lab documents.',
+        },
+      },
+      context: { project_id: `${projPrefix}:question`, model_id: 'run-3loop' },
+    },
+  });
+} else {
+  payloads.push({
+    label: '3/3 bounded lab (distinct hash — set STAGING_RESEARCH_SESSION_ID for question path)',
+    body: {
+      input: { type: 'lab', data: { iteration: 'third-call' } },
+      context: { project_id: `${projPrefix}:${uuid}`, model_id: 'run-3bounded' },
+    },
+  });
+}
+
+for (const p of payloads) {
+  await decisionRun(p.body, p.label);
+}
+
+if (!pool) {
+  console.warn('\nNo DB URL in env — skipped SQL proof. Set POSTGRES_URL (same DB as API).');
   process.exit(0);
 }
 
-const local = /localhost|127\.0\.0\.1/i.test(conn);
-const pool = new pg.Pool({
-  connectionString: conn,
-  ssl: local ? false : { rejectUnauthorized: false },
-  max: 1
-});
-
 try {
-  const r = await pool.query(`
+  const countAfterR = await pool.query(`
+    SELECT COUNT(*)::int AS n
+    FROM decision_audit_log
+    WHERE decision_run_v11_audit IS NOT NULL
+  `);
+  const countAfter = countAfterR.rows[0]?.n ?? 0;
+  const delta = countBefore != null ? countAfter - countBefore : countAfter;
+
+  console.log('\n--- COUNT(*) decision_run_v11_audit IS NOT NULL (after run) ---');
+  console.log(JSON.stringify({ n: countAfter, delta_from_script: delta }, null, 2));
+
+  if (countBefore != null && delta < 3) {
+    console.error(
+      `\nExpected +3 new audit rows from this script — delta=${delta} (wrong DB vs API, or persist failed).`
+    );
+    process.exitCode = 1;
+  }
+
+  const top = await pool.query(`
     SELECT id, decision, decision_run_v11_audit
     FROM decision_audit_log
     WHERE decision_run_v11_audit IS NOT NULL
     ORDER BY id DESC
     LIMIT 5
   `);
-  console.log('\n--- Proof query (decision_run_v11_audit IS NOT NULL, LIMIT 5) ---\n');
-  for (const row of r.rows) {
+  console.log('\n--- Latest 5 rows (same as Supabase checklist) ---\n');
+  for (const row of top.rows) {
     console.log(JSON.stringify(row, null, 2));
   }
-  if (r.rows.length === 0) {
-    console.error(
-      '\nZero rows: migration not applied on this DB, or API is using a different database than this connection string.'
-    );
-    process.exitCode = 1;
-  }
+
+  console.log('\nDone — screenshots: /health 200 + this terminal + COUNT + LIMIT 5 in SQL Editor if preferred.');
 } finally {
   await pool.end();
 }
