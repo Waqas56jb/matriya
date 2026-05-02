@@ -4741,7 +4741,8 @@ if (existsSync(join(frontendDist, 'index.html'))) {
   app.use(express.static(frontendDist));
   const API_PREFIXES = ['/auth', '/admin', '/api', '/ingest', '/files', '/documents',
     '/search', '/ask-matriya', '/reset', '/gpt-rag', '/collection', '/research', '/health',
-    '/matriya', '/external', '/webhook', '/upload-ask-materials'];
+    '/matriya', '/external', '/webhook', '/upload-ask-materials',
+    '/decision', '/analysis', '/sync', '/integration', '/science', '/insights', '/agent'];
   app.get('*', (req, res, next) => {
     if (API_PREFIXES.some(p => req.path.startsWith(p))) return next();
     res.sendFile(join(frontendDist, 'index.html'));
