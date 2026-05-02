@@ -1,5 +1,5 @@
 /**
- * Decision Engine v1.1 /decision/run — fixtures (§2.3 v1.1.1: evidence object, error semantics, data_source enum).
+ * Decision Engine v1.1.0 /decision/run — fixtures (§2.3: evidence object, error semantics, data_source enum, data_grade [0..1]).
  * Run: npm run verify:decision-run-v110
  */
 import assert from 'node:assert/strict';

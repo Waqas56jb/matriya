@@ -1,15 +1,15 @@
 /**
- * Decision Engine Contract v1.1.1 alignment — POST /decision/run
+ * Decision Engine Contract v1.1.0 — POST /decision/run
  * Canonical hash §4: sha256(canonical_json + project_id + model_id)
  * Response §2.3: evidence object, error null unless SYSTEM_ERROR,
- * data_source ∈ { NONE, DB_COMPUTED, DOCUMENT_RAG }, data_grade ∈ [0.0, 1.0]
+ * data_source ∈ { NONE, DB_COMPUTED, DOCUMENT_RAG }, data_grade ∈ [0.0, 1.0] per contract
  */
 
 import { createHash } from 'crypto';
 
-export const DECISION_RUN_ENGINE_VERSION = '1.1.1';
+export const DECISION_RUN_ENGINE_VERSION = '1.1.0';
 
-/** §2.3 data_grade: scalar in closed interval [0.0, 1.0] (v1.1.1; supersedes int enum). */
+/** §2.3 data_grade: scalar in closed interval [0.0, 1.0] (Decision Engine v1.1.0). */
 export const CONTRACT_DATA_GRADE = Object.freeze({
   NONE: 0,
   LOW: 1 / 3,
