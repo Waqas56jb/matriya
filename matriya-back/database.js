@@ -301,7 +301,8 @@ const DecisionAuditLog = sequelize ? sequelize.define('DecisionAuditLog', {
   },
   session_id: {
     type: DataTypes.UUID,
-    allowNull: false
+    /* Nullable allows /decision/run v1.1 audit rows — apply migrations/decision_run_v110_audit.sql before PROD deploy. */
+    allowNull: true
   },
   stage: {
     type: DataTypes.STRING,
@@ -345,6 +346,11 @@ const DecisionAuditLog = sequelize ? sequelize.define('DecisionAuditLog', {
   },
   human_feedback: {
     type: DataTypes.STRING(20),
+    allowNull: true
+  },
+  /** §6 Decision Engine Contract v1.1 audit bundle (immutable append-only snapshots). */
+  decision_run_v11_audit: {
+    type: DataTypes.JSONB,
     allowNull: true
   },
   created_at: {

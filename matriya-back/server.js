@@ -7,7 +7,7 @@ import cors from 'cors';
 import multer from 'multer';
 import { Op } from 'sequelize';
 import { fileURLToPath } from 'url';
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 import path, { dirname, join } from 'path';
 import { existsSync, mkdirSync, unlinkSync, readdirSync, writeFileSync, readFileSync, copyFileSync } from 'fs';
 import settings from './config.js';
@@ -90,7 +90,13 @@ import { get as cacheGet, set as cacheSet, getOrCompute } from './services/agent
 import { evaluate as evaluateCreativity } from './services/creativityOrchestrator.js';
 import { handleInbound, handleOutbound, createActionPackage } from './twilioGateway.js';
 import { processPendingTasks, startPolling } from './services/whatsappPipeline.js';
-import { sendDecisionContractScaffoldResponse } from './lib/decisionContractScaffold.js';
+import {
+  processDecisionRun,
+  buildV23Envelope,
+  DECISION_RUN_ENGINE_VERSION,
+  DATA_GRADE,
+  traceIdDeterministic,
+} from './lib/decisionRunV110.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -385,6 +391,26 @@ async function logDecisionAudit(sessionId, stage, decision, responseType, reques
     });
   } catch (e) {
     logger.warn(`Decision audit log failed: ${e.message}`);
+  }
+}
+
+/** Decision Engine §6 — append-only snapshots for POST /decision/run v1.1; failures logged only (caller always HTTP 200). */
+async function logDecisionRunV110Safe(row) {
+  if (!DecisionAuditLog || !row) return;
+  try {
+    await DecisionAuditLog.create({
+      session_id: row.session_id,
+      stage: 'DR11',
+      decision: row.decision,
+      response_type: 'decision_run_v1.1',
+      request_query: row.request_query != null ? String(row.request_query).slice(0, 4000) : null,
+      inputs_snapshot: row.inputs_snapshot ?? null,
+      details: row.envelope_snapshot ?? null,
+      confidence_score: row.confidence_score != null ? row.confidence_score : null,
+      decision_run_v11_audit: row.audit_bundle ?? null
+    });
+  } catch (e) {
+    logger.warn(`Decision run v1.1 audit log failed: ${e.message}`);
   }
 }
 
@@ -3708,10 +3734,44 @@ app.get("/search", handleMatriyaSearch);
 app.post("/api/research/search", handleMatriyaSearch);
 
 /**
- * Contract v1.1 scaffold — eleven-key §2.3 envelope proof (SYSTEM_ERROR stub only).
- * GO-gated engineering implementation wiring follows; no legacy route mutation yet.
+ * Decision Engine Contract v1.1 — POST /decision/run.
+ * Bounded GO: invokes the same primitive as POST /api/research/run agents path — export async runLoop(...) in researchLoop.js:186 via runLoop(sessionId, query, rag, filterMetadata, runOptions).
  */
-app.post('/decision/run', (_req, res) => sendDecisionContractScaffoldResponse(_req, res));
+app.post('/decision/run', async (req, res) => {
+  try {
+    const envelope = await processDecisionRun(req.body, {
+      runLoop,
+      getRagService,
+      ResearchSession,
+      getActiveViolation,
+      researchRunLocks,
+      persistAudit: async (row) => {
+        await logDecisionRunV110Safe(row);
+      },
+    });
+    return res.status(200).json(envelope);
+  } catch (e) {
+    logger.error(`Decision run unhandled error: ${e.message}`);
+    const fh = createHash('sha256')
+      .update(`DECISION_RUN_UNHANDLED:${e.message || ''}`, 'utf8')
+      .digest('hex');
+    return res.status(200).json(
+      buildV23Envelope({
+        decision: 'SYSTEM_ERROR',
+        fsctm_state: 'NOT_APPLICABLE',
+        confidence: 0,
+        data_grade: DATA_GRADE.NO_DATA,
+        data_source: 'RUNTIME_GUARD',
+        reason: 'Unhandled server error executing /decision/run.',
+        evidence: [],
+        input_hash: fh,
+        trace_id: traceIdDeterministic(fh),
+        engine_version: DECISION_RUN_ENGINE_VERSION,
+        error: { code: 'INTERNAL', message: String(e.message || 'ERROR').slice(0, 400) },
+      })
+    );
+  }
+});
 
 /**
  * Research run: either 4-agent loop (use_4_agents: true) or current single-shot flow (use_4_agents: false).

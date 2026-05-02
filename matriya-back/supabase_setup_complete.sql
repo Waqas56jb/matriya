@@ -141,6 +141,10 @@ CREATE INDEX IF NOT EXISTS noise_events_session_id_idx ON noise_events(session_i
 CREATE INDEX IF NOT EXISTS noise_events_decision_id_idx ON noise_events(decision_id);
 CREATE INDEX IF NOT EXISTS noise_events_created_at_idx ON noise_events(created_at DESC);
 
+-- Step 11f: Decision Engine Contract v1.1 — /decision/run append-only audit snapshots
+ALTER TABLE decision_audit_log ALTER COLUMN session_id DROP NOT NULL;
+ALTER TABLE decision_audit_log ADD COLUMN IF NOT EXISTS decision_run_v11_audit JSONB DEFAULT NULL;
+
 -- Step 12: B-Integrity Monitor – cycle snapshots and violations
 CREATE TABLE IF NOT EXISTS integrity_cycle_snapshots (
     id SERIAL PRIMARY KEY,
