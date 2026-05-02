@@ -90,6 +90,7 @@ import { get as cacheGet, set as cacheSet, getOrCompute } from './services/agent
 import { evaluate as evaluateCreativity } from './services/creativityOrchestrator.js';
 import { handleInbound, handleOutbound, createActionPackage } from './twilioGateway.js';
 import { processPendingTasks, startPolling } from './services/whatsappPipeline.js';
+import { sendDecisionContractScaffoldResponse } from './lib/decisionContractScaffold.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -3705,6 +3706,12 @@ async function handleMatriyaSearch(req, res) {
 
 app.get("/search", handleMatriyaSearch);
 app.post("/api/research/search", handleMatriyaSearch);
+
+/**
+ * Contract v1.1 scaffold — eleven-key §2.3 envelope proof (SYSTEM_ERROR stub only).
+ * GO-gated engineering implementation wiring follows; no legacy route mutation yet.
+ */
+app.post('/decision/run', (_req, res) => sendDecisionContractScaffoldResponse(_req, res));
 
 /**
  * Research run: either 4-agent loop (use_4_agents: true) or current single-shot flow (use_4_agents: false).
