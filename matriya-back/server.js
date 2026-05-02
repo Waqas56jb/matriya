@@ -94,8 +94,11 @@ import {
   processDecisionRun,
   buildV23Envelope,
   DECISION_RUN_ENGINE_VERSION,
-  DATA_GRADE,
+  CONTRACT_DATA_GRADE,
+  DATA_SOURCE,
+  emptyEvidence,
   traceIdDeterministic,
+  normaliseGrade,
 } from './lib/decisionRunV110.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -3760,14 +3763,15 @@ app.post('/decision/run', async (req, res) => {
         decision: 'SYSTEM_ERROR',
         fsctm_state: 'NOT_APPLICABLE',
         confidence: 0,
-        data_grade: DATA_GRADE.NO_DATA,
-        data_source: 'RUNTIME_GUARD',
+        data_grade: normaliseGrade(CONTRACT_DATA_GRADE.NONE),
+        data_source: DATA_SOURCE.NONE,
         reason: 'Unhandled server error executing /decision/run.',
-        evidence: [],
+        evidence: emptyEvidence(),
         input_hash: fh,
         trace_id: traceIdDeterministic(fh),
         engine_version: DECISION_RUN_ENGINE_VERSION,
         error: { code: 'INTERNAL', message: String(e.message || 'ERROR').slice(0, 400) },
+        _routing: { legacy_hint: 'RUNTIME_GUARD', gate: 'express_catch' },
       })
     );
   }

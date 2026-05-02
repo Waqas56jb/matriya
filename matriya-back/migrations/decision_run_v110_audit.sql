@@ -1,4 +1,5 @@
 -- Decision Engine Contract v1.1 /decision/run — audit append-only support (David GO 3 May 2026)
+-- Must run on production BEFORE Audit Checklist B sign-off (David directive).
 -- Apply on Supabase Postgres before relying on nullable session_id + decision_run_v11_audit.
 -- Commit #4 (engine): schema migration required for §6 DecisionAuditLog fields.
 

@@ -1,20 +1,42 @@
 /**
- * Decision Engine Contract v1.1 — POST /decision/run
+ * Decision Engine Contract v1.1.1 alignment — POST /decision/run
  * Canonical hash §4: sha256(canonical_json + project_id + model_id)
- * Response envelope §2.3 — eleven keys, fixed semantics (GO § May 2026).
+ * Response §2.3: evidence object, error null unless SYSTEM_ERROR,
+ * data_source ∈ { NONE, DB_COMPUTED, DOCUMENT_RAG }, data_grade ∈ [0.0, 1.0]
  */
 
 import { createHash } from 'crypto';
 
-export const DECISION_RUN_ENGINE_VERSION = '1.1.0';
+export const DECISION_RUN_ENGINE_VERSION = '1.1.1';
 
-/** Numeric §2.3 data_grade (not string enums in JSON). */
+/** §2.3 data_grade: scalar in closed interval [0.0, 1.0] (v1.1.1; supersedes int enum). */
+export const CONTRACT_DATA_GRADE = Object.freeze({
+  NONE: 0,
+  LOW: 1 / 3,
+  MID: 2 / 3,
+  HIGH: 1
+});
+
+/** Normalise floating output for stable JSON ([0.0, 1.0]). */
+export function normaliseGrade(g) {
+  const n = Number(g);
+  if (Number.isNaN(n)) return 0;
+  return Math.round(Math.min(1, Math.max(0, n)) * 1e6) / 1e6;
+}
+
+export const DATA_SOURCE = Object.freeze({
+  NONE: 'NONE',
+  DB_COMPUTED: 'DB_COMPUTED',
+  DOCUMENT_RAG: 'DOCUMENT_RAG'
+});
+
+/** @deprecated prefer CONTRACT_DATA_GRADE (float grades in [0.0, 1.0]) */
 export const DATA_GRADE = {
-  UNKNOWN: -1,
-  NO_DATA: 0,
-  LOGICAL: 1,
-  HISTORICAL_REFERENCE: 2,
-  REAL: 3
+  UNKNOWN: CONTRACT_DATA_GRADE.NONE,
+  NO_DATA: CONTRACT_DATA_GRADE.NONE,
+  LOGICAL: CONTRACT_DATA_GRADE.LOW,
+  HISTORICAL_REFERENCE: CONTRACT_DATA_GRADE.MID,
+  REAL: CONTRACT_DATA_GRADE.HIGH
 };
 
 const ALLOWED_TYPES = ['lab', 'question', 'message'];
@@ -28,6 +50,11 @@ function stableStringify(value) {
   }
   const keys = Object.keys(value).sort();
   return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`;
+}
+
+/** §2.3 evidence — object shape required on every path */
+export function emptyEvidence() {
+  return { experiment_ids: [], rule_ids: [] };
 }
 
 export function canonicalInputForHash(body) {
@@ -51,7 +78,6 @@ export function computeInputHashHex(body) {
   return createHash('sha256').update(`${canonical}${String(pid)}${String(mid)}`, 'utf8').digest('hex');
 }
 
-/** Deterministic UUID-shaped id from hash (determinism over trace_id vs same payload). */
 export function traceIdDeterministic(inputHashHex) {
   const h = createHash('sha256').update(`MATRIYA_DECISION_RUN_V11_TRACE\n${inputHashHex}`, 'utf8').digest();
   const a = h.subarray(0, 4).toString('hex');
@@ -62,9 +88,6 @@ export function traceIdDeterministic(inputHashHex) {
   return `${a}-${b}-${cPart}-${d}-${e}`;
 }
 
-/**
- * Duplicate of server.js deriveSynthesisDecision semantics (frozen for /decision/run mapping).
- */
 export function deriveSynthesisDecisionStub(synthesis) {
   if (!synthesis) return 'STOP';
   const s = String(synthesis).toLowerCase();
@@ -79,67 +102,122 @@ export function deriveSynthesisDecisionStub(synthesis) {
   return 'ITERATE';
 }
 
-function mapSynthToDecisionPair(synthStatus) {
+function mapSynthToDecisionTriple(synthStatus) {
   if (synthStatus === 'GO') {
-    return { decision: 'GO', fsctm_state: 'APPROVED', data_grade: DATA_GRADE.REAL };
+    return {
+      decision: 'GO',
+      fsctm_state: 'APPROVED',
+      data_grade: normaliseGrade(CONTRACT_DATA_GRADE.HIGH)
+    };
+  }
+  if (synthStatus === 'INSUFFICIENT_DATA') {
+    return {
+      decision: 'INSUFFICIENT_DATA',
+      fsctm_state: 'BLOCKED',
+      data_grade: normaliseGrade(CONTRACT_DATA_GRADE.NONE)
+    };
+  }
+  if (synthStatus === 'ITERATE') {
+    return {
+      decision: 'ITERATE',
+      fsctm_state: 'BLOCKED',
+      data_grade: normaliseGrade(CONTRACT_DATA_GRADE.MID)
+    };
   }
   return {
     decision: 'STOP',
     fsctm_state: 'BLOCKED',
-    data_grade: synthStatus === 'INSUFFICIENT_DATA' ? DATA_GRADE.NO_DATA : DATA_GRADE.LOGICAL
+    data_grade: normaliseGrade(CONTRACT_DATA_GRADE.LOW)
   };
 }
 
-/** §2.3 envelope — preserve key order per GO PASS checklist. */
+/**
+ * §2.3 envelope — core keys stable order; `_routing` optional diagnostic (not hashed).
+ */
 export function buildV23Envelope(parts) {
-  return {
+  const envelope = {
     decision: parts.decision,
     fsctm_state: parts.fsctm_state,
     confidence: parts.confidence,
-    data_grade: parts.data_grade,
+    data_grade: normaliseGrade(parts.data_grade),
     data_source: parts.data_source,
     reason: parts.reason,
-    evidence: parts.evidence,
+    evidence: parts.evidence && typeof parts.evidence === 'object' && !Array.isArray(parts.evidence)
+      ? {
+          experiment_ids: Array.isArray(parts.evidence.experiment_ids)
+            ? parts.evidence.experiment_ids.map((x) => String(x))
+            : [],
+          rule_ids: Array.isArray(parts.evidence.rule_ids)
+            ? parts.evidence.rule_ids.map((x) => String(x))
+            : []
+        }
+      : emptyEvidence(),
     input_hash: parts.input_hash,
     trace_id: parts.trace_id,
     engine_version: parts.engine_version,
-    error: parts.error
+    error:
+      parts.error === undefined ? null : parts.error === null ? null : parts.error,
   };
+  if (parts._routing != null && typeof parts._routing === 'object' && Object.keys(parts._routing).length > 0) {
+    envelope._routing = parts._routing;
+  }
+  return envelope;
 }
 
-function envelopeSystemError(reasonText, invalidField, inputHashHex, traceId) {
+function envelopeSystemError(reasonText, invalidField, inputHashHex, traceId, routingHints = {}) {
   return buildV23Envelope({
     decision: 'SYSTEM_ERROR',
     fsctm_state: 'NOT_APPLICABLE',
     confidence: 0,
-    data_grade: DATA_GRADE.NO_DATA,
-    data_source: 'VALIDATION_GATE',
-    reason: reasonText,
-    evidence: [],
+    data_grade: normaliseGrade(CONTRACT_DATA_GRADE.NONE),
+    data_source: DATA_SOURCE.NONE,
+    reason: truncateReason(reasonText),
+    evidence: emptyEvidence(),
     input_hash: inputHashHex,
     trace_id: traceId,
     engine_version: DECISION_RUN_ENGINE_VERSION,
-    error: { code: 'INTERNAL', message: `INVALID_INPUT — ${invalidField}` }
+    error: {
+      code: 'INTERNAL',
+      message: invalidField.startsWith('INVALID_INPUT')
+        ? invalidField
+        : `INVALID_INPUT — ${invalidField}`
+    },
+    _routing: { subsystem: 'validation', legacy_hint: 'VALIDATION_GATE', field: invalidField, ...routingHints }
   });
 }
 
-function truncateReason(s, max = 480) {
+function truncateReason(s, max = 520) {
   const t = String(s || '');
   return t.length <= max ? t : `${t.slice(0, max - 3)}...`;
 }
 
-function evidenceFromRunLoop(result) {
-  const src = result?.sources || [];
-  if (!Array.isArray(src) || src.length === 0) return [];
-  return src.slice(0, 40).map((s, i) => {
-    if (s && typeof s === 'object') {
-      return { index: i, channel: s.channel ?? s.evidence_channel ?? null, snippet: JSON.stringify(s).slice(0, 400) };
+function extractExperimentIdsFromResult(result) {
+  const ids = new Set();
+  const sel = result?.outputs?.selected_experiments;
+  if (Array.isArray(sel)) {
+    for (const row of sel) {
+      const id = row?.experiment_id;
+      if (id != null && String(id).trim()) ids.add(String(id).trim());
     }
-    return { index: i, snippet: String(s).slice(0, 400) };
-  });
+  }
+  const synth = result?.outputs?.synthesis;
+  if (typeof synth === 'string') {
+    const found = synth.match(/\bEXP-[A-Z0-9][A-Z0-9_-]*/gi);
+    if (found) found.forEach((x) => ids.add(String(x).toUpperCase()));
+  }
+  return [...ids];
 }
 
-/** Parse §2.2 body; returns { ok, bodyNormalized } or { ok:false, ... } before hash. */
+/** Evidence populated from structured loop outputs; rule_ids populated when gates supply rules */
+export function evidenceFromRunLoop(result, ruleIds = []) {
+  return {
+    experiment_ids: extractExperimentIdsFromResult(result),
+    rule_ids: Array.isArray(ruleIds)
+      ? ruleIds.map((r) => String(r)).filter(Boolean)
+      : []
+  };
+}
+
 export function validateContract22Shape(raw) {
   if (!raw || typeof raw !== 'object') {
     return { ok: false, field: 'body', reason: 'Request JSON must be an object.' };
@@ -209,25 +287,24 @@ function auditRowFromEnvelope(envelope, bodyNormalized, extras) {
 }
 
 /**
- * Execute decision/run (pure async; no Express).
  * deps: { runLoop, getRagService, ResearchSession?, getActiveViolation?, researchRunLocks (Map)?, persistAudit? }
  */
 export async function processDecisionRun(rawBody, deps = {}) {
   const shape = validateContract22Shape(rawBody || {});
   if (!shape.ok) {
-    /* §4 hash still requires project_id/model_id — use stable placeholders before validation failure would block */
     let inputHashFallback = '';
     let traceFb = '';
     try {
       if (rawBody && rawBody.context && typeof rawBody.context === 'object') {
         const partial = {
-          input: rawBody.input &&
-            typeof rawBody.input === 'object' &&
-            typeof rawBody.input.type === 'string' &&
-            rawBody.input.data != null &&
-            typeof rawBody.input.data === 'object'
-            ? rawBody.input
-            : { type: 'question', data: {} },
+          input:
+            rawBody.input &&
+              typeof rawBody.input === 'object' &&
+              typeof rawBody.input.type === 'string' &&
+              rawBody.input.data != null &&
+              typeof rawBody.input.data === 'object'
+              ? rawBody.input
+              : { type: 'question', data: {} },
           context: {
             project_id: rawBody.context.project_id != null ? String(rawBody.context.project_id) : '',
             model_id: rawBody.context.model_id != null ? String(rawBody.context.model_id) : ''
@@ -262,16 +339,17 @@ export async function processDecisionRun(rawBody, deps = {}) {
       decision: 'STOP',
       fsctm_state: 'BLOCKED',
       confidence: 0,
-      data_grade: DATA_GRADE.NO_DATA,
-      data_source: 'SCOPE_BOUNDARY',
+      data_grade: normaliseGrade(CONTRACT_DATA_GRADE.NONE),
+      data_source: DATA_SOURCE.NONE,
       reason: truncateReason(
-        'BOUNDED_SCOPE: lab path is staged for Decision Engine WRAP GO; invocation recorded without downstream lab bridge.'
+        `[Bounded scope lab] Decision Engine WRAP GO pending — invocation logged; no downstream lab bridge.`
       ),
-      evidence: [],
+      evidence: emptyEvidence(),
       input_hash: inputHash,
       trace_id: traceId,
       engine_version: DECISION_RUN_ENGINE_VERSION,
-      error: { code: 'OK', message: '' }
+      error: null,
+      _routing: { legacy_hint: 'SCOPE_BOUNDARY', path: 'lab' }
     });
     fireAudit(persistAudit, auditRowFromEnvelope(ev, body, { session_id: null, cache_hit: false }));
     return ev;
@@ -282,32 +360,42 @@ export async function processDecisionRun(rawBody, deps = {}) {
       decision: 'STOP',
       fsctm_state: 'BLOCKED',
       confidence: 0,
-      data_grade: DATA_GRADE.NO_DATA,
-      data_source: 'SCOPE_BOUNDARY',
+      data_grade: normaliseGrade(CONTRACT_DATA_GRADE.NONE),
+      data_source: DATA_SOURCE.NONE,
       reason: truncateReason(
-        'BOUNDED_SCOPE: message path is gated for Decision Engine WRAP GO; invocation recorded.'
+        `[Bounded scope message] Decision Engine WRAP GO pending — invocation logged.`
       ),
-      evidence: [],
+      evidence: emptyEvidence(),
       input_hash: inputHash,
       trace_id: traceId,
       engine_version: DECISION_RUN_ENGINE_VERSION,
-      error: { code: 'OK', message: '' }
+      error: null,
+      _routing: { legacy_hint: 'SCOPE_BOUNDARY', path: 'message' }
     });
     fireAudit(persistAudit, auditRowFromEnvelope(ev, body, { session_id: null, cache_hit: false }));
     return ev;
   }
 
-  /* --- question --- */
   const sessionIdRaw = body.input.data.session_id;
   const queryRaw = body.input.data.query;
   if (typeof sessionIdRaw !== 'string' || sessionIdRaw.trim() === '') {
-    const ev = envelopeSystemError('`input.data.session_id` must be a non-empty string.', 'input.data.session_id', inputHash, traceId);
-    fireAudit(persistAudit, auditRowFromEnvelope(ev, body, { session_id: null, cache_hit: false }));
+    const ev = envelopeSystemError(
+      '`input.data.session_id` must be a non-empty string.',
+      'input.data.session_id',
+      inputHash,
+      traceId
+    );
+    fireAudit(deps.persistAudit, auditRowFromEnvelope(ev, body, { session_id: null, cache_hit: false }));
     return ev;
   }
   if (typeof queryRaw !== 'string' || queryRaw.trim() === '') {
-    const ev = envelopeSystemError('`input.data.query` must be a non-empty string.', 'input.data.query', inputHash, traceId);
-    fireAudit(persistAudit, auditRowFromEnvelope(ev, body, { session_id: null, cache_hit: false }));
+    const ev = envelopeSystemError(
+      '`input.data.query` must be a non-empty string.',
+      'input.data.query',
+      inputHash,
+      traceId
+    );
+    fireAudit(deps.persistAudit, auditRowFromEnvelope(ev, body, { session_id: null, cache_hit: false }));
     return ev;
   }
 
@@ -326,14 +414,15 @@ export async function processDecisionRun(rawBody, deps = {}) {
       decision: 'STOP',
       fsctm_state: 'BLOCKED',
       confidence: 0,
-      data_grade: DATA_GRADE.NO_DATA,
-      data_source: 'SESSION_GATE',
+      data_grade: normaliseGrade(CONTRACT_DATA_GRADE.NONE),
+      data_source: DATA_SOURCE.DB_COMPUTED,
       reason: truncateReason(`Research session ${sessionId} was not found.`),
-      evidence: [],
+      evidence: emptyEvidence(),
       input_hash: inputHash,
       trace_id: traceId,
       engine_version: DECISION_RUN_ENGINE_VERSION,
-      error: { code: 'OK', message: '' }
+      error: null,
+      _routing: { legacy_hint: 'SESSION_GATE', gate: 'session_lookup' }
     });
     fireAudit(persistAudit, auditRowFromEnvelope(ev, body, { session_id: null, cache_hit: false }));
     return ev;
@@ -343,20 +432,23 @@ export async function processDecisionRun(rawBody, deps = {}) {
     try {
       const violation = await getActiveViolation(sessionId);
       if (violation) {
+        const rid =
+          violation.id != null ? `integrity_violation:${violation.id}` : violation.type ? String(violation.type) : 'B_INTEGRITY';
         const ev = buildV23Envelope({
           decision: 'STOP',
           fsctm_state: 'BLOCKED',
           confidence: 0,
-          data_grade: DATA_GRADE.NO_DATA,
-          data_source: 'B_INTEGRITY_GATE',
+          data_grade: normaliseGrade(CONTRACT_DATA_GRADE.NONE),
+          data_source: DATA_SOURCE.DB_COMPUTED,
           reason: truncateReason(
-            `Gate locked due to unresolved B-Integrity violation (${violation.reason || violation.type || 'unknown'}).`
+            `Unresolved B-Integrity condition (${violation.reason || violation.type || 'unknown'}) blocks execution.`
           ),
-          evidence: [],
+          evidence: { experiment_ids: [], rule_ids: [rid] },
           input_hash: inputHash,
           trace_id: traceId,
           engine_version: DECISION_RUN_ENGINE_VERSION,
-          error: { code: 'OK', message: '' }
+          error: null,
+          _routing: { legacy_hint: 'B_INTEGRITY_GATE', gate: 'integrity', violation_id: violation.id ?? null }
         });
         fireAudit(persistAudit, auditRowFromEnvelope(ev, body, { session_id: sessionId, cache_hit: false }));
         return ev;
@@ -372,16 +464,17 @@ export async function processDecisionRun(rawBody, deps = {}) {
       decision: 'STOP',
       fsctm_state: 'BLOCKED',
       confidence: 0,
-      data_grade: DATA_GRADE.NO_DATA,
-      data_source: 'KERNEL_V16_SHUTDOWN',
+      data_grade: normaliseGrade(CONTRACT_DATA_GRADE.NONE),
+      data_source: DATA_SOURCE.DB_COMPUTED,
       reason: truncateReason(
-        'Possibility space shutdown recorded on session — bounded agent loop not admitted for /decision/run question path.'
+        'Session kernel marks possibility-space shutdown — research loop suppressed for /decision/run question.'
       ),
-      evidence: [],
+      evidence: { experiment_ids: [], rule_ids: ['KERNEL_V16_POSSIBILITY_SHUTDOWN'] },
       input_hash: inputHash,
       trace_id: traceId,
       engine_version: DECISION_RUN_ENGINE_VERSION,
-      error: { code: 'OK', message: '' }
+      error: null,
+      _routing: { legacy_hint: 'KERNEL_V16_SHUTDOWN', gate: 'kernel_shutdown' }
     });
     fireAudit(persistAudit, auditRowFromEnvelope(ev, body, { session_id: sessionId, cache_hit: false }));
     return ev;
@@ -394,7 +487,8 @@ export async function processDecisionRun(rawBody, deps = {}) {
       'SERVER_MISCONFIGURED — run primitive not injected',
       'server.decision_deps',
       inputHash,
-      traceId
+      traceId,
+      { subsystem: 'config', legacy_hint: 'SERVER_INJECTION' }
     );
     fireAudit(persistAudit, auditRowFromEnvelope(ev, body, { session_id: sessionId, cache_hit: false }));
     return ev;
@@ -442,14 +536,15 @@ export async function processDecisionRun(rawBody, deps = {}) {
       decision: 'STOP',
       fsctm_state: 'BLOCKED',
       confidence: 0,
-      data_grade: DATA_GRADE.NO_DATA,
-      data_source: 'RESEARCH_LOOP',
+      data_grade: normaliseGrade(CONTRACT_DATA_GRADE.NONE),
+      data_source: DATA_SOURCE.DOCUMENT_RAG,
       reason: truncateReason(result?.error || 'Research loop returned an error.'),
       evidence: evidenceFromRunLoop(result || {}),
       input_hash: inputHash,
       trace_id: traceId,
       engine_version: DECISION_RUN_ENGINE_VERSION,
-      error: { code: 'OK', message: '' }
+      error: null,
+      _routing: { legacy_hint: 'RESEARCH_LOOP_ERROR', gate: 'run_loop_failure' }
     });
     fireAudit(persistAudit, auditRowFromEnvelope(ev, body, {
       session_id: sessionId,
@@ -461,27 +556,28 @@ export async function processDecisionRun(rawBody, deps = {}) {
 
   const synth = result.outputs?.synthesis || '';
   const synthDecision = deriveSynthesisDecisionStub(synth);
-  const pair = mapSynthToDecisionPair(synthDecision);
+  const triple = mapSynthToDecisionTriple(synthDecision);
   const confInner =
     synth.length === 0 ? 0.1 : Math.min(0.95, 0.55 + synth.length / 8000);
   const confidence = Math.min(0.99, Math.max(0, confInner));
 
   const ev = buildV23Envelope({
-    decision: pair.decision,
-    fsctm_state: pair.fsctm_state,
+    decision: triple.decision,
+    fsctm_state: triple.fsctm_state,
     confidence,
-    data_grade: pair.data_grade,
-    data_source: 'RESEARCH_LOOP',
+    data_grade: triple.data_grade,
+    data_source: DATA_SOURCE.DOCUMENT_RAG,
     reason: truncateReason(
       synthDecision === 'GO'
         ? 'Synthesis-derived GO mapped to FSCTM APPROVED.'
-        : `Synthesis-derived status ${synthDecision} mapped to guarded outcome.`
+        : `Synthesis-derived status ${synthDecision} (${triple.decision}) — guarded outcome per contract mapping.`
     ),
     evidence: evidenceFromRunLoop(result),
     input_hash: inputHash,
     trace_id: traceId,
     engine_version: DECISION_RUN_ENGINE_VERSION,
-    error: { code: 'OK', message: '' }
+    error: null,
+    _routing: { legacy_hint: 'RESEARCH_LOOP', gate: 'run_loop_success', synth_derived: synthDecision }
   });
   fireAudit(persistAudit, auditRowFromEnvelope(ev, body, {
     session_id: sessionId,
