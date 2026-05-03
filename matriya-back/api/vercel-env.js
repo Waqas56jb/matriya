@@ -1,20 +1,9 @@
 /**
- * Vercel serverless shim.
+ * Vercel serverless shim (import only from api/index.js).
  *
- * `api/index.js` imports this file. In some deployments it was missing, causing the
- * function to crash at import-time (Vercel returns 502 Bad Gateway).
- *
- * We intentionally keep this minimal: Vercel already injects env vars; we only
- * normalize `process.env.VERCEL` when running in a Vercel environment.
+ * Normalize `process.env.VERCEL` when Vercel actually injects VERCEL_ENV / VERCEL_URL.
+ * Do NOT set VERCEL here for non-Vercel hosts — that would skip Express listen and break Railway/Docker.
  */
 if ((process.env.VERCEL_ENV || process.env.VERCEL_URL) && !process.env.VERCEL) {
-  process.env.VERCEL = '1';
-}
-
-/**
- * Import this module before `server.js` so `config.js` sees a Vercel deploy
- * (upload dir under /tmp) even if `VERCEL` is not injected yet during module init.
- */
-if (!process.env.VERCEL && !process.env.VERCEL_ENV) {
   process.env.VERCEL = '1';
 }

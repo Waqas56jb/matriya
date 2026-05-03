@@ -46,7 +46,25 @@ class Settings {
     this.CHUNK_OVERLAP = parseInt(process.env.CHUNK_OVERLAP) || 100;
     
     // API Settings — Railway/heroku inject PORT; local dev uses API_PORT (default 8000).
-    this.API_HOST = process.env.API_HOST || "0.0.0.0";
+    // Containers must bind 0.0.0.0: loopback breaks Railway/Render ingress even when PORT matches.
+    this.API_HOST = (() => {
+      const explicit = (process.env.API_HOST || '').trim();
+      const containerish =
+        Boolean(process.env.PORT) ||
+        Boolean(process.env.RAILWAY_ENVIRONMENT) ||
+        Boolean(process.env.RAILWAY_GIT_REPO_SLUG) ||
+        Boolean(process.env.RENDER);
+      const loopback =
+        explicit === '127.0.0.1' || explicit.toLowerCase() === 'localhost' || explicit === '::1';
+      if (containerish && loopback && explicit) {
+        console.warn(
+          `[matriya-back] API_HOST="${explicit}" is loopback — using 0.0.0.0 so Railway / containers can route traffic`
+        );
+        return '0.0.0.0';
+      }
+      if (explicit && !(containerish && loopback)) return explicit;
+      return explicit || '0.0.0.0';
+    })();
     const portRaw = parseInt(process.env.PORT || process.env.API_PORT || "8000", 10);
     this.API_PORT = Number.isFinite(portRaw) ? portRaw : 8000;
     /**
