@@ -367,7 +367,10 @@ function Home({ user, onLogout, dashboardMode = false }) {
                             <li key={f.id || i}>
                               <button type="button" className="dashboard-recent-link" onClick={() => navigate(`/project/${f.projectId}/section/rag`)}>
                                 <span className="dashboard-recent-link-title">
-                                  {(f.original_name || f.filename || '').slice(0, 35)}{(f.original_name || f.filename || '').length > 35 ? '…' : ''}
+                                  {(() => {
+                                    const label = displayProjectFileName(f, '');
+                                    return `${label.slice(0, 35)}${label.length > 35 ? '…' : ''}`;
+                                  })()}
                                   <span className="dashboard-recent-link-meta">{f.projectName || ''}</span>
                                 </span>
                                 <span className="dashboard-recent-link-arrow" aria-hidden="true">‹</span>
@@ -2092,6 +2095,19 @@ function LabTab({ projectId }) {
 /** Matches maneger-back lib/gptRagSync.js (OpenAI vector upload). */
 const GPT_OPENAI_SYNC_FILE_RE = /\.(pdf|docx|doc|txt|xlsx|xls|pptx|csv|json|md|html|htm)$/i;
 
+/** Canonical label for a project_files row (API lists both original_name and file_name). */
+function displayProjectFileName(f, untitledFallback = '') {
+  const fb = untitledFallback || '—';
+  const fromRow = String(f?.original_name ?? f?.file_name ?? f?.filename ?? '').trim();
+  if (fromRow) return fromRow;
+  const tail = String(f?.storage_path || '').split(/[/\\]/).filter(Boolean).pop() || '';
+  try {
+    const dec = decodeURIComponent(tail).trim();
+    if (dec) return dec;
+  } catch (_) {}
+  return tail.trim() || fb;
+}
+
 /** Match upload hints to rows from a fresh GET /files list (fallback when POST body omits id). */
 function resolveProjectFileIdsFromHints(files, hints) {
   const list = Array.isArray(files) ? files : [];
@@ -2102,7 +2118,7 @@ function resolveProjectFileIdsFromHints(files, hints) {
   for (const hint of hintList) {
     const base = hint.includes('/') || hint.includes('\\') ? hint.split(/[/\\]/).pop() : hint;
     const candidates = list.filter((f) => {
-      const name = String(f.original_name || '').trim();
+      const name = String(f.original_name || f.file_name || '').trim();
       if (!name) return false;
       return name === hint || name === base || (base && name.endsWith(base));
     });
@@ -2122,7 +2138,7 @@ function resolveProjectFileIdsFromHints(files, hints) {
 
 function isGptOpenAiEligibleProjectFile(f) {
   if (!f || !f.storage_path || !String(f.storage_path).trim()) return false;
-  const orig = String(f.original_name || '').trim();
+  const orig = String(f.original_name || f.file_name || '').trim();
   const fromPath = String(f.storage_path).split('/').filter(Boolean).pop() || '';
   const base = orig || fromPath;
   return GPT_OPENAI_SYNC_FILE_RE.test(base);
@@ -3184,16 +3200,16 @@ function RagTab({ projectId }) {
                     {node.files.map(f => (
                       <div key={f.id} className="list-item">
                         <div>
-                          <span>{f.original_name}</span>
+                          <span>{displayProjectFileName(f, t.projectFileUntitled)}</span>
                           {f.ingest_error && (
                             <div className="rag-file-index-error" role="alert">{f.ingest_error}</div>
                           )}
-                          {!f.ingest_error && !isIndexableFileName(f.original_name) && (
+                          {!f.ingest_error && !isIndexableFileName(displayProjectFileName(f, t.projectFileUntitled)) && (
                             <div className="rag-file-index-error" role="alert">{t.fileCannotBeIndexed}</div>
                           )}
                         </div>
                         <div className="flex gap">
-                          <button type="button" className="secondary" title={f.storage_path ? t.download : t.downloadNotAvailable} disabled={!f.storage_path} onClick={() => f.storage_path && projectFilesApi.download(projectId, f.id, f.original_name).catch(err => setError(err.response?.data?.error || err.message))}>{t.download}</button>
+                          <button type="button" className="secondary" title={f.storage_path ? t.download : t.downloadNotAvailable} disabled={!f.storage_path} onClick={() => f.storage_path && projectFilesApi.download(projectId, f.id, displayProjectFileName(f, t.projectFileUntitled)).catch(err => setError(err.response?.data?.error || err.message))}>{t.download}</button>
                           <button type="button" className={`secondary ${removingFileId === f.id ? 'btn-loading' : ''}`} onClick={() => removeFile(f.id)} disabled={removingFileId === f.id}>{removingFileId === f.id ? t.loading : t.remove}</button>
                         </div>
                       </div>
@@ -3365,7 +3381,7 @@ function RagTab({ projectId }) {
           <option value="">{t.allFiles}</option>
           {projectFiles.map((f) => (
             <option key={f.id} value={String(f.id)}>
-              {f.original_name || f.storage_path || `#${f.id}`}
+              {displayProjectFileName(f, `#${f.id}`)}
             </option>
           ))}
         </select>
@@ -3633,7 +3649,7 @@ function EmailsTab({ projectId }) {
         setImportNotice({ ok: true, text: t.emailImportDone });
         const row = res && res.file;
         const fileId = row && row.id;
-        const originalName = (row && (row.original_name || row.originalName)) || 'file';
+        const originalName = (row && (row.original_name || row.originalName || row.file_name)) || 'file';
         const prefetched =
           res && res.lab_parsed_text != null && res.lab_parsed_text !== undefined ? res.lab_parsed_text : null;
         const prefetchedSheets =
@@ -3785,7 +3801,7 @@ function EmailsTab({ projectId }) {
                   const f = composeFilesList.find(x => x.id === id);
                   return (
                     <li key={`p-${id}`} className="emails-compose-chip">
-                      <span dir="ltr" className="emails-compose-chip-text">{f?.original_name || id}</span>
+                      <span dir="ltr" className="emails-compose-chip-text">{f ? displayProjectFileName(f, String(id)) : id}</span>
                       <button
                         type="button"
                         className="emails-compose-chip-remove"
@@ -3858,7 +3874,7 @@ function EmailsTab({ projectId }) {
                             });
                           }}
                         />
-                        <span dir="auto" className="emails-compose-attach-name">{f.original_name || f.id}</span>
+                        <span dir="auto" className="emails-compose-attach-name">{displayProjectFileName(f, String(f.id))}</span>
                       </label>
                     </li>
                   );

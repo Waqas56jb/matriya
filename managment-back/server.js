@@ -4739,8 +4739,11 @@ app.post('/api/projects/:projectId/files', limiterUpload, upload.single('file'),
     return res.status(400).json({ error: 'No file provided' });
   }
   const file = req.file;
-  const utf8Name = req.body && typeof req.body.originalName === 'string' && req.body.originalName.trim();
-  const originalName = (utf8Name ? req.body.originalName.trim() : null) || file.originalname || 'file';
+  const originalName = effectiveUploadedFilename(
+    req.body?.originalName,
+    req.body?.filename,
+    file.originalname
+  );
   const folderDisplayName = req.body && typeof req.body.folder_display_name === 'string' && req.body.folder_display_name.trim() ? req.body.folder_display_name.trim() : null;
 
   // Guard: file_name is NOT NULL in project_files — must be set before insert.
@@ -4970,6 +4973,16 @@ async function ensureManualBucketExists() {
   if (error && !String(error.message || '').toLowerCase().includes('already exists')) {
     console.warn('[SharePoint] manual bucket create:', error.message);
   }
+}
+
+/** First non-empty trimmed candidate (multipart fields, Multer-provided filename, etc.). */
+function effectiveUploadedFilename(...candidates) {
+  for (const c of candidates) {
+    if (c == null) continue;
+    const s = String(c).trim();
+    if (s) return s;
+  }
+  return 'file';
 }
 
 function safeStorageKeySegment(name) {
@@ -5352,13 +5365,24 @@ app.post('/api/projects/:projectId/files/upload-to-sharepoint-bucket', limiterUp
       } catch (_) {}
     }
     if (!Array.isArray(fileNames) || fileNames.length !== files.length) fileNames = null;
-    if (!fileNames && files.length > 0 && process.env.NODE_ENV !== 'production') console.warn('[SharePoint upload] fileNames missing or length mismatch – display names may be wrong.');
+    if (!fileNames || fileNames.length !== files.length) {
+      console.warn('[SharePoint upload] fileNames missing or length mismatch — using multipart filename per part.', {
+        nFiles: files.length,
+        nNames: Array.isArray(fileNames) ? fileNames.length : 0,
+        bodyKeys: req.body ? Object.keys(req.body) : [],
+        originalsFromMulter: files.map((f) => ({ originalname: f.originalname })),
+      });
+    }
     await ensureManualBucketExists();
     const uploaded = [];
     const failed = [];
     const folderId = folderPath ? (existingFolderId || randomAsciiId(8)) : null;
     const storagePaths = files.map((file, i) => {
-      const relativeName = fileNames ? String(fileNames[i] ?? '').trim() || file.originalname || file.name || 'file' : file.originalname || file.name || 'file';
+      const relativeName = effectiveUploadedFilename(
+        fileNames ? fileNames[i] : null,
+        file.originalname,
+        file.filename
+      );
       const ext = getExtensionAscii(relativeName) || '';
       const fileId = randomAsciiId(8);
       return folderId ? `${folderId}/${fileId}${ext}` : `${fileId}${ext}`;
@@ -5367,7 +5391,11 @@ app.post('/api/projects/:projectId/files/upload-to-sharepoint-bucket', limiterUp
     const UPLOAD_FILE_TIMEOUT_MS = 10 * 60 * 1000; // 10 min per file
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      const relativeName = fileNames ? String(fileNames[i] ?? '').trim() || file.originalname || file.name || 'file' : file.originalname || file.name || 'file';
+      const relativeName = effectiveUploadedFilename(
+        fileNames ? fileNames[i] : null,
+        file.originalname,
+        file.filename
+      );
       const storagePath = storagePaths[i];
       console.log('[SharePoint upload] uploading file', i + 1, '/', files.length, 'path=', storagePath, 'size=', Math.round((file.buffer?.length || 0) / 1024), 'KB');
       let result;
@@ -5391,6 +5419,7 @@ app.post('/api/projects/:projectId/files/upload-to-sharepoint-bucket', limiterUp
         const fullStoragePath = MANUAL_PREFIX + '/' + storagePath;
         const { data: fileRow, error: insertErr } = await supabase.from('project_files').insert({
           project_id: projectId,
+          file_name: relativeName,
           original_name: relativeName,
           storage_path: fullStoragePath,
           folder_display_name: folderPath || null
@@ -5489,6 +5518,7 @@ app.post('/api/projects/:projectId/files/register-and-ingest', async (req, res) 
         const buffer = Buffer.from(await blob.arrayBuffer());
         const { data: fileRow, error: insertErr } = await supabase.from('project_files').insert({
           project_id: projectId,
+          file_name: name,
           original_name: name,
           storage_path: fullStoragePath,
           folder_display_name: null
@@ -5657,6 +5687,7 @@ app.post('/api/projects/:projectId/files/from-bucket', async (req, res) => {
     const folderDisplayName = req.body?.folder_display_name != null ? String(req.body.folder_display_name).trim() || null : null;
     const { data: row, error } = await supabase.from('project_files').insert({
       project_id: projectId,
+      file_name: originalName,
       original_name: originalName,
       storage_path: path,
       folder_display_name: folderDisplayName || null
@@ -5679,14 +5710,14 @@ app.get('/api/projects/:projectId/files/:fileId/download', async (req, res) => {
     const ctx = await requireProjectMember(req, res, req.params.projectId);
     if (!ctx) return;
     const { projectId, fileId } = req.params;
-    const { data: row, error } = await supabase.from('project_files').select('original_name, storage_path').eq('id', fileId).eq('project_id', projectId).single();
+    const { data: row, error } = await supabase.from('project_files').select('original_name, file_name, storage_path').eq('id', fileId).eq('project_id', projectId).single();
     if (error || !row) return res.status(404).json({ error: 'File not found' });
     if (!row.storage_path) return res.status(404).json({ error: 'Download not available for this file (not from SharePoint bucket)' });
     const { bucket, storagePath } = resolveBucketAndPath(row.storage_path);
     const { data: blob, error: downloadError } = await supabase.storage.from(bucket).download(storagePath);
     if (downloadError || !blob) return res.status(404).json({ error: downloadError?.message || 'File not found in storage' });
     const buffer = Buffer.from(await blob.arrayBuffer());
-    const filename = row.original_name || row.storage_path.split('/').pop() || 'download';
+    const filename = effectiveUploadedFilename(row.original_name, row.file_name, row.storage_path.split('/').pop(), 'download');
     res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
     res.setHeader('Content-Type', 'application/octet-stream');
     res.send(buffer);

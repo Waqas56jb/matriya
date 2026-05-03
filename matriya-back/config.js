@@ -55,6 +55,16 @@ class Settings {
      * If 413 persists behind nginx, raise client_max_body_size to match or exceed this.
      */
     this.EXPRESS_BODY_LIMIT = (process.env.EXPRESS_BODY_LIMIT || '15mb').trim() || '15mb';
+
+    /** When true, Express serves CRA build from `./public` at `/` and unknown GET paths (combo deploy).
+     * In production unset → false so `/` looks like an API (Railway / API-only avoids "HTML looks like mis-deploy").
+     * Set MATRIYA_SERVE_EMBEDDED_SPA=1 to serve SPA on prod. */
+    this.SERVE_EMBEDDED_SPA = (() => {
+      const v = String(process.env.MATRIYA_SERVE_EMBEDDED_SPA ?? '').trim().toLowerCase();
+      if (v === '1' || v === 'true' || v === 'yes') return true;
+      if (v === '0' || v === 'false' || v === 'no') return false;
+      return process.env.NODE_ENV !== 'production';
+    })();
     
     // Supabase Settings (optional - only for Supabase client features)
     this.SUPABASE_URL = process.env.SUPABASE_URL || null;

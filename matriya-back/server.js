@@ -455,16 +455,16 @@ const researchRunLocks = new Map();
  * Root endpoint
  */
 app.get("/", (req, res) => {
-  // Serve the bundled React frontend when available; otherwise return API info.
   const indexPath = join(__dirname, 'public', 'index.html');
-  if (existsSync(indexPath)) {
+  if (settings.SERVE_EMBEDDED_SPA && existsSync(indexPath)) {
     return res.sendFile(indexPath);
   }
   return res.json({
-    message: "MATRIYA RAG System API",
-    version: "1.0.0",
-    status: "running",
-    build: "whatsapp-pipeline-v2"
+    message: 'MATRIYA RAG System API',
+    version: '1.0.0',
+    status: 'running',
+    build: 'whatsapp-pipeline-v2',
+    hint: 'GET /health for JSON health. Embedded SPA is off in production; set MATRIYA_SERVE_EMBEDDED_SPA=1 to serve /public at /.',
   });
 });
 
@@ -4737,7 +4737,7 @@ app.post("/reset", async (req, res) => {
 // Any request that is NOT a known API prefix is served the React SPA so that
 // browser-side routing works correctly (e.g. deep-links, page refresh).
 const frontendDist = join(__dirname, 'public');
-if (existsSync(join(frontendDist, 'index.html'))) {
+if (settings.SERVE_EMBEDDED_SPA && existsSync(join(frontendDist, 'index.html'))) {
   app.use(express.static(frontendDist));
   const API_PREFIXES = ['/auth', '/admin', '/api', '/ingest', '/files', '/documents',
     '/search', '/ask-matriya', '/reset', '/gpt-rag', '/collection', '/research', '/health',

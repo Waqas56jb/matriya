@@ -170,9 +170,13 @@ export const projectFiles = {
     api.get(`/api/projects/${projectId}/files`, { params: params || {}, timeout: 60000 }).then(r => r.data),
   upload: (projectId, file, folderDisplayName) => {
     const form = new FormData();
-    form.append('file', file);
-    form.append('originalName', file.name || '');
+    const displayName =
+      (typeof file?.name === 'string' && file.name.trim()) ||
+      (file?.webkitRelativePath && String(file.webkitRelativePath).split('/').filter(Boolean).pop()) ||
+      '';
     if (folderDisplayName) form.append('folder_display_name', folderDisplayName);
+    form.append('originalName', displayName);
+    form.append('file', file);
     const headers = {};
     const token = getStoredToken();
     if (token) headers.Authorization = `Bearer ${token}`;

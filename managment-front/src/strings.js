@@ -36,6 +36,7 @@ export default {
   documentsCount: 'מסמכים',
   notesCount: 'הערות',
   filesCount: 'קבצים',
+  projectFileUntitled: 'קובץ ללא שם',
 
   addTask: 'הוסף משימה',
   taskTitle: 'כותרת משימה',

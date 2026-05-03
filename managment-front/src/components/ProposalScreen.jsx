@@ -483,7 +483,7 @@ export default function ProposalScreen({ project }) {
                     );
                   }}
                 />
-                {f.display_name || f.storage_path?.split('/').pop() || f.id}
+                {f.original_name || f.file_name || f.storage_path?.split('/').pop() || f.id}
               </label>
             ))}
           </div>
