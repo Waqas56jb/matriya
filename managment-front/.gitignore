@@ -1,6 +1,15 @@
 node_modules/
 dist/
+
+# Environment — never commit (VITE_* keys / URLs)
 .env
+.env.*
 .env.local
+.env.development.local
+.env.production.local
+.env.test.local
+.envrc
+!.env.example
+
 *.log
 .DS_Store

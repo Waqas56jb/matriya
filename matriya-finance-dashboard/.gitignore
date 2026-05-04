@@ -1,11 +1,8 @@
 node_modules/
-
+dist/
 .env
 .env.*
-.env.local
-.envrc
 !.env.example
-__pycache__/
-*.pyc
-*.pyo
+.envrc
+*.log
 .DS_Store

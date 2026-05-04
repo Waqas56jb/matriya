@@ -30,17 +30,23 @@ bower_components/
 !.yarn/sdks
 !.yarn/versions
 
-# --- Secrets & local env ---
+# --- Secrets & local env (never commit — prevents GitHub/Vercel secret leaks) ---
 .env
 .env.*
-# Allow committed env files (public URLs / local dev defaults — no secrets)
-!.env.production
-!**/.env.production
-!.env.development
-!**/.env.development
+.envrc
+.direnv/
 *.pem
 *.key
 secrets.json
+credentials.json
+*-credentials.json
+serviceAccount*.json
+.aws/credentials
+# Optional templates only (no real secrets):
+!.env.example
+!**/.env.example
+!.env.sample
+!**/.env.sample
 
 # --- npm / yarn / pnpm ---
 npm-debug.log*

@@ -1,5 +1,11 @@
 node_modules/
+
+# Environment — never commit (contains Supabase/OpenAI/Postgres secrets)
 .env
+.env.*
 .env.local
+.envrc
+!.env.example
+
 *.log
 .DS_Store

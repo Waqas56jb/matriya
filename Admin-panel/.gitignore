@@ -1,4 +1,10 @@
 node_modules/
 dist/
+
 .env
+.env.*
+.env.local
+.envrc
+!.env.example
+
 *.log
