@@ -2,7 +2,8 @@ import axios from 'axios';
 import { createClient } from '@supabase/supabase-js';
 
 // Backend URL from .env (VITE_MANEGER_API_URL) – used for all API and file uploads
-export const API_BASE = (import.meta.env.VITE_MANEGER_API_URL || 'http://localhost:8001').replace(/\/$/, '');
+const DEFAULT_MGMT_API = 'https://matriya-managment-backend.vercel.app';
+export const API_BASE = (import.meta.env.VITE_MANEGER_API_URL || DEFAULT_MGMT_API).replace(/\/$/, '');
 
 export const api = axios.create({
   baseURL: API_BASE,

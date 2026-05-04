@@ -13,9 +13,9 @@ import { supabase } from '../server.js';
 const router = Router();
 
 const SERVICES = {
-  'matriya-back':    process.env.MATRIYA_BACK_URL     || 'http://localhost:8000',
-  'managment-back':  process.env.MANAGEMENT_BACK_URL  || 'http://localhost:8001',
-  'matriya-finance': process.env.MATRIYA_FINANCE_URL  || 'http://localhost:9001',
+  'matriya-back':    process.env.MATRIYA_BACK_URL     || 'https://matriya-backend.vercel.app',
+  'managment-back':  process.env.MANAGEMENT_BACK_URL  || 'https://matriya-managment-backend.vercel.app',
+  'matriya-finance': process.env.MATRIYA_FINANCE_URL  || 'https://captivating-liberation-production-3086.up.railway.app',
 };
 
 router.get('/health', async (_req, res) => {

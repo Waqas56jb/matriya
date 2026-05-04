@@ -1,7 +1,7 @@
 /**
  * Load env before server.js reads MATRIYA_BACK_URL / Supabase keys.
  * - `.env` — base (often gitignored; may contain production URLs by mistake)
- * - `.env.development` — when NODE_ENV !== 'production', overrides (e.g. MATRIYA_BACK_URL=http://localhost:8000)
+ * - `.env.development` — when NODE_ENV !== 'production', overrides (e.g. MATRIYA_BACK_URL to local or Vercel)
  */
 import dotenv from 'dotenv';
 import { existsSync } from 'fs';
