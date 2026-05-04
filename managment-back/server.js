@@ -66,6 +66,7 @@ const SUPABASE_URL = envTrim(process.env.NEXT_PUBLIC_SUPABASE_URL || process.env
  */
 const SUPABASE_SERVICE_KEY = envTrim(
   process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_SECRET_KEY ||
     process.env.SUPABASE_KEY ||
     process.env.SUPABASE_SERVICE_KEY ||
     process.env.SUPABASE_ANON_KEY ||
@@ -347,7 +348,7 @@ supabase =
     : null;
 if (!supabase) {
   console.error(
-    '[maneger-back] Missing SUPABASE_URL and/or a Supabase key. Set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_KEY) on this deployment. Vercel: managment-back project → Environment Variables → Production; redeploy after changes.'
+    '[maneger-back] Missing SUPABASE_URL and/or a Supabase server key. Set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SECRET_KEY (Vercel Supabase integration). Redeploy after env changes.'
   );
 }
 
@@ -445,7 +446,7 @@ app.use((req, res, next) => {
     ok: false,
     service: 'maneger-back',
     error:
-      'Supabase is not configured on this server. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_KEY) in the managment-back environment — Vercel: Project → Settings → Environment Variables (enable for Production). Local: managment-back/.env',
+      'Supabase is not configured on this server. Set SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL) and a server key: SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SECRET_KEY (Vercel integration). Managment-back project → Environment Variables → Production. Local: managment-back/.env',
     missing: {
       supabase_url: !SUPABASE_URL,
       supabase_key: !SUPABASE_SERVICE_KEY,
@@ -7474,7 +7475,7 @@ app.get('/health', async (req, res) => {
       service: 'maneger-back',
       db_status: 'not_configured',
       error:
-        'Missing Supabase URL and/or server key. This managment-back instance needs SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_KEY) in environment variables.',
+        'Missing Supabase URL and/or server key. Use SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SECRET_KEY (name used by Vercel ↔ Supabase integration).',
       missing: {
         supabase_url: !SUPABASE_URL,
         supabase_key: !SUPABASE_SERVICE_KEY,

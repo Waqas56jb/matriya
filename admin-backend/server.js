@@ -53,13 +53,18 @@ import { logAdminAction } from './middleware/auditLogger.js';
 
 const PORT = parseInt(process.env.PORT, 10) || 9000;
 
-const _sbUrl = (process.env.SUPABASE_URL || '').trim();
-const _sbKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+const _sbUrl = (process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '').trim();
+const _sbKey = (
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_SECRET_KEY ||
+  process.env.SUPABASE_KEY ||
+  ''
+).trim();
 export const supabase =
   _sbUrl && _sbKey ? createClient(_sbUrl, _sbKey) : null;
 if (!supabase) {
   console.error(
-    '[admin-backend] Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY — set both in Vercel → Environment Variables (Production).'
+    '[admin-backend] Missing Supabase URL or server key (SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SECRET_KEY from Vercel integration).'
   );
 }
 
