@@ -481,11 +481,26 @@ function getDbFingerprint() {
  * db_fingerprint: same on local and prod when using the same DB (compare to verify).
  */
 app.get("/health", async (req, res) => {
+  const collectionName = process.env.COLLECTION_NAME || "rag_documents";
+  const dbFingerprint = getDbFingerprint();
+  const pgUrl = (process.env.POSTGRES_URL || process.env.POSTGRES_PRISMA_URL || "").trim();
+  // HTTP 200 so load balancers pass; body distinguishes ready vs misconfigured (David / ops smoke tests).
+  if (!pgUrl) {
+    return res.status(200).json({
+      status: "degraded",
+      version: "v1.1-matgate-final",
+      error:
+        "POSTGRES_URL (or POSTGRES_PRISMA_URL) is not set — vector RAG and Sequelize need the Supabase pooler URI.",
+      missing: ["POSTGRES_URL"],
+      hint: "Vercel: Project (matriya-back) → Settings → Environment Variables → Production → POSTGRES_URL=postgresql://...",
+      db_fingerprint: null,
+      collection_name: collectionName,
+      metrics: getMetrics()
+    });
+  }
   try {
     const info = await getRagService().getCollectionInfo();
     const metrics = getMetrics();
-    const dbFingerprint = getDbFingerprint();
-    const collectionName = process.env.COLLECTION_NAME || "rag_documents";
     return res.json({
       status: "healthy",
       version: "v1.1-matgate-final",
@@ -501,9 +516,13 @@ app.get("/health", async (req, res) => {
     });
   } catch (e) {
     logger.error(`Health check failed: ${e.message}`);
-    return res.status(500).json({
-      status: "unhealthy",
-      error: e.message
+    return res.status(200).json({
+      status: "degraded",
+      version: "v1.1-matgate-final",
+      error: e.message,
+      db_fingerprint: dbFingerprint,
+      collection_name: collectionName,
+      metrics: getMetrics()
     });
   }
 });
