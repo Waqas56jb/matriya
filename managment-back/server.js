@@ -53,8 +53,24 @@ import {
 /** Do not static-import pdf-to-img: it loads pdfjs-dist which needs canvas/DOM and crashes Vercel cold start. */
 
 const PORT = parseInt(process.env.PORT, 10) || 8001;
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+function envTrim(v) {
+  const s = v == null ? '' : String(v).replace(/^\uFEFF/, '').trim();
+  return s || '';
+}
+/** Supabase project URL (trimmed). */
+const SUPABASE_URL = envTrim(process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL);
+/**
+ * Server-side Supabase key: prefer service role. Also accepts SUPABASE_KEY / SUPABASE_SERVICE_KEY
+ * (some deployments use the same names as matriya-back). Anon key is last resort (limited RLS).
+ */
+const SUPABASE_SERVICE_KEY = envTrim(
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_KEY ||
+    process.env.SUPABASE_SERVICE_KEY ||
+    process.env.SUPABASE_ANON_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+);
 const MATRIYA_BACK_URL = (process.env.MATRIYA_BACK_URL || '').replace(/\/$/, '');
 /** Optional: same value as MATRIYA_MANAGEMENT_MATERIALS_KEY on Matriya back — allows GET /api/matriya/projects-with-materials-summary without user JWT (server / curl / local dev). */
 const MANEGER_MATERIALS_SUMMARY_SERVER_KEY = (process.env.MANEGER_MATERIALS_SUMMARY_SERVER_KEY || '').trim();
@@ -331,7 +347,7 @@ supabase =
     : null;
 if (!supabase) {
   console.error(
-    '[maneger-back] Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY — set both in Vercel → Environment Variables (Production). Optional mirrors: NEXT_PUBLIC_SUPABASE_URL / anon key is not enough for server role.'
+    '[maneger-back] Missing SUPABASE_URL and/or a Supabase key. Set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_KEY) on this deployment. Vercel: managment-back project → Environment Variables → Production; redeploy after changes.'
   );
 }
 
@@ -429,7 +445,12 @@ app.use((req, res, next) => {
     ok: false,
     service: 'maneger-back',
     error:
-      'Supabase is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in this Vercel project (Environment Variables → Production).',
+      'Supabase is not configured on this server. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_KEY) in the managment-back environment — Vercel: Project → Settings → Environment Variables (enable for Production). Local: managment-back/.env',
+    missing: {
+      supabase_url: !SUPABASE_URL,
+      supabase_key: !SUPABASE_SERVICE_KEY,
+    },
+    runtime: process.env.VERCEL ? 'vercel' : 'local',
   });
 });
 
@@ -7453,7 +7474,16 @@ app.get('/health', async (req, res) => {
       service: 'maneger-back',
       db_status: 'not_configured',
       error:
-        'Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY. Add them in Vercel → Project → Settings → Environment Variables.',
+        'Missing Supabase URL and/or server key. This managment-back instance needs SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_KEY) in environment variables.',
+      missing: {
+        supabase_url: !SUPABASE_URL,
+        supabase_key: !SUPABASE_SERVICE_KEY,
+      },
+      hint:
+        process.env.VERCEL
+          ? 'Vercel: open the managment-back project (not matriya-front), Environment Variables, add for Production (and Preview if needed). Redeploy after saving.'
+          : 'Local: copy values into managment-back/.env from Supabase → Project Settings → API (URL + service_role secret).',
+      runtime: process.env.VERCEL ? 'vercel' : 'local',
     });
   }
   const start = Date.now();
