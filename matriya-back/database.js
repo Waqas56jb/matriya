@@ -6,7 +6,10 @@ import logger from './logger.js';
 
 // Get database URL - Supabase only (simplest possible)
 function getDatabaseUrl() {
-  const poolerUrl = process.env.POSTGRES_URL || process.env.POSTGRES_PRISMA_URL;
+  const poolerUrl =
+    process.env.POSTGRES_URL ||
+    process.env.POSTGRES_PRISMA_URL ||
+    process.env.DATABASE_URL;
   const directUrl = process.env.SUPABASE_DB_URL;
   // Prefer pooler (pooler.supabase.com) so DNS resolves; db.PROJECT.supabase.co can ENOTFOUND if project paused/wrong.
   const dbUrl = poolerUrl || directUrl;

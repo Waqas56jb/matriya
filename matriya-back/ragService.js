@@ -93,9 +93,12 @@ class RAGService {
     );
     
     // Initialize vector store - Supabase only
-    const dbUrl = process.env.POSTGRES_URL || process.env.POSTGRES_PRISMA_URL;
+    const dbUrl =
+      process.env.POSTGRES_URL ||
+      process.env.POSTGRES_PRISMA_URL ||
+      process.env.DATABASE_URL;
     if (!dbUrl) {
-      throw new Error("POSTGRES_URL environment variable is required.");
+      throw new Error("POSTGRES_URL (or DATABASE_URL) environment variable is required.");
     }
     this.vectorStore = new SupabaseVectorStore(
       dbUrl,

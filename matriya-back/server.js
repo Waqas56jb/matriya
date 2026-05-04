@@ -470,7 +470,11 @@ app.get("/", (req, res) => {
 
 /** Redact POSTGRES_URL to a short fingerprint so local vs prod can be compared (same DB = same fingerprint). */
 function getDbFingerprint() {
-  const url = process.env.POSTGRES_URL || process.env.POSTGRES_PRISMA_URL || "";
+  const url =
+    process.env.POSTGRES_URL ||
+    process.env.POSTGRES_PRISMA_URL ||
+    process.env.DATABASE_URL ||
+    "";
   if (!url) return null;
   const m = url.match(/@([^/]+?)(?::\d+)?(?:\/|$)/);
   return m ? m[1] : null; // e.g. "abc123.pooler.supabase.com"
@@ -483,16 +487,21 @@ function getDbFingerprint() {
 app.get("/health", async (req, res) => {
   const collectionName = process.env.COLLECTION_NAME || "rag_documents";
   const dbFingerprint = getDbFingerprint();
-  const pgUrl = (process.env.POSTGRES_URL || process.env.POSTGRES_PRISMA_URL || "").trim();
+  const pgUrl = (
+    process.env.POSTGRES_URL ||
+    process.env.POSTGRES_PRISMA_URL ||
+    process.env.DATABASE_URL ||
+    ""
+  ).trim();
   // HTTP 200 so load balancers pass; body distinguishes ready vs misconfigured (David / ops smoke tests).
   if (!pgUrl) {
     return res.status(200).json({
       status: "degraded",
       version: "v1.1-matgate-final",
       error:
-        "POSTGRES_URL (or POSTGRES_PRISMA_URL) is not set — vector RAG and Sequelize need the Supabase pooler URI.",
-      missing: ["POSTGRES_URL"],
-      hint: "Vercel: Project (matriya-back) → Settings → Environment Variables → Production → POSTGRES_URL=postgresql://...",
+        "No Postgres URI — set POSTGRES_URL or DATABASE_URL (Supabase pooler URI).",
+      missing: ["POSTGRES_URL", "DATABASE_URL"],
+      hint: "Vercel: add POSTGRES_URL or DATABASE_URL (postgresql://…). Many dashboards only expose DATABASE_URL — both names are now accepted.",
       db_fingerprint: null,
       collection_name: collectionName,
       metrics: getMetrics()

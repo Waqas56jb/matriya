@@ -5,12 +5,14 @@ import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
+import { normalizePostgresEnv } from './lib/normalizePostgresEnv.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // Always load .env from this package root (fixes empty MANAGEMENT_BACK_URL when cwd is not matriya-back).
 dotenv.config({ path: join(__dirname, '.env') });
+normalizePostgresEnv();
 
 const VERCEL_DEPLOY =
   process.env.VERCEL === '1' || process.env.VERCEL === 'true' || Boolean(process.env.VERCEL_ENV);

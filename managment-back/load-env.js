@@ -14,3 +14,11 @@ const devEnvPath = join(dir, '.env.development');
 if (process.env.NODE_ENV !== 'production' && existsSync(devEnvPath)) {
   dotenv.config({ path: devEnvPath, override: true });
 }
+
+/** Vercel/Supabase often provide `DATABASE_URL` only; lab + RAG expect `POSTGRES_URL`. */
+(function mirrorDatabaseUrlToPostgres() {
+  const t = (s) => (s == null ? '' : String(s).replace(/^\uFEFF/, '').trim());
+  if (!t(process.env.POSTGRES_URL) && t(process.env.DATABASE_URL)) {
+    process.env.POSTGRES_URL = process.env.DATABASE_URL;
+  }
+})();
