@@ -14,11 +14,12 @@ import {
   expandQueryWithSemanticTerms
 } from './domainAndGenerationGate.js';
 
+export { RAG_INSUFFICIENT_SUPPORT_MESSAGE_HE } from './ragConstants.js';
+
 const TABLE_NAME = 'management_vector';
 const CHUNK_SIZE = 1000;
 const CHUNK_OVERLAP = 200;
 
-export const RAG_INSUFFICIENT_SUPPORT_MESSAGE_HE = 'אין במערכת מידע תומך לשאלה זו.';
 const MIN_DOC_CHARS = 12;
 const RAG_MEASUREMENT_SCHEMA_RULES = [
   'Apply JSON schema ONLY for explicit measurement extraction requests (viscosity, pH, cps, percentages).',

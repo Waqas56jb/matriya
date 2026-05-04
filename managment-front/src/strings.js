@@ -192,7 +192,7 @@ export default {
   emailFolderSent: 'נשלחו',
   emailFolderReceived: 'התקבלו',
   emailReceivedSetupHint:
-    'אין מיילים נכנסים עדיין. כדי לקבל מיילים לפרויקט: הגדר ב־Resend Inbound Webhook את כתובת ה־API של השרת (כולל מזהה הפרויקט בכתובת היעד), כפי שמופיע ב־.env.example של maneger-back.',
+    'אין מיילים נכנסים עדיין. כדי לקבל מיילים לפרויקט: הגדר ב־Resend Inbound Webhook את כתובת ה־API של השרת (כולל מזהה הפרויקט בכתובת היעד), כפי שמופיע ב־.env של maneger-back.',
   emailCompose: 'הודעה חדשה',
   emailNoSelection: 'בחר מייל מהרשימה',
   emailEmptyList: 'אין מיילים בתיקייה זו.',

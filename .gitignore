@@ -33,8 +33,6 @@ bower_components/
 # --- Secrets & local env ---
 .env
 .env.*
-!.env.example
-!.env*.example
 # Allow committed production env files (no secrets — only public URLs)
 !.env.production
 !**/.env.production

@@ -3,6 +3,10 @@
  * Features: projects, tasks, milestones, documents, notes, file upload, RAG (local management_vector in management DB).
  */
 import 'dotenv/config';
+/** Vercel sometimes sets VERCEL_URL / VERCEL_ENV without VERCEL — must not call app.listen() there. */
+if ((process.env.VERCEL_ENV || process.env.VERCEL_URL) && !process.env.VERCEL) {
+  process.env.VERCEL = '1';
+}
 import crypto from 'crypto';
 import express from 'express';
 import path from 'path';
@@ -19,7 +23,7 @@ import {
   removeProjectFileFromGptRagAndOpenAi,
   filterProjectGptSnippetsToIndex
 } from './lib/gptRagSync.js';
-import { RAG_INSUFFICIENT_SUPPORT_MESSAGE_HE } from './lib/ragService.js';
+import { RAG_INSUFFICIENT_SUPPORT_MESSAGE_HE } from './lib/ragConstants.js';
 import {
   UUID_IN_TEXT_RE,
   parseEmailOnly,
@@ -7393,8 +7397,13 @@ app.get('/health', async (req, res) => {
   });
 });
 
-// Vercel uses this as the serverless handler; locally we start the HTTP server
-if (!process.env.VERCEL) {
+// Vercel serverless: export app only. Local / Docker / Railway: bind HTTP server.
+const isVercelServerless =
+  process.env.VERCEL === '1' ||
+  process.env.VERCEL === 'true' ||
+  Boolean(process.env.VERCEL_ENV) ||
+  Boolean(process.env.VERCEL_URL);
+if (!isVercelServerless) {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Maneger API running on http://0.0.0.0:${PORT}`);
     if (!hasLocalRag()) console.warn('POSTGRES_URL not set – RAG (document Q&A) disabled. Set POSTGRES_URL to use management_vector.');
