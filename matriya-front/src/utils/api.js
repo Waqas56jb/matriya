@@ -3,10 +3,9 @@
  */
 import axios from 'axios';
 
-// Matriya API base URL — MUST be set at build time (CRA inlines env at compile).
-// Do not default to matriya-back.vercel.app: that deployment is legacy and rejects
-// flow=lab (returns session_id required). Point at YOUR Matriya API project, e.g.
-// https://matriya-proj-hfmn.vercel.app
+// Matriya API base URL — inlined at compile time by CRA.
+// Local: use `.env.development` (committed) or `REACT_APP_API_BASE_URL` → http://localhost:8000
+// Production: `.env.production` + Vercel env (e.g. https://matriya-backend.vercel.app)
 let API_BASE_URL = (process.env.REACT_APP_API_BASE_URL || '').trim();
 
 if (!API_BASE_URL) {

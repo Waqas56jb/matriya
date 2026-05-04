@@ -2,7 +2,7 @@
  * Project Manager API – Express + Supabase.
  * Features: projects, tasks, milestones, documents, notes, file upload, RAG (local management_vector in management DB).
  */
-import 'dotenv/config';
+import './load-env.js';
 /** Vercel sometimes sets VERCEL_URL / VERCEL_ENV without VERCEL — must not call app.listen() there. */
 if ((process.env.VERCEL_ENV || process.env.VERCEL_URL) && !process.env.VERCEL) {
   process.env.VERCEL = '1';
@@ -181,14 +181,21 @@ function hasLocalRag() {
 }
 
 /**
- * OpenAI vector_store.write capability probe — checked once at startup, result cached.
- * If the API key lacks vector_store.write, uploads are blocked at the API layer.
+ * OpenAI vector_store.write probe (creates + deletes a throwaway vector store).
+ * Default: do NOT block file uploads if the key lacks vector_store.write (restricted keys);
+ * GPT sync may still fail until the key has that scope or you use a standard (non-restricted) secret key.
+ * Set OPENAI_REQUIRE_VECTOR_STORE_WRITE=1 to restore strict blocking.
  */
-let _vsCapabilityCache = null; // { capable: bool, error: string|null, checkedAt: number }
+let _vsCapabilityCache = null; // { capable, error, scopeWarning?, checkedAt }
+
+function openAiVectorStoreWriteStrict() {
+  const v = String(process.env.OPENAI_REQUIRE_VECTOR_STORE_WRITE || '').trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes';
+}
 
 async function probeOpenAiVectorStoreCapability() {
   if (!OPENAI_API_KEY) {
-    _vsCapabilityCache = { capable: false, error: 'OPENAI_API_KEY not set', checkedAt: Date.now() };
+    _vsCapabilityCache = { capable: false, error: 'OPENAI_API_KEY not set', scopeWarning: null, checkedAt: Date.now() };
     return _vsCapabilityCache;
   }
   try {
@@ -203,15 +210,28 @@ async function probeOpenAiVectorStoreCapability() {
         { headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json', 'OpenAI-Beta': 'assistants=v2' }, timeout: 10000 }
       ).catch(() => {});
     }
-    _vsCapabilityCache = { capable: true, error: null, checkedAt: Date.now() };
+    _vsCapabilityCache = { capable: true, error: null, scopeWarning: null, checkedAt: Date.now() };
   } catch (e) {
     const msg = e.response?.data?.error?.message || e.message || '';
     const isScopeError = msg.includes('vector_store.write') || msg.includes('Missing scopes') || msg.includes('insufficient permissions');
-    if (isScopeError) {
-      _vsCapabilityCache = { capable: false, error: 'RAG upload disabled — missing permission: ' + msg, checkedAt: Date.now() };
+    if (isScopeError && openAiVectorStoreWriteStrict()) {
+      _vsCapabilityCache = {
+        capable: false,
+        error: 'RAG upload disabled — missing permission: ' + msg,
+        scopeWarning: null,
+        checkedAt: Date.now()
+      };
+    } else if (isScopeError) {
+      // Permissive default: allow project file uploads; OpenAI GPT-RAG sync may error until key is fixed.
+      _vsCapabilityCache = {
+        capable: true,
+        error: null,
+        scopeWarning: msg,
+        checkedAt: Date.now()
+      };
     } else {
       // Network/transient error — do not block uploads
-      _vsCapabilityCache = { capable: true, error: null, checkedAt: Date.now() };
+      _vsCapabilityCache = { capable: true, error: null, scopeWarning: null, checkedAt: Date.now() };
     }
   }
   return _vsCapabilityCache;
@@ -228,8 +248,13 @@ async function getVsCapability() {
 // Run probe at startup (non-blocking)
 if (OPENAI_API_KEY) {
   probeOpenAiVectorStoreCapability().then(r => {
-    if (!r.capable) console.warn('[RAG capability] vector_store.write MISSING — uploads will be blocked:', r.error);
-    else console.log('[RAG capability] vector_store.write OK');
+    if (!r.capable) console.warn('[RAG capability] uploads blocked (strict mode or missing key):', r.error);
+    else if (r.scopeWarning) {
+      console.warn(
+        '[RAG capability] OpenAI key may lack vector_store.write — file uploads allowed; GPT-RAG sync may fail. Fix: use a standard API key or add vector_store.write on a restricted key. Set OPENAI_REQUIRE_VECTOR_STORE_WRITE=1 to block uploads.',
+        r.scopeWarning
+      );
+    } else console.log('[RAG capability] vector_store.write OK');
   }).catch(() => {});
 }
 
@@ -4747,13 +4772,13 @@ app.post('/api/projects/:projectId/files', limiterUpload, upload.single('file'),
   const ctx = await requireProjectMember(req, res, projectId);
   if (!ctx) return;
 
-  // Pre-upload gate: block if OpenAI vector_store.write permission is missing
-  if (OPENAI_API_KEY) {
+  // Pre-upload gate only when OPENAI_REQUIRE_VECTOR_STORE_WRITE=1 and probe reports missing scope
+  if (OPENAI_API_KEY && openAiVectorStoreWriteStrict()) {
     const cap = await getVsCapability();
     if (!cap.capable) {
       return res.status(503).json({
         error: 'RAG upload disabled — missing permission: vector_store.write',
-        detail: cap.error || 'The OpenAI API key does not have vector_store.write scope. Update the key in Railway environment variables.',
+        detail: cap.error || 'The OpenAI API key does not have vector_store.write scope.',
         rag_upload_blocked: true
       });
     }
@@ -6314,14 +6339,30 @@ app.get('/api/projects/:projectId/gpt-rag/status', limiterRag, async (req, res) 
     const cap = OPENAI_API_KEY ? await getVsCapability().catch(() => null) : null;
     const ragUploadBlocked = cap ? !cap.capable : false;
     const ragUploadBlockedReason = cap?.error || null;
+    const ragOpenaiScopeWarning = cap?.scopeWarning || null;
     if (!OPENAI_API_KEY) {
-      return res.json({ configured: false, openai: false, reason: 'OPENAI_API_KEY not set on server', rag_upload_blocked: true, rag_upload_blocked_reason: 'OPENAI_API_KEY not set' });
+      return res.json({
+        configured: false,
+        openai: false,
+        reason: 'OPENAI_API_KEY not set on server',
+        rag_upload_blocked: true,
+        rag_upload_blocked_reason: 'OPENAI_API_KEY not set',
+        rag_openai_scope_warning: null
+      });
     }
     const { data: project, error } = await supabase.from('projects').select('id, openai_vector_store_id').eq('id', projectId).single();
     if (error || !project) return res.status(404).json({ error: 'Project not found' });
     const vsId = project.openai_vector_store_id;
     if (!vsId) {
-      return res.json({ configured: true, openai: true, vector_store_id: null, vector_store_status: null, rag_upload_blocked: ragUploadBlocked, rag_upload_blocked_reason: ragUploadBlockedReason });
+      return res.json({
+        configured: true,
+        openai: true,
+        vector_store_id: null,
+        vector_store_status: null,
+        rag_upload_blocked: ragUploadBlocked,
+        rag_upload_blocked_reason: ragUploadBlockedReason,
+        rag_openai_scope_warning: ragOpenaiScopeWarning
+      });
     }
     try {
       const r = await axios.get(`${OPENAI_API_BASE}/vector_stores/${vsId}`, { headers: openAiVectorStoreHeaders(), timeout: 30000 });
@@ -6332,7 +6373,8 @@ app.get('/api/projects/:projectId/gpt-rag/status', limiterRag, async (req, res) 
         vector_store_status: r.data?.status || null,
         file_counts: r.data?.file_counts || null,
         rag_upload_blocked: ragUploadBlocked,
-        rag_upload_blocked_reason: ragUploadBlockedReason
+        rag_upload_blocked_reason: ragUploadBlockedReason,
+        rag_openai_scope_warning: ragOpenaiScopeWarning
       });
     } catch (e) {
       return res.json({
@@ -6342,7 +6384,8 @@ app.get('/api/projects/:projectId/gpt-rag/status', limiterRag, async (req, res) 
         vector_store_status: 'unknown',
         warning: e.response?.data?.error?.message || e.message,
         rag_upload_blocked: ragUploadBlocked,
-        rag_upload_blocked_reason: ragUploadBlockedReason
+        rag_upload_blocked_reason: ragUploadBlockedReason,
+        rag_openai_scope_warning: ragOpenaiScopeWarning
       });
     }
   } catch (e) {
@@ -6587,7 +6630,8 @@ app.get('/api/rag/health', async (req, res) => {
     ok: false,
     error: 'Set POSTGRES_URL for RAG (management vector DB)',
     rag_upload_blocked: ragUploadBlocked,
-    rag_upload_blocked_reason: vsCapability?.error || null
+    rag_upload_blocked_reason: vsCapability?.error || null,
+    rag_openai_scope_warning: vsCapability?.scopeWarning || null
   });
   try {
     const rag = await getLocalRag();
@@ -6599,11 +6643,12 @@ app.get('/api/rag/health', async (req, res) => {
       ok,
       vector_db: info ? { document_count: info.document_count, collection_name: info.collection_name, db_path: info.db_path } : null,
       rag_upload_blocked: ragUploadBlocked,
-      rag_upload_blocked_reason: vsCapability?.error || null
+      rag_upload_blocked_reason: vsCapability?.error || null,
+      rag_openai_scope_warning: vsCapability?.scopeWarning || null
     });
   } catch (e) {
     console.log('[RAG] health error', e.message);
-    res.json({ ok: false, error: e.message, rag_upload_blocked: ragUploadBlocked });
+    res.json({ ok: false, error: e.message, rag_upload_blocked: ragUploadBlocked, rag_openai_scope_warning: vsCapability?.scopeWarning || null });
   }
 });
 

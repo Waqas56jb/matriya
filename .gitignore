@@ -33,9 +33,11 @@ bower_components/
 # --- Secrets & local env ---
 .env
 .env.*
-# Allow committed production env files (no secrets — only public URLs)
+# Allow committed env files (public URLs / local dev defaults — no secrets)
 !.env.production
 !**/.env.production
+!.env.development
+!**/.env.development
 *.pem
 *.key
 secrets.json

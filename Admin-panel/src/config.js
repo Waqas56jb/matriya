@@ -4,4 +4,6 @@
  * No trailing slash.
  */
 const raw = (import.meta.env.VITE_ADMIN_API_URL || '').trim().replace(/\/$/, '');
-export const ADMIN_API_BASE = raw || 'http://localhost:9000';
+/** Production builds must set VITE_ADMIN_API_URL (e.g. in `.env.production` or Vercel). */
+export const ADMIN_API_BASE =
+  raw || (import.meta.env.DEV ? 'http://localhost:9000' : '');

@@ -2492,9 +2492,12 @@ function RagTab({ projectId }) {
   const onFileChange = async (e) => {
     const fileList = e.target.files;
     if (!fileList?.length) return;
-    // Frontend pre-upload gate: block if backend signals vector_store.write is missing
+    // Frontend pre-upload gate: block only when backend sets rag_upload_blocked (strict mode / missing key)
     if (gptRagStatus?.rag_upload_blocked) {
-      setError('RAG upload disabled — missing permission: vector_store.write. Contact admin to update the OpenAI API key in Railway.');
+      setError(
+        gptRagStatus?.rag_upload_blocked_reason ||
+          'RAG upload is disabled on the server. Check OPENAI_API_KEY / OPENAI_REQUIRE_VECTOR_STORE_WRITE in managment-back environment.'
+      );
       e.target.value = '';
       return;
     }
@@ -2798,7 +2801,27 @@ function RagTab({ projectId }) {
               }}
             >
               <span>🔒</span>
-              <span>RAG upload disabled — missing permission: <strong>vector_store.write</strong>. Ask admin to update the OpenAI API key.</span>
+              <span>
+                {gptRagStatus?.rag_upload_blocked_reason ||
+                  'RAG upload is disabled on the server (missing OpenAI key or strict vector_store scope check).'}
+              </span>
+            </div>
+          )}
+          {!gptRagStatus?.rag_upload_blocked && gptRagStatus?.rag_openai_scope_warning && (
+            <div
+              style={{
+                background: '#1f2a1d',
+                border: '1px solid #6b8e23',
+                borderRadius: 6,
+                padding: '8px 12px',
+                marginBottom: 8,
+                color: '#c8e6a0',
+                fontSize: '0.82rem',
+                lineHeight: 1.35
+              }}
+            >
+              <strong>OpenAI GPT-RAG:</strong> this API key may lack <code>vector_store.write</code> (common on restricted keys). File uploads stay enabled; sync to OpenAI may fail until you use a standard secret key or add that scope.{' '}
+              <span style={{ opacity: 0.9 }}>{String(gptRagStatus.rag_openai_scope_warning).slice(0, 220)}{String(gptRagStatus.rag_openai_scope_warning).length > 220 ? '…' : ''}</span>
             </div>
           )}
           <button
@@ -2806,7 +2829,13 @@ function RagTab({ projectId }) {
             className="rag-file-button"
             onClick={() => setShowUploadTypeChoice(true)}
             disabled={!!gptRagStatus?.rag_upload_blocked}
-            title={gptRagStatus?.rag_upload_blocked ? 'RAG upload disabled — missing permission: vector_store.write' : undefined}
+            title={
+              gptRagStatus?.rag_upload_blocked
+                ? gptRagStatus?.rag_upload_blocked_reason || 'Upload disabled'
+                : gptRagStatus?.rag_openai_scope_warning
+                  ? 'Uploads work; OpenAI vector sync may need a key with vector_store.write'
+                  : undefined
+            }
           >
             {t.chooseFileMultiple}
           </button>

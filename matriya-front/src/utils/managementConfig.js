@@ -9,11 +9,15 @@ function trimUrl(v) {
   return s ? s.replace(/\/$/, '') : '';
 }
 
-/** Management backend (Express), e.g. https://manegment-back.vercel.app */
-export const MANAGEMENT_API_URL = trimUrl(process.env.REACT_APP_MANAGEMENT_API_URL);
+const isDev = process.env.NODE_ENV !== 'production';
 
-/** Management UI (Vite/React), e.g. https://manegment-front.vercel.app */
-export const MANAGEMENT_FRONT_URL = trimUrl(process.env.REACT_APP_MANAGEMENT_FRONT_URL);
+/** Management backend (Express). Dev defaults match local managment-back (port 8001). */
+export const MANAGEMENT_API_URL =
+  trimUrl(process.env.REACT_APP_MANAGEMENT_API_URL) || (isDev ? 'http://localhost:8001' : '');
+
+/** Management UI (Vite). Dev default matches `npm run dev` in managment-front (port 5173). */
+export const MANAGEMENT_FRONT_URL =
+  trimUrl(process.env.REACT_APP_MANAGEMENT_FRONT_URL) || (isDev ? 'http://localhost:5173' : '');
 
 export function isManagementLabConfigured() {
   return Boolean(MANAGEMENT_API_URL && MANAGEMENT_FRONT_URL);
