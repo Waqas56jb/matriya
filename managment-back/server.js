@@ -173,12 +173,8 @@ async function replyToAddressForProjectByName(projectId) {
   return replyToAddressForProject(projectId);
 }
 
-if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
-  console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
-  process.exit(1);
-}
-
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+/** Assigned after `app` exists so we can return 503 instead of process.exit (Vercel would crash the function). */
+let supabase = null;
 
 function hasLocalRag() {
   return !!(process.env.POSTGRES_URL || process.env.DATABASE_URL);
@@ -304,6 +300,16 @@ function scheduleOpenAiVectorSyncForProject(projectId, hint = '', projectFileId 
 const app = express();
 app.set('trust proxy', 1); // Vercel sends X-Forwarded-For; required for express-rate-limit to identify clients correctly
 
+supabase =
+  SUPABASE_URL && SUPABASE_SERVICE_KEY
+    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+    : null;
+if (!supabase) {
+  console.error(
+    '[maneger-back] Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY — set both in Vercel → Environment Variables (Production). Optional mirrors: NEXT_PUBLIC_SUPABASE_URL / anon key is not enough for server role.'
+  );
+}
+
 /** Comma-separated list in CORS_ORIGINS (Vercel env). Default includes production frontend + local dev. */
 const DEFAULT_CORS_ORIGINS = [
   'https://manegment-front.vercel.app',
@@ -387,6 +393,20 @@ function corsHeaders(req, res, next) {
 }
 app.use(corsHeaders);
 app.use(express.json({ limit: '1mb' }));
+
+// Block API if Supabase is not configured (avoids process.exit / cold-start crash on Vercel)
+app.use((req, res, next) => {
+  if (supabase) return next();
+  const p = req.path || '';
+  if (p === '/health' || p === '/' || p === '/favicon.ico' || p === '/favicon.png') return next();
+  if (p === '/api/lab/health' || p === '/api/lab/query') return next();
+  return res.status(503).json({
+    ok: false,
+    service: 'maneger-back',
+    error:
+      'Supabase is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in this Vercel project (Environment Variables → Production).',
+  });
+});
 
 // Request ID for audit (actor, entity, action, before/after, request_id)
 app.use((req, res, next) => {
@@ -7382,6 +7402,15 @@ app.patch('/api/projects/:projectId/members/:userId/role', async (req, res) => {
 
 // ---------- Health ----------
 app.get('/health', async (req, res) => {
+  if (!supabase) {
+    return res.status(503).json({
+      ok: false,
+      service: 'maneger-back',
+      db_status: 'not_configured',
+      error:
+        'Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY. Add them in Vercel → Project → Settings → Environment Variables.',
+    });
+  }
   const start = Date.now();
   let db_status = 'disconnected';
   try {

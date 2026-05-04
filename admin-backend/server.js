@@ -28,6 +28,10 @@
  */
 
 import 'dotenv/config';
+/** Vercel may set VERCEL_URL / VERCEL_ENV without VERCEL — avoid app.listen() on serverless. */
+if ((process.env.VERCEL_ENV || process.env.VERCEL_URL) && !process.env.VERCEL) {
+  process.env.VERCEL = '1';
+}
 import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
@@ -49,10 +53,15 @@ import { logAdminAction } from './middleware/auditLogger.js';
 
 const PORT = parseInt(process.env.PORT, 10) || 9000;
 
-export const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+const _sbUrl = (process.env.SUPABASE_URL || '').trim();
+const _sbKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+export const supabase =
+  _sbUrl && _sbKey ? createClient(_sbUrl, _sbKey) : null;
+if (!supabase) {
+  console.error(
+    '[admin-backend] Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY — set both in Vercel → Environment Variables (Production).'
+  );
+}
 
 const app = express();
 
@@ -115,7 +124,26 @@ const limiter = rateLimit({
 app.use(limiter);
 
 app.get('/health', (_req, res) => {
+  if (!supabase) {
+    return res.status(503).json({
+      ok: false,
+      service: 'admin-backend',
+      error:
+        'Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY. Add them in Vercel → Project → Settings → Environment Variables.',
+    });
+  }
   res.json({ status: 'ok', service: 'admin-backend', ts: new Date().toISOString() });
+});
+
+app.use((req, res, next) => {
+  if (supabase) return next();
+  if (req.path === '/health') return next();
+  return res.status(503).json({
+    ok: false,
+    service: 'admin-backend',
+    error:
+      'Supabase is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY on this Vercel project.',
+  });
 });
 
 // Auth — public
@@ -142,6 +170,16 @@ app.use((err, _req, res, _next) => {
   res.status(status).json({ error: err.message || 'Internal server error' });
 });
 
-app.listen(PORT, () => {
-  console.log(`[admin-backend] listening on port ${PORT}`);
-});
+const isVercelServerless =
+  process.env.VERCEL === '1' ||
+  process.env.VERCEL === 'true' ||
+  Boolean(process.env.VERCEL_ENV) ||
+  Boolean(process.env.VERCEL_URL);
+
+if (!isVercelServerless) {
+  app.listen(PORT, () => {
+    console.log(`[admin-backend] listening on port ${PORT}`);
+  });
+}
+
+export default app;
