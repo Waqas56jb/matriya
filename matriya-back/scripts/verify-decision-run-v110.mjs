@@ -89,6 +89,39 @@ const fixtureLabB = await processDecisionRun(
 );
 assert.deepStrictEqual(fixtureLabB, fixtureLab, 'determinism: lab BLOCKED');
 
+/** Lab path with mocked management bridge — real IDs, DB_COMPUTED, confidence > 0 */
+const labBridgeMock = await processDecisionRun(
+  {
+    input: {
+      type: 'lab',
+      data: {
+        lab_query_type: 'version_comparison',
+        base_id: 'BASE-FIX',
+        version_a: '1.0',
+        version_b: '2.0',
+      },
+    },
+    context: { project_id: 'proj-bridge', model_id: 'fixture-bridge' },
+  },
+  {
+    persistAudit: noopAudit,
+    fetchLabContract: async () => ({
+      status: 200,
+      data: {
+        query_type: 'version_comparison',
+        source_run_ids: ['550e8400-e29b-41d4-a716-446655440001', '550e8400-e29b-41d4-a716-446655440002'],
+        data_grade: 'HISTORICAL_REFERENCE',
+        conclusion_status: 'OK',
+      },
+    }),
+  },
+);
+assertV11(labBridgeMock);
+assert.equal(labBridgeMock.data_source, DATA_SOURCE.DB_COMPUTED);
+assert.ok(labBridgeMock.confidence > 0, 'lab bridge path should set confidence > 0');
+assert.ok(labBridgeMock.evidence.experiment_ids.length >= 2, 'experiment_ids from source_run_ids');
+assert.equal(labBridgeMock.decision, 'GO');
+
 const fixtureMessage = await processDecisionRun(
   {
     input: { type: 'message', data: {} },

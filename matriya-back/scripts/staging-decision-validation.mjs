@@ -104,9 +104,9 @@ const sessionQuestion = process.env.STAGING_RESEARCH_SESSION_ID?.trim();
 const payloads = [];
 
 payloads.push({
-  label: '1/3 bounded lab',
+  label: '1/3 bounded lab (stub — no management bridge)',
   body: {
-    input: { type: 'lab', data: {} },
+    input: { type: 'lab', data: { lab_skip_bridge: true } },
     context: { project_id: `${projPrefix}:${uuid}`, model_id: 'run-1bounded' },
   },
 });
@@ -137,9 +137,9 @@ if (sessionQuestion) {
   });
 } else {
   payloads.push({
-    label: '3/3 bounded lab (distinct hash — set STAGING_RESEARCH_SESSION_ID for question path)',
+    label: '3/3 bounded lab (stub — set STAGING_RESEARCH_SESSION_ID for question path)',
     body: {
-      input: { type: 'lab', data: { iteration: 'third-call' } },
+      input: { type: 'lab', data: { lab_skip_bridge: true, iteration: 'third-call' } },
       context: { project_id: `${projPrefix}:${uuid}`, model_id: 'run-3bounded' },
     },
   });

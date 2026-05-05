@@ -436,6 +436,53 @@ function corsHeaders(req, res, next) {
 app.use(corsHeaders);
 app.use(express.json({ limit: '1mb' }));
 
+/**
+ * Safe env presence check (no secret values). Protected by ENV_DIAG_TOKEN — set on Vercel, call:
+ * GET /api/diag/env-booleans?token=<ENV_DIAG_TOKEN>
+ * Remove token from env when finished debugging.
+ */
+app.get('/api/diag/env-booleans', (req, res) => {
+  const expected = (process.env.ENV_DIAG_TOKEN || '').trim();
+  if (!expected || String(req.query.token || '') !== expected) {
+    return res.status(404).end();
+  }
+  const t = (s) => (s == null ? '' : String(s).replace(/^\uFEFF/, '').trim());
+  const serviceKeyStrict = t(
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+      process.env.SUPABASE_SECRET_KEY ||
+      process.env.SUPABASE_SERVICE_KEY
+  );
+  res.json({
+    service: 'maneger-back',
+    SUPABASE_URL: Boolean(t(process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL)),
+    SUPABASE_ANON_KEY: Boolean(t(process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)),
+    SUPABASE_SERVICE_ROLE_KEY: Boolean(serviceKeyStrict),
+    POSTGRES_URL: Boolean(t(process.env.POSTGRES_URL || process.env.DATABASE_URL)),
+    OPENAI_API_KEY: Boolean(t(process.env.OPENAI_API_KEY)),
+    supabase_js_client_ok: Boolean(supabase),
+  });
+});
+
+/**
+ * David checklist: exactly four booleans (presence only, no values). No auth — do not expose secrets.
+ * GET /api/diag/env-david — registered before Supabase gate so it works when client init failed.
+ */
+app.get('/api/diag/env-david', (req, res) => {
+  const t = (s) => (s == null ? '' : String(s).replace(/^\uFEFF/, '').trim());
+  const serviceStrict = t(
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+      process.env.SUPABASE_SECRET_KEY ||
+      process.env.SUPABASE_SERVICE_KEY
+  );
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({
+    SUPABASE_URL: Boolean(t(process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL)),
+    SUPABASE_ANON_KEY: Boolean(t(process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)),
+    SUPABASE_SERVICE_ROLE_KEY: Boolean(serviceStrict),
+    OPENAI_API_KEY: Boolean(t(process.env.OPENAI_API_KEY)),
+  });
+});
+
 // Block API if Supabase is not configured (avoids process.exit / cold-start crash on Vercel)
 app.use((req, res, next) => {
   if (supabase) return next();

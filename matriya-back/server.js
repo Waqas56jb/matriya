@@ -536,6 +536,37 @@ app.get("/health", async (req, res) => {
   }
 });
 
+/**
+ * Safe env presence check (no secret values). Set ENV_DIAG_TOKEN on the server, then:
+ * GET /diag/env-booleans?token=<ENV_DIAG_TOKEN>
+ * matriya-back often uses SUPABASE_KEY (see config.js); booleans reflect common names only.
+ */
+app.get('/diag/env-booleans', (req, res) => {
+  const expected = (process.env.ENV_DIAG_TOKEN || '').trim();
+  if (!expected || String(req.query.token || '') !== expected) {
+    return res.status(404).end();
+  }
+  const t = (s) => (s == null ? '' : String(s).replace(/^\uFEFF/, '').trim());
+  res.json({
+    service: 'matriya-back',
+    SUPABASE_URL: Boolean(t(process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL)),
+    SUPABASE_ANON_KEY: Boolean(t(process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)),
+    SUPABASE_SERVICE_ROLE_KEY: Boolean(
+      t(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY)
+    ),
+    SUPABASE_KEY: Boolean(t(process.env.SUPABASE_KEY)),
+    POSTGRES_URL: Boolean(
+      t(
+        process.env.POSTGRES_URL ||
+          process.env.POSTGRES_PRISMA_URL ||
+          process.env.DATABASE_URL ||
+          process.env.SUPABASE_DB_URL
+      )
+    ),
+    OPENAI_API_KEY: Boolean(t(process.env.OPENAI_API_KEY)),
+  });
+});
+
 // ---------- Lab integration: formula analysis & experiment sync ----------
 const OUTCOMES_SET = new Set(EXPERIMENT_OUTCOMES);
 

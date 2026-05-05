@@ -4,6 +4,6 @@
  * No trailing slash.
  */
 const raw = (import.meta.env.VITE_ADMIN_API_URL || '').trim().replace(/\/$/, '');
-const DEFAULT_ADMIN_API = 'https://matriya-admin-backend.vercel.app';
-/** Production builds must set VITE_ADMIN_API_URL (e.g. in `.env.production` or Vercel). */
-export const ADMIN_API_BASE = raw || (import.meta.env.DEV ? DEFAULT_ADMIN_API : '');
+/** Local admin-backend (default port 9000). Production: set VITE_ADMIN_API_URL in `.env.production` or Vercel. */
+const DEFAULT_ADMIN_API_DEV = 'http://localhost:9000';
+export const ADMIN_API_BASE = raw || (import.meta.env.DEV ? DEFAULT_ADMIN_API_DEV : '');

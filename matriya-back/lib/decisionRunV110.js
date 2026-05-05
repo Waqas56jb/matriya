@@ -6,6 +6,7 @@
  */
 
 import { createHash } from 'crypto';
+import axios from 'axios';
 
 export const DECISION_RUN_ENGINE_VERSION = '1.1.0';
 
@@ -216,6 +217,229 @@ export function evidenceFromRunLoop(result, ruleIds = []) {
       ? ruleIds.map((r) => String(r)).filter(Boolean)
       : []
   };
+}
+
+function getManagementBackBaseUrlForLab() {
+  const u = (process.env.MANAGEMENT_BACK_URL || process.env.MATRIYA_MANAGEMENT_BACK_URL || '').trim();
+  return u.replace(/\/$/, '');
+}
+
+/**
+ * Build GET /api/lab/query params from §2.2 `input.data` (flat keys; same semantics as flow=lab bridge).
+ */
+export function labQueryParamsFromDecisionData(data) {
+  const d = data && typeof data === 'object' ? data : {};
+  const pick = (k) => {
+    const v = d[k];
+    if (v === undefined || v === null) return null;
+    if (typeof v === 'string') return v.trim() || null;
+    if (typeof v === 'number' && Number.isFinite(v)) return String(v);
+    return null;
+  };
+  const type = pick('lab_query_type') || pick('type') || pick('query_type');
+  if (!type) return { type: null };
+  const qs = { type };
+  const add = (key) => {
+    const v = pick(key);
+    if (v != null && v !== '') qs[key] = v;
+  };
+  add('run_id');
+  add('baseline_run_id');
+  add('base_id');
+  add('version_a');
+  add('version_b');
+  add('id_a');
+  add('id_b');
+  add('metric');
+  if (!qs.metric) qs.metric = 'viscosity';
+  return qs;
+}
+
+function mapLabStringGradeToScalar(label) {
+  const s = String(label || '').toUpperCase();
+  if (s.includes('REAL') || s === 'HIGH') return normaliseGrade(CONTRACT_DATA_GRADE.HIGH);
+  if (s.includes('HISTORICAL') || s === 'LOGICAL') return normaliseGrade(CONTRACT_DATA_GRADE.MID);
+  if (s === 'NO_DATA' || !s) return normaliseGrade(CONTRACT_DATA_GRADE.NONE);
+  return normaliseGrade(CONTRACT_DATA_GRADE.LOW);
+}
+
+function evidenceFromLabContract(contract) {
+  const ids =
+    contract && Array.isArray(contract.source_run_ids)
+      ? contract.source_run_ids.map((x) => String(x).trim()).filter(Boolean)
+      : [];
+  return { experiment_ids: ids, rule_ids: [] };
+}
+
+function deriveLabBridgeOutcome(contract) {
+  const ev = evidenceFromLabContract(contract);
+  const ids = ev.experiment_ids;
+  const cs = String(contract?.conclusion_status || '').toUpperCase();
+  const blocked = contract?.blocked_reason ? String(contract.blocked_reason).trim() : '';
+  const gradeScalar = mapLabStringGradeToScalar(contract?.data_grade);
+
+  if (!ids.length && blocked) {
+    return {
+      decision: 'INSUFFICIENT_DATA',
+      fsctm_state: 'BLOCKED',
+      confidence: 0.12,
+      data_grade: gradeScalar || normaliseGrade(CONTRACT_DATA_GRADE.NONE),
+      reason: `Lab bridge: ${blocked.slice(0, 480)}`,
+      evidence: ev
+    };
+  }
+  if (ids.length && (cs === 'OK' || cs === 'COMPARED')) {
+    return {
+      decision: 'GO',
+      fsctm_state: 'APPROVED',
+      confidence: Math.min(0.92, 0.58 + 0.1 * Math.min(ids.length, 4)),
+      data_grade: gradeScalar || normaliseGrade(CONTRACT_DATA_GRADE.HIGH),
+      reason: `Lab bridge (${contract?.query_type || 'query'}): structured run data from management DB.`,
+      evidence: ev
+    };
+  }
+  if (ids.length) {
+    return {
+      decision: 'ITERATE',
+      fsctm_state: 'BLOCKED',
+      confidence: Math.min(0.88, 0.35 + 0.12 * ids.length),
+      data_grade: gradeScalar || normaliseGrade(CONTRACT_DATA_GRADE.MID),
+      reason:
+        blocked ||
+        `Lab bridge returned ${ids.length} run id(s); conclusion_status=${contract?.conclusion_status || 'unknown'}.`,
+      evidence: ev
+    };
+  }
+  return {
+    decision: 'INSUFFICIENT_DATA',
+    fsctm_state: 'BLOCKED',
+    confidence: 0.06,
+    data_grade: normaliseGrade(CONTRACT_DATA_GRADE.NONE),
+    reason: blocked || 'Lab bridge returned HTTP 200 but no source_run_ids in contract.',
+    evidence: ev
+  };
+}
+
+/**
+ * Downstream lab bridge: management-back GET /api/lab/query → §2.3 envelope (DB_COMPUTED, real run ids when present).
+ * @param {object} [deps.fetchLabContract] — tests: async (url, params) => ({ status, data })
+ */
+async function processLabBridgeDecision(body, deps, inputHash, traceId) {
+  const base = getManagementBackBaseUrlForLab();
+  const useMockFetch = typeof deps.fetchLabContract === 'function';
+  if (!base && !useMockFetch) {
+    const ev = buildV23Envelope({
+      decision: 'STOP',
+      fsctm_state: 'BLOCKED',
+      confidence: 0,
+      data_grade: normaliseGrade(CONTRACT_DATA_GRADE.NONE),
+      data_source: DATA_SOURCE.NONE,
+      reason: truncateReason(
+        'Lab bridge not configured: set MANAGEMENT_BACK_URL (or MATRIYA_MANAGEMENT_BACK_URL) to management-back base URL.'
+      ),
+      evidence: emptyEvidence(),
+      input_hash: inputHash,
+      trace_id: traceId,
+      engine_version: DECISION_RUN_ENGINE_VERSION,
+      error: null,
+      _routing: { legacy_hint: 'LAB_BRIDGE_CONFIG', path: 'lab' }
+    });
+    fireAudit(deps.persistAudit, auditRowFromEnvelope(ev, body, { session_id: null, cache_hit: false }));
+    return ev;
+  }
+  const urlBase = base || 'http://127.0.0.1:0';
+
+  const qs = labQueryParamsFromDecisionData(body.input.data || {});
+  if (!qs.type) {
+    const ev = envelopeSystemError(
+      'Lab /decision/run requires input.data.lab_query_type (or type) plus identifiers for management GET /api/lab/query. Use lab_skip_bridge only in tests.',
+      'input.data.lab_query_type',
+      inputHash,
+      traceId,
+      { legacy_hint: 'LAB_BRIDGE_PARAM', path: 'lab' }
+    );
+    fireAudit(deps.persistAudit, auditRowFromEnvelope(ev, body, { session_id: null, cache_hit: false }));
+    return ev;
+  }
+
+  let status;
+  let contract;
+  try {
+    if (typeof deps.fetchLabContract === 'function') {
+      const r = await deps.fetchLabContract(`${urlBase}/api/lab/query`, qs, { baseUrl: base || null });
+      status = r.status;
+      contract = r.data;
+    } else {
+      const resp = await axios.get(`${urlBase}/api/lab/query`, {
+        params: qs,
+        timeout: 60000,
+        validateStatus: () => true
+      });
+      status = resp.status;
+      contract = resp.data;
+    }
+  } catch (e) {
+    const msg = e?.message || String(e);
+    const ev = buildV23Envelope({
+      decision: 'STOP',
+      fsctm_state: 'BLOCKED',
+      confidence: 0,
+      data_grade: normaliseGrade(CONTRACT_DATA_GRADE.NONE),
+      data_source: DATA_SOURCE.NONE,
+      reason: truncateReason(`Lab bridge request failed: ${msg}`),
+      evidence: emptyEvidence(),
+      input_hash: inputHash,
+      trace_id: traceId,
+      engine_version: DECISION_RUN_ENGINE_VERSION,
+      error: null,
+      _routing: { legacy_hint: 'LAB_BRIDGE_NETWORK', path: 'lab' }
+    });
+    fireAudit(deps.persistAudit, auditRowFromEnvelope(ev, body, { session_id: null, cache_hit: false }));
+    return ev;
+  }
+
+  if (status >= 400) {
+    const detail =
+      typeof contract === 'object' && contract && contract.error != null ? String(contract.error) : '';
+    const ev = buildV23Envelope({
+      decision: 'STOP',
+      fsctm_state: 'BLOCKED',
+      confidence: 0,
+      data_grade: normaliseGrade(CONTRACT_DATA_GRADE.NONE),
+      data_source: DATA_SOURCE.DB_COMPUTED,
+      reason: truncateReason(`Lab bridge upstream HTTP ${status}${detail ? `: ${detail}` : ''}`),
+      evidence: emptyEvidence(),
+      input_hash: inputHash,
+      trace_id: traceId,
+      engine_version: DECISION_RUN_ENGINE_VERSION,
+      error: null,
+      _routing: { legacy_hint: 'LAB_BRIDGE_UPSTREAM', path: 'lab', status }
+    });
+    fireAudit(deps.persistAudit, auditRowFromEnvelope(ev, body, { session_id: null, cache_hit: false }));
+    return ev;
+  }
+
+  const gate = deriveLabBridgeOutcome(contract);
+  const ev = buildV23Envelope({
+    decision: gate.decision,
+    fsctm_state: gate.fsctm_state,
+    confidence: gate.confidence,
+    data_grade: gate.data_grade,
+    data_source: DATA_SOURCE.DB_COMPUTED,
+    reason: truncateReason(gate.reason),
+    evidence: gate.evidence,
+    input_hash: inputHash,
+    trace_id: traceId,
+    engine_version: DECISION_RUN_ENGINE_VERSION,
+    error: null,
+    _routing: {
+      legacy_hint: 'LAB_BRIDGE_MANAGEMENT',
+      path: 'lab',
+      query_type: contract?.query_type || qs.type
+    }
+  });
+  fireAudit(deps.persistAudit, auditRowFromEnvelope(ev, body, { session_id: null, cache_hit: false }));
+  return ev;
 }
 
 /** David checklist — `{ "mode":"lab", "data": { "rows":[...] } }` (distinct from §2.2 input/context envelope). */
@@ -521,24 +745,28 @@ export async function processDecisionRun(rawBody, deps = {}) {
   const { persistAudit } = deps;
 
   if (body.input.type === 'lab') {
-    const ev = buildV23Envelope({
-      decision: 'STOP',
-      fsctm_state: 'BLOCKED',
-      confidence: 0,
-      data_grade: normaliseGrade(CONTRACT_DATA_GRADE.NONE),
-      data_source: DATA_SOURCE.NONE,
-      reason: truncateReason(
-        `[Bounded scope lab] Decision Engine WRAP GO pending — invocation logged; no downstream lab bridge.`
-      ),
-      evidence: emptyEvidence(),
-      input_hash: inputHash,
-      trace_id: traceId,
-      engine_version: DECISION_RUN_ENGINE_VERSION,
-      error: null,
-      _routing: { legacy_hint: 'SCOPE_BOUNDARY', path: 'lab' }
-    });
-    fireAudit(persistAudit, auditRowFromEnvelope(ev, body, { session_id: null, cache_hit: false }));
-    return ev;
+    const labData = body.input.data || {};
+    if (labData.fixture === true || labData.lab_skip_bridge === true) {
+      const ev = buildV23Envelope({
+        decision: 'STOP',
+        fsctm_state: 'BLOCKED',
+        confidence: 0,
+        data_grade: normaliseGrade(CONTRACT_DATA_GRADE.NONE),
+        data_source: DATA_SOURCE.NONE,
+        reason: truncateReason(
+          `[Bounded scope lab] Stub path (fixture / lab_skip_bridge) — no management bridge call.`
+        ),
+        evidence: emptyEvidence(),
+        input_hash: inputHash,
+        trace_id: traceId,
+        engine_version: DECISION_RUN_ENGINE_VERSION,
+        error: null,
+        _routing: { legacy_hint: 'SCOPE_BOUNDARY', path: 'lab' }
+      });
+      fireAudit(persistAudit, auditRowFromEnvelope(ev, body, { session_id: null, cache_hit: false }));
+      return ev;
+    }
+    return await processLabBridgeDecision(body, deps, inputHash, traceId);
   }
 
   if (body.input.type === 'message') {

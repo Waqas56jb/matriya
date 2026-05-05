@@ -1,11 +1,37 @@
-# Vercel → manegment-back (management system) → Environment Variables
-# Use management DB (zqhdznwquejnkdpxsuui) – projects, project_files, storage, management_vector (RAG)
+# Vercel → project: matriya-managment-backend (management API)
+# Settings → Environment Variables → Production (and Preview if you use preview deploys)
+# After saving: Redeploy (or “Redeploy with existing Build Cache” is fine).
+#
+# Debug (temporary): set ENV_DIAG_TOKEN to a random string, redeploy, then GET:
+#   /api/diag/env-booleans?token=<same value>
+# Response is booleans only (no secrets). Remove ENV_DIAG_TOKEN when done.
+#
+# David 4-field proof (presence only): GET /api/diag/env-david  (no token; redeploy after code change)
+# Local without HTTP:  node scripts/print-env-david-booleans.mjs
+#
+# Copy values from Supabase Dashboard → Project Settings → API (Project URL, anon, service_role)
+# and Database → Connection string (URI) for Postgres / RAG.
 
-NEXT_PUBLIC_SUPABASE_URL=https://zqhdznwquejnkdpxsuui.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpxaGR6bndxdWVqbmtkcHhzdXVpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE5NDk5NjcsImV4cCI6MjA4NzUyNTk2N30.jiXIhLwbNGsDKhgQY9he66_OEuf3wbTL6HLu7i0wK_I
-SUPABASE_URL=https://zqhdznwquejnkdpxsuui.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpxaGR6bndxdWVqbmtkcHhzdXVpIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MTk0OTk2NywiZXhwIjoyMDg3NTI1OTY3fQ.xDFRVH62af3ZT4VXIqWRmcdobpPSS8Cf6YFXMVK3HBY
-# RAG: same Supabase DB – Project Settings → Database → Connection string (URI)
-POSTGRES_URL=
-OPENAI_API_KEY=
+# --- Required: Supabase JS client (without these, every /api/* returns 503) ---
+SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+NEXT_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=<service_role secret — same name as in managment-back/.env locally>
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon or sb_publishable_* key for browser clients if needed>
+
+# Same DB as Matriya stack — used for RAG / management_vector (optional until you use file Q&A)
+POSTGRES_URL=<postgres connection URI from Supabase>
+
+# --- Required: login proxy forwards to Matriya API ---
+MATRIYA_BACK_URL=https://matriya-backend.vercel.app
+
+# --- Optional but recommended ---
+OPENAI_API_KEY=<your OpenAI key>
+CORS_ORIGINS=https://matriya-managment-frontend.vercel.app,https://matriya-frontend-sooty.vercel.app,http://localhost:5173
+CORS_ALLOW_VERCEL_PREVIEWS=1
+
 PORT=8001
+
+# --- Local dev (managment-back/.env.development overrides .env when NODE_ENV !== production) ---
+# MATRIYA_BACK_URL=http://localhost:8000
+# Frontends: managment-front VITE_MANEGER_API_URL=http://localhost:8001
+# matriya-front: REACT_APP_API_BASE_URL=http://localhost:8000, REACT_APP_MANAGEMENT_API_URL=http://localhost:8001
