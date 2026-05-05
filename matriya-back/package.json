@@ -12,6 +12,7 @@
     "verify:matriya-query-intent": "node scripts/verify-matriya-query-intent.mjs",
     "verify:no-route-matched": "node scripts/verify-no-route-matched.mjs",
     "verify:decision-run-v110": "node scripts/verify-decision-run-v110.mjs",
+    "proof:david-lab-bridge": "node scripts/david-lab-bridge-e2e-proof.mjs",
     "verify:david-lab-rows": "node scripts/verify-david-lab-rows.mjs",
     "david:deployment-smoke": "node scripts/david-deployment-smoke.mjs",
     "staging:decision-validation": "node scripts/staging-decision-validation.mjs",
