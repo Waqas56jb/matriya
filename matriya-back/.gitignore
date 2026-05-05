@@ -15,6 +15,11 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
+# Accidental CRA copy — Vercel serves /public as static and overrides API root.
+public/index.html
+public/asset-manifest.json
+public/static/
+
 # Build / coverage
 dist/
 build/
