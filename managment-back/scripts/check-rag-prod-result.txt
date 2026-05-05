@@ -1,5 +1,5 @@
 === RAG production check ===
-Manager URL: https://manegment-back.vercel.app
+Manager URL: https://matriya-mangment-back.vercel.app
 
 [OK] RAG health: Matriya is reachable from manager
 

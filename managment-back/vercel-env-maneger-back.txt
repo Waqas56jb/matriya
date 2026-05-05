@@ -1,4 +1,4 @@
-# Vercel → project: matriya-managment-backend (management API)
+# Vercel → project: matriya-mangment-back (management API)
 # Settings → Environment Variables → Production (and Preview if you use preview deploys)
 # After saving: Redeploy (or “Redeploy with existing Build Cache” is fine).
 #
@@ -22,7 +22,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon or sb_publishable_* key for browser clients 
 POSTGRES_URL=<postgres connection URI from Supabase>
 
 # --- Required: login proxy forwards to Matriya API ---
-MATRIYA_BACK_URL=https://matriya-backend.vercel.app
+MATRIYA_BACK_URL=https://matriya-back-gold.vercel.app
 
 # --- Optional but recommended ---
 OPENAI_API_KEY=<your OpenAI key>

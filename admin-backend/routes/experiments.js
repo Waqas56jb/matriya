@@ -94,7 +94,7 @@ router.post('/trigger', async (req, res) => {
   const { input } = req.body || {};
   if (!input) return res.status(400).json({ error: 'input required' });
 
-  const MATRIYA_URL = process.env.MATRIYA_BACK_URL || 'https://matriya-backend.vercel.app';
+  const MATRIYA_URL = process.env.MATRIYA_BACK_URL || 'https://matriya-back-gold.vercel.app';
   try {
     const { default: fetch } = await import('node-fetch');
     const result = await fetch(`${MATRIYA_URL}/api/pipeline/run`, {

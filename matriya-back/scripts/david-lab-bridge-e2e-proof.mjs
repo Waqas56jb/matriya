@@ -9,8 +9,8 @@
  *   - matriya-back .env: POSTGRES_URL (same or matriya DB for decision_audit_log query)
  *
  * Production parity:
- *   - Redeploy matriya-backend with latest code (lab bridge in decisionRunV110.js)
- *   - Vercel env on matriya-back: MANAGEMENT_BACK_URL=https://<your-managment-backend>.vercel.app
+ *   - Redeploy matriya-back (e.g. matriya-back-gold on Vercel) with latest code (lab bridge in decisionRunV110.js)
+ *   - Vercel env on matriya-back: MANAGEMENT_BACK_URL=https://matriya-mangment-back.vercel.app
  *   - managment-back production must have POSTGRES_URL for /api/lab/query
  *
  * Usage (from matriya-back):
@@ -96,7 +96,7 @@ async function main() {
 
   if (!inProcess && mgmt.includes('vercel.app') && (matriyaUrl.includes('127.0.0.1') || matriyaUrl.includes('localhost'))) {
     console.warn(
-      '[WARN] MANAGEMENT_BACK_URL points to Vercel but Matriya URL is localhost — your local node process may be an OLD build. Use --in-process to test this repo, or restart local matriya-back after git pull; for production proof redeploy matriya-backend on Vercel.'
+      '[WARN] MANAGEMENT_BACK_URL points to Vercel but Matriya URL is localhost — your local node process may be an OLD build. Use --in-process to test this repo, or restart local matriya-back after git pull; for production proof redeploy matriya-back on Vercel (e.g. matriya-back-gold).'
     );
   }
 
@@ -188,7 +188,7 @@ async function main() {
       hint:
         envelope._routing?.legacy_hint === 'SCOPE_BOUNDARY' &&
         String(envelope.reason || '').includes('no downstream lab bridge')
-          ? 'Running server is OLD matriya-back (pre lab-bridge). Fix: restart local `node server.js` after pull, OR redeploy matriya-backend on Vercel. Set MANAGEMENT_BACK_URL on matriya env.'
+          ? 'Running server is OLD matriya-back (pre lab-bridge). Fix: restart local `node server.js` after pull, OR redeploy matriya-back on Vercel (e.g. matriya-back-gold). Set MANAGEMENT_BACK_URL on matriya env.'
           : 'See reason and _routing above.',
     });
   }

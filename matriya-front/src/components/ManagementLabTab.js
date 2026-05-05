@@ -69,7 +69,7 @@ function ManagementLabTab() {
           <ul className="management-lab-env-list">
             <li>
               <code>REACT_APP_MANAGEMENT_API_URL</code> — Management server URL (e.g.{' '}
-              <code>https://management-back.vercel.app</code>)
+              <code>https://matriya-mangment-back.vercel.app</code>)
             </li>
             <li>
               <code>REACT_APP_MANAGEMENT_FRONT_URL</code> — Management UI URL (e.g.{' '}

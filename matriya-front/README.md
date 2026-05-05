@@ -48,7 +48,7 @@ The frontend uses the `REACT_APP_API_BASE_URL` environment variable to connect t
 3. Restart the development server
 
 **For production (Vercel):**
-The environment variable is automatically set to `https://matriya-back.vercel.app` in `vercel.json`.
+Set `REACT_APP_API_BASE_URL` to `https://matriya-back-gold.vercel.app` in the Vercel project → Environment Variables (CRA embeds these at build time). See `.env.production` in this repo for the same values.
 
 See `ENV_SETUP.md` for detailed instructions.
 

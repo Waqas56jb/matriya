@@ -4,8 +4,8 @@
  *
  * Usage:
  *   node scripts/check-rag-prod.js
- *   MANAGER_URL=https://manegment-back.vercel.app node scripts/check-rag-prod.js
- *   node scripts/check-rag-prod.js https://manegment-back.vercel.app
+ *   MANAGER_URL=https://matriya-mangment-back.vercel.app node scripts/check-rag-prod.js
+ *   node scripts/check-rag-prod.js https://matriya-mangment-back.vercel.app
  *
  * Uses MANAGER_URL (default from .env API base or first arg) to hit maneger-back; maneger-back proxies to MATRIYA_BACK_URL.
  * Writes results to scripts/check-rag-prod-result.txt (and logs to stdout).

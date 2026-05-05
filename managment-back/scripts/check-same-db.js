@@ -2,13 +2,13 @@
 /**
  * Check that local and prod Matriya use the same DB (same db_fingerprint).
  * Usage: node scripts/check-same-db.js
- * Env: MATRIYA_LOCAL_URL (default http://localhost:8000), MATRIYA_PROD_URL (default https://matriya-back.vercel.app)
+ * Env: MATRIYA_LOCAL_URL (default http://localhost:8000), MATRIYA_PROD_URL (default https://matriya-back-gold.vercel.app)
  */
 import 'dotenv/config';
 import axios from 'axios';
 
 const LOCAL = process.env.MATRIYA_LOCAL_URL || 'http://localhost:8000';
-const PROD = process.env.MATRIYA_PROD_URL || 'https://matriya-back.vercel.app';
+const PROD = process.env.MATRIYA_PROD_URL || 'https://matriya-back-gold.vercel.app';
 
 async function main() {
   console.log('Local Matriya:', LOCAL);

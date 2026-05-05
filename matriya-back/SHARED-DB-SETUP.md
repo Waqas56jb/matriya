@@ -24,7 +24,7 @@ curl -s http://localhost:8000/health | jq '.db_fingerprint, .collection_name, .v
 
 **Production:**
 ```bash
-curl -s https://matriya-back.vercel.app/health | jq '.db_fingerprint, .collection_name, .vector_db.document_count'
+curl -s https://matriya-back-gold.vercel.app/health | jq '.db_fingerprint, .collection_name, .vector_db.document_count'
 ```
 
 - **`db_fingerprint`** should be **identical** (e.g. `xxx.pooler.supabase.com`) if both use the same DB.
@@ -41,7 +41,7 @@ From `maneger-back`:
 
 ```bash
 # Populate prod DB only (recommended if local and prod share the same POSTGRES_URL)
-node scripts/index-all-files-to-matriya.js https://matriya-back.vercel.app
+node scripts/index-all-files-to-matriya.js https://matriya-back-gold.vercel.app
 
 # Or populate both local and prod in one run (if they use different DBs)
 node scripts/index-all-files-to-matriya.js both
@@ -50,11 +50,11 @@ node scripts/index-all-files-to-matriya.js both
 Or use the fix script (indexes all files to prod, then runs the prod check):
 
 ```bash
-node scripts/fix-rag-prod.js https://matriya-back.vercel.app
+node scripts/fix-rag-prod.js https://matriya-back-gold.vercel.app
 ```
 
 Then run the prod check:
 
 ```bash
-node scripts/check-rag-prod.js https://manegment-back.vercel.app
+node scripts/check-rag-prod.js https://matriya-mangment-back.vercel.app
 ```

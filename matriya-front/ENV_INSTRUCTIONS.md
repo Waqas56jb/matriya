@@ -31,7 +31,7 @@ REACT_APP_API_BASE_URL=http://localhost:8000
 2. Click **Add New**
 3. Set:
    - **Key**: `REACT_APP_API_BASE_URL`
-   - **Value**: `https://matriya-back.vercel.app`
+   - **Value**: `https://matriya-back-gold.vercel.app`
    - **Environment**: Production, Preview, Development (select all)
 4. Click **Save**
 5. Redeploy your application
@@ -42,7 +42,7 @@ The `vercel.json` file already has the environment variable set:
 ```json
 {
   "env": {
-    "REACT_APP_API_BASE_URL": "https://matriya-back.vercel.app"
+    "REACT_APP_API_BASE_URL": "https://matriya-back-gold.vercel.app"
   }
 }
 ```

@@ -17,18 +17,18 @@ The frontend uses the `REACT_APP_API_BASE_URL` environment variable to connect t
 
 The environment variable is automatically set in `vercel.json`:
 ```
-REACT_APP_API_BASE_URL=https://matriya-back.vercel.app
+REACT_APP_API_BASE_URL=https://matriya-back-gold.vercel.app
 ```
 
 You can also set it manually in Vercel Dashboard:
 1. Go to your project → Settings → Environment Variables
-2. Add: `REACT_APP_API_BASE_URL` = `https://matriya-back.vercel.app`
+2. Add: `REACT_APP_API_BASE_URL` = `https://matriya-back-gold.vercel.app`
 
 ### Default Value
 
 If the environment variable is not set, it defaults to:
 ```
-https://matriya-back.vercel.app
+https://matriya-back-gold.vercel.app
 ```
 
 ## Management lab (מעבדה) tab
@@ -39,7 +39,7 @@ Set at build time:
 
 | Variable | Example (production) |
 |----------|----------------------|
-| `REACT_APP_MANAGEMENT_API_URL` | `https://manegment-back.vercel.app` |
+| `REACT_APP_MANAGEMENT_API_URL` | `https://matriya-mangment-back.vercel.app` |
 | `REACT_APP_MANAGEMENT_FRONT_URL` | `https://manegment-front.vercel.app` |
 
 Local example:

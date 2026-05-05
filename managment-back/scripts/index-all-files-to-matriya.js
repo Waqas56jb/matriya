@@ -6,7 +6,7 @@
  * configured in the Matriya you target.
  *
  * Local only:  node scripts/index-all-files-to-matriya.js
- * Prod only:   node scripts/index-all-files-to-matriya.js https://matriya-back.vercel.app
+ * Prod only:   node scripts/index-all-files-to-matriya.js https://matriya-back-gold.vercel.app
  * Both:        node scripts/index-all-files-to-matriya.js both
  *
  * Env: .env in maneger-back (SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, MATRIYA_BACK_URL).
@@ -21,7 +21,7 @@ const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.en
 const ARG = (process.argv[2] || '').toLowerCase();
 const RUN_BOTH = ARG === 'both';
 const MATRIYA_LOCAL = (process.env.MATRIYA_BACK_URL || 'http://localhost:8000').replace(/\/$/, '');
-const MATRIYA_PROD = 'https://matriya-back.vercel.app';
+const MATRIYA_PROD = 'https://matriya-back-gold.vercel.app';
 const MATRIYA_TARGETS = RUN_BOTH ? [MATRIYA_LOCAL, MATRIYA_PROD] : [(process.argv[2] || process.env.MATRIYA_BACK_URL || MATRIYA_LOCAL).replace(/\/$/, '')];
 
 const MANUAL_BUCKET = 'manually-uploaded-sharepoint-files';
@@ -150,7 +150,7 @@ async function main() {
   if (totalOk > 0) {
     console.log('Ask Matriya should now return answers (local and/or prod). Refresh and try again.');
     if (!RUN_BOTH && MATRIYA_TARGETS[0] === MATRIYA_LOCAL) {
-      console.log('To also populate production DB, run: node scripts/index-all-files-to-matriya.js https://matriya-back.vercel.app');
+      console.log('To also populate production DB, run: node scripts/index-all-files-to-matriya.js https://matriya-back-gold.vercel.app');
       console.log('Or run both in one go: node scripts/index-all-files-to-matriya.js both');
     }
   }

@@ -4,7 +4,7 @@
 
 If you see errors like:
 ```
-POST https://matriya-front.vercel.app/REACT_APP_API_BASE_URL=https:/matriya-back.vercel.app/auth/login
+POST https://matriya-front.vercel.app/REACT_APP_API_BASE_URL=https:/matriya-back-gold.vercel.app/auth/login
 ```
 
 This means the environment variable is **NOT** being read correctly in Vercel.
@@ -26,7 +26,7 @@ React environment variables (those starting with `REACT_APP_`) are **embedded at
 3. Click **Add New**
 4. Set:
    - **Key**: `REACT_APP_API_BASE_URL`
-   - **Value**: `https://matriya-back.vercel.app`
+   - **Value**: `https://matriya-back-gold.vercel.app`
    - **Environment**: Select **ALL** (Production, Preview, Development)
 5. Click **Save**
 
@@ -43,7 +43,7 @@ React environment variables (those starting with `REACT_APP_`) are **embedded at
 
 After redeploying, check the browser console. You should see API calls going to:
 ```
-https://matriya-back.vercel.app/auth/login
+https://matriya-back-gold.vercel.app/auth/login
 ```
 
 NOT:
@@ -56,7 +56,7 @@ https://matriya-front.vercel.app/REACT_APP_API_BASE_URL=...
 ❌ **Setting the variable but not redeploying** - The variable is only available in NEW builds
 ❌ **Setting it only for Production** - Set it for all environments
 ❌ **Using wrong variable name** - Must be exactly `REACT_APP_API_BASE_URL` (case-sensitive)
-❌ **Adding trailing slash** - Use `https://matriya-back.vercel.app` not `https://matriya-back.vercel.app/`
+❌ **Adding trailing slash** - Use `https://matriya-back-gold.vercel.app` not `https://matriya-back-gold.vercel.app/`
 
 ## Verification
 

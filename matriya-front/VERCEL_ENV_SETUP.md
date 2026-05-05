@@ -12,7 +12,7 @@ The `vercel.json` file does NOT set environment variables for React builds. You 
 4. Add the following:
 
    **Key**: `REACT_APP_API_BASE_URL`  
-   **Value**: `https://matriya-back.vercel.app`  
+   **Value**: `https://matriya-back-gold.vercel.app`  
    **Environment**: Select all (Production, Preview, Development)
 
 5. Click **Save**
@@ -32,7 +32,7 @@ React environment variables must:
 
 After redeploying, check the browser console. You should see the API calls going to:
 ```
-https://matriya-back.vercel.app/auth/login
+https://matriya-back-gold.vercel.app/auth/login
 ```
 
 NOT:

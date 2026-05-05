@@ -4,8 +4,8 @@
  * so rag_documents is populated and "Ask Matriya" returns real answers.
  *
  * Usage:
- *   node scripts/fix-rag-prod.js https://matriya-back.vercel.app
- *   MATRIYA_PROD_URL=https://matriya-back.vercel.app node scripts/fix-rag-prod.js
+ *   node scripts/fix-rag-prod.js https://matriya-back-gold.vercel.app
+ *   MATRIYA_PROD_URL=https://matriya-back-gold.vercel.app node scripts/fix-rag-prod.js
  *
  * Env: .env in maneger-back (SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY).
  *       Optional: MATRIYA_PROD_URL or pass as first arg.
@@ -50,7 +50,7 @@ async function main() {
   }
   if (!MATRIYA_TARGET) {
     console.error('Missing Matriya URL. Pass as first arg or set MATRIYA_PROD_URL.');
-    console.error('  Example: node scripts/fix-rag-prod.js https://matriya-back.vercel.app');
+    console.error('  Example: node scripts/fix-rag-prod.js https://matriya-back-gold.vercel.app');
     process.exit(1);
   }
 
@@ -139,7 +139,7 @@ async function main() {
     console.log('');
     console.log('Waiting 5s for indexing to settle, then running prod check...');
     await new Promise(r => setTimeout(r, 5000));
-    const managerUrl = process.env.MANAGER_URL || process.env.MANAGER_PROD_URL || 'https://manegment-back.vercel.app';
+    const managerUrl = process.env.MANAGER_URL || process.env.MANAGER_PROD_URL || 'https://matriya-mangment-back.vercel.app';
     const child = spawn('node', [join(__dirname, 'check-rag-prod.js'), managerUrl], {
       cwd: join(__dirname, '..'),
       stdio: 'inherit',
