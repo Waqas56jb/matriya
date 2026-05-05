@@ -1,0 +1,27 @@
+# admin-backend — Vercel environment variables (no secrets in this file)
+#
+# Root Directory: admin-backend
+# Canonical API URL (use in Admin-panel: VITE_ADMIN_API_URL + vercel.json rewrite destination):
+#   https://matriya-admin-backend.vercel.app
+#
+# Optional override (defaults to URL above):
+#   ADMIN_BACK_PUBLIC_URL=https://matriya-admin-backend.vercel.app
+#
+# Local .env already matches matriya-back / managment-back Supabase project.
+# If https://matriya-admin-backend.vercel.app/ shows supabaseConfigured:false,
+# these are missing or not applied to the deployment you are hitting.
+#
+# Required (same values as managment-back .env):
+#   SUPABASE_URL                 = https://osrcrdroyhlvrtwpybtr.supabase.co
+#   SUPABASE_SERVICE_ROLE_KEY    = (same as managment-back SUPABASE_SERVICE_ROLE_KEY / matriya-back SUPABASE_KEY)
+#
+# Optional mirrors (server.js reads these too):
+#   NEXT_PUBLIC_SUPABASE_URL     = same as SUPABASE_URL
+#   SUPABASE_KEY                 = same service role secret (matriya-back name)
+#   SUPABASE_SECRET_KEY          = alternate name some templates use
+#
+# After saving in Vercel: Deployments → Redeploy (env is baked at build for some tools; serverless reads runtime env).
+#
+# Other vars (from local .env): ADMIN_JWT_SECRET, ADMIN_SEED_SECRET, ADMIN_FRONTEND_URL,
+#   MATRIYA_BACK_URL, MANAGEMENT_BACK_URL, MATRIYA_FINANCE_URL, MATRIYA_PROVISION_SECRET,
+#   MATRIYA_INTERNAL_KEY, TWILIO_* as needed.

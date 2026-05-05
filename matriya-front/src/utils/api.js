@@ -3,20 +3,13 @@
  */
 import axios from 'axios';
 
-// Matriya API base URL — inlined at compile time by CRA.
-// Local: `.env.development` / REACT_APP_API_BASE_URL → http://localhost:8000. Prod: Vercel env.
-const DEFAULT_MATRIYA_API_DEV = 'http://localhost:8000';
+// Matriya API base URL — inlined at compile time by CRA. Default: deployed gold API (no localhost).
+const DEFAULT_MATRIYA_API = 'https://matriya-back-gold.vercel.app';
 let API_BASE_URL = (process.env.REACT_APP_API_BASE_URL || '').trim();
 
 if (!API_BASE_URL) {
-    if (process.env.NODE_ENV === 'development') {
-        API_BASE_URL = DEFAULT_MATRIYA_API_DEV;
-        console.warn(`REACT_APP_API_BASE_URL not set; using ${DEFAULT_MATRIYA_API_DEV}`);
-    } else {
-        throw new Error(
-            'Matriya UI: REACT_APP_API_BASE_URL is missing at build time. In Vercel open the matriya-front project → Settings → Environment Variables → add REACT_APP_API_BASE_URL = your Matriya API URL (no trailing slash), then Redeploy.'
-        );
-    }
+    API_BASE_URL = DEFAULT_MATRIYA_API;
+    console.warn(`REACT_APP_API_BASE_URL not set; using deployed default ${DEFAULT_MATRIYA_API}`);
 }
 
 API_BASE_URL = API_BASE_URL.replace(/\/$/, '');

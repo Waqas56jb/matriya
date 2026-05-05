@@ -239,7 +239,7 @@ function SearchTab({ onGptSyncingChange, gptRagSyncing = false }) {
                 setResults(data);
                 if (!isAnswerComposerPayload(data)) {
                     setError(
-                        'Lab returned JSON that is NOT Answer Composer shape. Point REACT_APP_API_BASE_URL to your local matriya-back (e.g. http://localhost:8000) with the latest code, then restart npm start.'
+                        'Lab returned JSON that is NOT Answer Composer shape. Ensure REACT_APP_API_BASE_URL matches your deployed matriya-back (e.g. https://matriya-back-gold.vercel.app) with the latest code, then rebuild.'
                     );
                 } else {
                     setError(null);

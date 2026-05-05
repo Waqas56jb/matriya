@@ -47,6 +47,7 @@ import systemRouter   from './routes/system.js';
 import auditRouter    from './routes/audit.js';
 import configRouter   from './routes/config.js';
 import managementUsersRouter from './routes/managementUsers.js';
+import { getAdminBackendPublicUrl } from './lib/adminPublicUrl.js';
 
 import { requireAdmin } from './middleware/auth.js';
 import { logAdminAction } from './middleware/auditLogger.js';
@@ -169,12 +170,14 @@ app.use('/api/admin/management-users', managementUsersRouter);
 
 /** Browsing the API origin in a tab should return JSON — if you see the Admin React app, the Vercel Root Directory is wrong (use `admin-backend`, not `Admin-panel`). */
 app.get('/', (_req, res) => {
+  const publicUrl = getAdminBackendPublicUrl();
   res.json({
     service: 'admin-backend',
+    publicUrl,
     supabaseConfigured: Boolean(supabase),
     health: '/health',
     adminApi: '/api/admin',
-    hint: 'UI lives in the Admin-panel (Vite) project. Point VITE_ADMIN_API_URL / Admin-panel vercel proxy at this URL.',
+    hint: `UI lives in the Admin-panel (Vite) project. Set VITE_ADMIN_API_URL=${publicUrl} and Admin-panel vercel.json /api proxy to that origin.`,
   });
 });
 

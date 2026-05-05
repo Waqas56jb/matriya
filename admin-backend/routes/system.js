@@ -9,10 +9,12 @@
 
 import { Router } from 'express';
 import { supabase } from '../server.js';
+import { getAdminBackendPublicUrl } from '../lib/adminPublicUrl.js';
 
 const router = Router();
 
 const SERVICES = {
+  'matriya-admin-backend': getAdminBackendPublicUrl(),
   'matriya-back':    process.env.MATRIYA_BACK_URL     || 'https://matriya-back-gold.vercel.app',
   'managment-back':  process.env.MANAGEMENT_BACK_URL  || 'https://matriya-mangment-back.vercel.app',
   'matriya-finance': process.env.MATRIYA_FINANCE_URL  || 'https://captivating-liberation-production-3086.up.railway.app',
@@ -74,6 +76,7 @@ router.get('/env', (_req, res) => {
     DAVID_WHATSAPP:        process.env.DAVID_WHATSAPP || '(not set)',
     MATRIYA_BACK_URL:      process.env.MATRIYA_BACK_URL || '(not set)',
     MANAGEMENT_BACK_URL:   process.env.MANAGEMENT_BACK_URL || '(not set)',
+    ADMIN_BACK_PUBLIC_URL: process.env.ADMIN_BACK_PUBLIC_URL || getAdminBackendPublicUrl(),
     WHATSAPP_WHITELIST_ENABLED: process.env.WHATSAPP_WHITELIST_ENABLED || '(not set)',
     NODE_ENV:              process.env.NODE_ENV || 'development',
   };
