@@ -143,6 +143,7 @@ app.get('/health', (_req, res) => {
 app.use((req, res, next) => {
   if (supabase) return next();
   if (req.path === '/health') return next();
+  if (req.path === '/') return next();
   return res.status(503).json({
     ok: false,
     service: 'admin-backend',
@@ -165,6 +166,17 @@ app.use('/api/admin/system',      systemRouter);
 app.use('/api/admin/audit',       auditRouter);
 app.use('/api/admin/config',      configRouter);
 app.use('/api/admin/management-users', managementUsersRouter);
+
+/** Browsing the API origin in a tab should return JSON — if you see the Admin React app, the Vercel Root Directory is wrong (use `admin-backend`, not `Admin-panel`). */
+app.get('/', (_req, res) => {
+  res.json({
+    service: 'admin-backend',
+    supabaseConfigured: Boolean(supabase),
+    health: '/health',
+    adminApi: '/api/admin',
+    hint: 'UI lives in the Admin-panel (Vite) project. Point VITE_ADMIN_API_URL / Admin-panel vercel proxy at this URL.',
+  });
+});
 
 app.use((_req, res) => res.status(404).json({ error: 'Not found' }));
 
